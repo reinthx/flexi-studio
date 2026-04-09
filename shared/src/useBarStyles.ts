@@ -237,17 +237,34 @@ export function useBarStyles(
     position: 'absolute' as const,
     inset: '0',
     ...(isTextureBg.value ? {} : buildFillCss(sc().bg, bi(), barHeightWithGap.value)),
-    ...(!isTextureBg.value ? {} : { overflow: 'hidden' as const }),
     ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
   }))
 
-  /** Inner div for texture backgrounds — same CEF fix as fill, plus proper pagination offsets. */
+  /** Inner div for texture backgrounds — expands to multiple bar heights so texture can tile. */
   const bgTextureInnerStyle = computed(() => {
     if (!isTextureBg.value) return undefined
+    const texture = sc().bg.texture
+    const isPaginate = texture.repeat === 'paginate'
+    const multiple = 30
+    const height = barHeightWithGap.value * multiple
+    const base = buildFillCss(sc().bg, bi(), barHeightWithGap.value)
+    
+    // For Paginate mode, use repeat so it tiles across all expanded bars
+    const repeat = isPaginate ? 'repeat' : base.backgroundRepeat
+    
     return {
       position: 'absolute' as const,
-      inset: '0',
-      ...buildFillCss(sc().bg, bi(), barHeightWithGap.value),
+      top: '0',
+      left: '0',
+      height: `${height}px`,
+      width: '100%',
+      backgroundImage: base.backgroundImage,
+      backgroundSize: base.backgroundSize,
+      backgroundRepeat: repeat,
+      backgroundPosition: base.backgroundPosition,
+      opacity: base.opacity,
+      mixBlendMode: base.mixBlendMode,
+      ...(base.backgroundColor ? { backgroundColor: base.backgroundColor, backgroundBlendMode: base.backgroundBlendMode } : {}),
     }
   })
 
