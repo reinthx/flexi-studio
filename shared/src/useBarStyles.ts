@@ -240,13 +240,12 @@ export function useBarStyles(
     ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
   }))
 
-  /** Inner div for texture backgrounds — expands to multiple bar heights so texture can tile. */
+  /** Inner div for texture backgrounds — for Paginate mode, ensures tiling works across bars. */
   const bgTextureInnerStyle = computed(() => {
     if (!isTextureBg.value) return undefined
     const texture = sc().bg.texture
     const isPaginate = texture.repeat === 'paginate'
-    const multiple = 30
-    const height = barHeightWithGap.value * multiple
+    const height = barHeightWithGap.value
     const base = buildFillCss(sc().bg, bi(), barHeightWithGap.value)
     
     // For Paginate mode, use repeat so it tiles across all expanded bars
