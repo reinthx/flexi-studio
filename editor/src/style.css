@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-ui: 'Segoe UI', system-ui, sans-serif;
+  --bg-base:    #0f0f17;
+  --bg-panel:   #16161f;
+  --bg-control: #1e1e2e;
+  --bg-hover:   #252538;
+  --border:     rgba(255,255,255,0.08);
+  --text:       #e0e0e0;
+  --text-muted: #888;
+  --accent:     #9b5de5;
+  --bg-section: #12121b;
+  /* Standardized control sizes */
+  --control-height: 28px;
+  --control-gap-sm: 4px;
+  --control-gap-md: 8px;
+  --control-gap-lg: 12px;
+  --label-width: 60px;
+}
+
+* { box-sizing: border-box; }
+body { font-family: var(--font-ui); background: var(--bg-base); color: var(--text); }
+body.is-overlay-mode { background: transparent !important; }
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+
+/* Unified control styles */
+.ctrl-input, .ctrl-select, .ctrl-num {
+  height: var(--control-height);
+  background: var(--bg-control);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 0 8px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.ctrl-input:focus, .ctrl-select:focus, .ctrl-num:focus {
+  border-color: var(--accent);
+}

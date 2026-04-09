@@ -1,0 +1,14 @@
+{
+  "name": "@act-flexi/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pinia": "^2.1.0",
+    "vue": "^3.4.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  }
+}
