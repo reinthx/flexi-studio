@@ -6,6 +6,7 @@ import MeterHeader from './MeterHeader.vue'
 import type { BarStyle } from '@shared/configSchema'
 import { resolveBarStyle } from '@shared/styleResolver'
 import { buildFillCss } from '@shared/cssBuilder'
+import { ref, nextTick } from 'vue'
 
 const store = useLiveDataStore()
 const g = computed(() => store.profile.global)
@@ -111,6 +112,9 @@ const contentStyle = computed(() => {
   return style
 })
 
+// Dynamic scroll height for bars area (overlay height handling)
+const barsScrollRef = ref<HTMLElement | null>(null)
+
 onMounted(() => {
   store.start()
   ;(window as any).actFlexiDebug = () => {
@@ -126,6 +130,17 @@ onMounted(() => {
       profileGlobal: store.profile.global,
     }
   }
+  // Compute available height for the bars scroll region to respect bar heights
+  nextTick(() => {
+    const root = document.querySelector('.meter-root') as HTMLElement | null
+    const header = root?.querySelector('.header-outside') as HTMLElement | null
+    const headerHeight = header?.offsetHeight ?? 0
+    const viewportH = window.innerHeight
+    const available = Math.max(0, viewportH - headerHeight - 40) // conservative padding
+    if (barsScrollRef.value) {
+      barsScrollRef.value.style.maxHeight = `${available}px`
+    }
+  })
 })
 
 onUnmounted(() => {
@@ -161,7 +176,8 @@ onUnmounted(() => {
       <div v-if="g.header?.pinned" class="resize-corner" />
 
       <div class="bars-container" :style="containerStyle">
-        <MeterBar
+        <div class="bars-scroll" ref="barsScrollRef" style="flex: 1 1 auto; min-height: 0; overflow-y: auto;">
+          <MeterBar
           v-for="bar in bars"
           :key="bar.name"
           :bar="bar"
@@ -170,7 +186,8 @@ onUnmounted(() => {
           :show-rank="g.rankIndicator.showNumbers"
           :blur-name="g.blurNames && bar.name !== store.selfName && bar.name !== 'YOU'"
           :bar-index="bar.barIndex"
-        />
+          />
+        </div>
       </div>
 
       <MeterHeader
@@ -195,7 +212,7 @@ onUnmounted(() => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
   position: relative;
 }
 .meter-border {
@@ -227,7 +244,9 @@ onUnmounted(() => {
   z-index: 1;
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   width: 100%;
   padding: 4px;
 }
