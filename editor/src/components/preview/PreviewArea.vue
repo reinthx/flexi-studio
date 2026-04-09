@@ -3,6 +3,7 @@ import { computed, ref, useTemplateRef } from 'vue'
 import { useDraggable, useElementSize } from '@vueuse/core'
 import { useLiveDataStore } from '../../stores/liveData'
 import PreviewBar from './PreviewBar.vue'
+import ScrollableBarsWrapper from '@shared/components/ScrollableBarsWrapper.vue'
 import PreviewHeader from './PreviewHeader.vue'
 import { useConfigStore } from '../../stores/config'
 import { resolveBarStyle } from '@shared/styleResolver'
@@ -95,17 +96,17 @@ function toggleHeaderPin() {
       <div ref="meterEl" class="preview-meter" :style="meterStyle">
         <div class="meter-frame" :style="{ flexDirection: isHorizontal ? 'row' : 'column' }">
           <div class="preview-meter-bg" :style="windowBgLayer" />
-          <div class="bars-area" :style="{ flexDirection: isHorizontal ? 'row' : 'column' }">
-            <PreviewBar
-              v-for="bar in bars" :key="bar.name"
-              :bar="bar" :style-config="bar.style"
-              :orientation="g.orientation" :show-rank="g.rankIndicator.showNumbers"
-              :container-height="winH"
-              :auto-scale="g.autoScale"
-              :bar-index="bar.barIndex"
-            />
-            <div v-if="!bars.length" class="no-data">Waiting for combat data…</div>
-          </div>
+        <ScrollableBarsWrapper :maxHeight="`${winH}px`">
+          <PreviewBar
+            v-for="bar in bars" :key="bar.name"
+            :bar="bar" :style-config="bar.style"
+            :orientation="g.orientation" :show-rank="g.rankIndicator.showNumbers"
+            :container-height="winH"
+            :auto-scale="g.autoScale"
+            :bar-index="bar.barIndex"
+          />
+        </ScrollableBarsWrapper>
+        <div v-if="!bars.length" class="no-data">Waiting for combat data…</div>
 
           <PreviewHeader v-if="g.footer.show" :config="g.footer" :frame="frame" :global="g" :is-footer="true" />
         </div>
@@ -190,7 +191,7 @@ function toggleHeaderPin() {
   flex: 1;
   min-height: 0;
   align-items: flex-start;
-  overflow: hidden;
+  overflow: auto;
 }
 .no-data {
   padding: 16px; text-align: center;

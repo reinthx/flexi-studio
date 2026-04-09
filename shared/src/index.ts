@@ -15,4 +15,5 @@ export * from './profileCodec'
 export * from './texturePresets'
 export * from './useBarStyles'
 export * from './useHeaderStyles'
+export { default as ScrollableBarsWrapper } from './components/ScrollableBarsWrapper.vue'
 

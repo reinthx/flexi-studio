@@ -7,6 +7,7 @@ import type { BarStyle } from '@shared/configSchema'
 import { resolveBarStyle } from '@shared/styleResolver'
 import { buildFillCss } from '@shared/cssBuilder'
 import { ref, nextTick } from 'vue'
+import ScrollableBarsWrapper from '@shared/components/ScrollableBarsWrapper.vue'
 
 const store = useLiveDataStore()
 const g = computed(() => store.profile.global)
@@ -112,8 +113,9 @@ const contentStyle = computed(() => {
   return style
 })
 
-// Dynamic scroll height for bars area (overlay height handling)
-const barsScrollRef = ref<HTMLElement | null>(null)
+// Bars container max-height driven by viewport (shared wrapper will handle scrolling)
+const barsMaxHeight = ref<string>('unset')
+let updateBarsHeightFn: (() => void) | null = null
 
 onMounted(() => {
   store.start()
@@ -130,21 +132,22 @@ onMounted(() => {
       profileGlobal: store.profile.global,
     }
   }
-  // Compute available height for the bars scroll region to respect bar heights
-  nextTick(() => {
+  // Compute available height for the bars area (header height taken into account)
+  updateBarsHeightFn = () => {
     const root = document.querySelector('.meter-root') as HTMLElement | null
     const header = root?.querySelector('.header-outside') as HTMLElement | null
     const headerHeight = header?.offsetHeight ?? 0
-    const viewportH = window.innerHeight
-    const available = Math.max(0, viewportH - headerHeight - 40) // conservative padding
-    if (barsScrollRef.value) {
-      barsScrollRef.value.style.maxHeight = `${available}px`
-    }
-  })
+    const vh = window.innerHeight
+    const available = Math.max(0, vh - headerHeight - 60)
+    barsMaxHeight.value = `${available}px`
+  }
+  (updateBarsHeightFn)()
+  window.addEventListener('resize', updateBarsHeightFn as any)
 })
 
 onUnmounted(() => {
   store.stop()
+  if (updateBarsHeightFn) window.removeEventListener('resize', updateBarsHeightFn as any)
 })
 </script>
 
@@ -175,9 +178,9 @@ onUnmounted(() => {
       <div class="meter-bg" :style="bgStyle" />
       <div v-if="g.header?.pinned" class="resize-corner" />
 
-      <div class="bars-container" :style="containerStyle">
-        <div class="bars-scroll" ref="barsScrollRef" style="flex: 1 1 auto; min-height: 0; overflow-y: auto;">
-          <MeterBar
+    <div class="bars-container" :style="containerStyle">
+      <ScrollableBarsWrapper :maxHeight="barsMaxHeight">
+        <MeterBar
           v-for="bar in bars"
           :key="bar.name"
           :bar="bar"
@@ -186,9 +189,9 @@ onUnmounted(() => {
           :show-rank="g.rankIndicator.showNumbers"
           :blur-name="g.blurNames && bar.name !== store.selfName && bar.name !== 'YOU'"
           :bar-index="bar.barIndex"
-          />
-        </div>
-      </div>
+        />
+      </ScrollableBarsWrapper>
+    </div>
 
       <MeterHeader
         v-if="g.footer.show"
