@@ -83,7 +83,6 @@ const bgStyle = computed(() => {
   }
   if (border?.enabled && border.radius > 0) {
     style.borderRadius = `${border.radius}px`
-    style.zIndex = '1'
   }
   return style
 })
@@ -137,27 +136,29 @@ onUnmounted(() => {
 <template>
   <div class="meter-root" :style="{ opacity: g.opacity }">
     <div class="meter-border" :style="rootStyle" />
-    <div class="meter-bg" :style="bgStyle">
-      <div v-if="g.header?.pinned" class="resize-corner" />
-    </div>
+
+    <MeterHeader
+      v-if="g.header.show"
+      class="header-outside"
+      :config="g.header"
+      :encounter-title="frame?.encounterTitle ?? ''"
+      :encounter-duration="frame?.encounterDuration ?? ''"
+      :total-d-p-s="frame?.totalDps ?? ''"
+      :total-h-p-s="frame?.totalHps ?? ''"
+      :pull-number="store.sessionPulls.length"
+      :pull-count="store.sessionPulls.length"
+      :global="g"
+      :show-settings="true"
+      :on-settings="openEditor"
+      :on-set-combatant-filter="setCombatantFilter"
+      :on-toggle-blur-names="toggleBlurNames"
+      :on-toggle-pin="togglePin"
+      :on-toggle-merge-pets="toggleMergePets"
+    />
+
     <div class="meter-content" :style="contentStyle">
-      <MeterHeader
-        v-if="g.header.show"
-        :config="g.header"
-        :encounter-title="frame?.encounterTitle ?? ''"
-        :encounter-duration="frame?.encounterDuration ?? ''"
-        :total-d-p-s="frame?.totalDps ?? ''"
-        :total-h-p-s="frame?.totalHps ?? ''"
-        :pull-number="store.sessionPulls.length"
-        :pull-count="store.sessionPulls.length"
-        :global="g"
-        :show-settings="true"
-        :on-settings="openEditor"
-        :on-set-combatant-filter="setCombatantFilter"
-        :on-toggle-blur-names="toggleBlurNames"
-        :on-toggle-pin="togglePin"
-        :on-toggle-merge-pets="toggleMergePets"
-      />
+      <div class="meter-bg" :style="bgStyle" />
+      <div v-if="g.header?.pinned" class="resize-corner" />
 
       <div class="bars-container" :style="containerStyle">
         <MeterBar
@@ -203,21 +204,23 @@ onUnmounted(() => {
   pointer-events: none;
   z-index: 100;
 }
-.meter-bg {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  border-radius: inherit;
-}
 .meter-content {
   position: relative;
   z-index: 1;
   width: 100%;
-  height: 100%;
+  flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-radius: inherit;
+  clip-path: inset(0 round inherit);
+}
+.meter-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: inherit;
 }
 .bars-container {
   position: relative;
@@ -228,12 +231,13 @@ onUnmounted(() => {
   width: 100%;
   padding: 4px;
 }
-:deep(.meter-header) {
-  position: sticky;
-  top: 0;
-  z-index: 10;
+.header-outside {
+  position: relative;
+  z-index: 200;
+  flex-shrink: 0;
+  overflow: hidden;
 }
-.meter-root:hover :deep(.meter-header.is-hidden) {
+.meter-root:hover .header-outside.is-hidden {
   opacity: 1;
 }
 .resize-corner {

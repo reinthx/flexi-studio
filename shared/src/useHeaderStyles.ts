@@ -18,8 +18,6 @@ export function useHeaderStyles(
     
     let radius = borderRadius
     if (windowBorder?.enabled && windowBorder.radius > 0) {
-      // Always inherit the window corner radius so the header background
-      // doesn't bleed over rounded window corners (black corner artifact).
       const winR = windowBorder.radius
       if (isTop || isFooterVal) {
         radius = borderRadius > 0 ? Math.min(borderRadius, winR) : winR

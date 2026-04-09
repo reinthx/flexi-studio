@@ -83,16 +83,18 @@ function toggleHeaderPin() {
         <span class="titlebar-text">PREVIEW {{ winW }}×{{ winH }} ☼ bar {{ profile.default.height }}px</span>
       </div>
 
+      <!-- Header — outside meter frame -->
+      <PreviewHeader
+        v-if="g.header.show"
+        class="header-outside"
+        :config="g.header" :frame="frame" :global="g"
+        :on-toggle-pin="toggleHeaderPin"
+      />
+
       <!-- Meter window — matches the overlay 1:1 from this point down -->
       <div ref="meterEl" class="preview-meter" :style="meterStyle">
-        <div class="preview-meter-bg" :style="windowBgLayer" />
         <div class="meter-frame" :style="{ flexDirection: isHorizontal ? 'row' : 'column' }">
-          <PreviewHeader
-            v-if="g.header.show"
-            :config="g.header" :frame="frame" :global="g"
-            :on-toggle-pin="toggleHeaderPin"
-          />
-
+          <div class="preview-meter-bg" :style="windowBgLayer" />
           <div class="bars-area" :style="{ flexDirection: isHorizontal ? 'row' : 'column' }">
             <PreviewBar
               v-for="bar in bars" :key="bar.name"
@@ -166,13 +168,6 @@ function toggleHeaderPin() {
   display: flex;
   flex-direction: column;
 }
-.preview-meter-bg {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  border-radius: 0 0 3px 3px;
-}
 
 .meter-frame {
   display: flex; flex-direction: column;
@@ -181,6 +176,13 @@ function toggleHeaderPin() {
   min-height: 0;
   z-index: 2;
   position: relative;
+}
+.preview-meter-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  border-radius: inherit;
 }
 .bars-area {
   display: flex;
@@ -196,7 +198,12 @@ function toggleHeaderPin() {
 }
 
 /* Reveal pinned-off header when hovering the meter */
-.preview-meter:hover :deep(.meter-header.is-hidden) {
+.preview-wrapper:hover :deep(.meter-header.is-hidden) {
   opacity: 1;
+}
+.header-outside {
+  position: relative;
+  z-index: 200;
+  flex-shrink: 0;
 }
 </style>
