@@ -138,7 +138,7 @@ onMounted(() => {
     const header = root?.querySelector('.header-outside') as HTMLElement | null
     const headerHeight = header?.offsetHeight ?? 0
     const vh = window.innerHeight
-    const available = Math.max(0, vh - headerHeight - 60)
+    const available = Math.max(0, vh - headerHeight)
     barsMaxHeight.value = `${available}px`
   }
   (updateBarsHeightFn)()
