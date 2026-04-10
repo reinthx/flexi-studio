@@ -35,7 +35,7 @@ const meterRef = useTemplateRef<HTMLElement>('meterEl')
 
 // Start centered in the viewport
 const initX = ref(Math.max(0, (typeof window !== 'undefined' ? window.innerWidth : 1280) / 2 - 175))
-const initY = ref(Math.max(0, (typeof window !== 'undefined' ? window.innerHeight : 800) / 2 - 150))
+const initY = ref(Math.max(0, (typeof window !== 'undefined' ? window.innerHeight : 800) / 2 - 275))
 
 const { x, y } = useDraggable(wrapperRef, {
   handle: titlebarRef,
@@ -66,9 +66,7 @@ const wrapperStyle = computed(() => ({
   top:  `${y.value}px`,
 }))
 
-const meterStyle = computed(() => ({
-  minHeight: isHorizontal.value ? '0' : `${barHeight.value}px`,
-}))
+const meterStyle = computed(() => ({}))
 
 function toggleHeaderPin() {
   config.profile.global.header.pinned = !(config.profile.global.header.pinned ?? true)
@@ -160,7 +158,7 @@ function toggleHeaderPin() {
 /* Meter window — pixel-identical to the overlay from here down */
 .preview-meter {
   position: relative;
-  min-height: 300px;
+  height: 300px;
   resize: both;
   overflow: auto;
   min-width: 150px;
