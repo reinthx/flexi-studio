@@ -36,6 +36,7 @@ const TOKENS = [
   { token: '{crithit%}', label: 'Crit Hit %' },
   { token: '{directhit%}', label: 'Direct Hit %' },
   { token: '{enchps}',   label: 'HPS' },
+  { token: '{maxHit}',   label: 'Max Hit' },
 ]
 
 function insertToken(token: string) {

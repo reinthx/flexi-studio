@@ -3,7 +3,7 @@ import { createPinia } from 'pinia'
 import './style.css'
 import { loadCommonJs } from './lib/commonJsLoader'
 import App from './App.vue'
-import { getCustomFontsList, loadCustomFont } from '@shared/googleFonts'
+import { getCustomFontsList, loadCustomFont, getGoogleFontsList, loadGoogleFont } from '@shared/googleFonts'
 import '@shared/animations.css'
 
 function getRoute(): 'overlay' | 'editor' {
@@ -22,6 +22,11 @@ async function init(): Promise<void> {
     const customFonts = getCustomFontsList()
     for (const f of customFonts) {
       loadCustomFont(f.name)
+    }
+    // Also load all Google fonts for overlay mode
+    const googleFonts = getGoogleFontsList()
+    for (const f of googleFonts) {
+      loadGoogleFont(f.name)
     }
   }
 

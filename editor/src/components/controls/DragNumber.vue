@@ -46,6 +46,7 @@ function clamp(v: number) {
 
 function onMousedown(e: MouseEvent) {
   if (editing.value) return
+  e.stopPropagation()
   didDrag = false
   dragStartX = e.clientX
   dragStartVal = props.modelValue

@@ -188,6 +188,7 @@ onUnmounted(() => {
           :orientation="g.orientation"
           :show-rank="g.rankIndicator.showNumbers"
           :blur-name="g.blurNames && bar.name !== store.selfName && bar.name !== 'YOU'"
+          :value-format="g.valueFormat"
           :bar-index="bar.barIndex"
         />
       </ScrollableBarsWrapper>

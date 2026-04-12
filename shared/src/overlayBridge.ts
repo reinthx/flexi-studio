@@ -294,6 +294,7 @@ function buildMockCombatData(): CombatDataEvent {
       'DirectHitPct': (20 + Math.random() * 15).toFixed(1),
       tohit: '98.5',
       deaths: String(i === 2 ? 1 : 0),
+      maxhit: `Fell Cleave-${Math.round(45000 * variance())}`,
       MAXHIT: `Fell Cleave-${Math.round(45000 * variance())}`,
     }
   })

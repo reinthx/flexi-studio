@@ -139,6 +139,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         directhit: c['DirectHitPct'] ?? '---',
         tohit: c.tohit ?? '---',
         enchps: formatValue(parseFloat(c.enchps ?? '0'), g.valueFormat),
+        maxHit: (c.maxhit ?? '---').replace('-', ' '),
         alpha: 1,
         rank: i + 1,
         resolvedStyle: resolveBarStyle(normalizeJob(c['Job'] ?? ''), c.name, i + 1, profile.value, selfName.value),
@@ -386,6 +387,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       directhit: c['DirectHitPct'] ?? '---',
       tohit: c.tohit ?? '---',
       enchps: formatValue(parseFloat(c.enchps ?? '0'), profile.value.global.valueFormat),
+      maxHit: (c.maxhit ?? '---').replace('-', ' '),
       alpha: 1,
     }))
     engine.push({

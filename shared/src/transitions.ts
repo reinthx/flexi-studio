@@ -23,6 +23,7 @@ export interface BarFrame {
   directhit: string
   tohit: string
   enchps: string
+  maxHit: string
   /** 0–1 for enter/exit fade */
   alpha: number
 }
@@ -133,6 +134,7 @@ export class TransitionEngine {
           directhit: n.directhit,
           tohit: n.tohit,
           enchps: n.enchps,
+          maxHit: n.maxHit,
           alpha: lerp(p.alpha, n.alpha, et),
         })
       } else if (n) {

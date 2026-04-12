@@ -8,4 +8,5 @@ overlay/assets/
 editor/assets/
 editor/jobs/
 overlay/jobs/
+test/
 test-debug.html

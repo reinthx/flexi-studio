@@ -11,7 +11,9 @@ import GradientEditor from './GradientEditor.vue'
 // Style override modal state
 const styleModalFieldId = ref<string | null>(null)
 const modalRef = useTemplateRef<HTMLElement>('modalEl')
+const handleRef = useTemplateRef<HTMLElement>('handleEl')
 const { x: dragX, y: dragY } = useDraggable(modalRef, {
+  handle: handleRef,
   preventDefault: true,
   initialValue: { x: window.innerWidth * 0.1, y: window.innerHeight * 0.35 },
 })
@@ -52,6 +54,9 @@ const TOKENS = [
   { token: '{crithit%}',   label: 'Crit %' },
   { token: '{directhit%}', label: 'Direct Hit %' },
   { token: '{enchps}',     label: 'HPS' },
+  { token: '{maxHit}',     label: 'Max Hit' },
+  { token: '{maxHitName}', label: 'Max Hit Name' },
+  { token: '{maxHitValue}', label: 'Max Hit Value' },
 ]
 
 const activeFieldId = ref<string | null>(null)
@@ -380,7 +385,7 @@ function insertToken(fieldId: string, token: string) {
       <div class="style-modal-backdrop" @click="closeStyleModal" />
       <div ref="modalEl" class="style-modal" :style="{ left: `${dragX}px`, top: `${dragY}px` }" @click.stop>
         <!-- Header -->
-        <div class="style-modal-header">
+        <div ref="handleEl" class="style-modal-header">
           <span>Field Style Override</span>
           <button class="style-modal-close" type="button" @click="closeStyleModal">✕</button>
         </div>

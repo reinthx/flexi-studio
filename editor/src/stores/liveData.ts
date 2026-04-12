@@ -70,6 +70,7 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
         directhit: c['DirectHitPct'] ?? '---',
         tohit: c.tohit ?? '---',
         enchps: formatValue(parseFloat(c.enchps ?? '0'), g.valueFormat),
+        maxHit: (c.maxhit ?? '---').replace('-', ' '),
         alpha: 1,
       }
     })

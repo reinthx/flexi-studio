@@ -4,6 +4,7 @@ import type { BarStyle, Orientation } from '@shared/configSchema'
 import { renderTemplate } from '../../lib/templateRenderer'
 import { getJobIconSrc } from '@shared/jobMap'
 import { useBarStyles, type BarData } from '@shared/useBarStyles'
+import { formatValue, type FormatType } from '@shared/formatValue'
 
 const props = defineProps<{
   bar: BarData
@@ -13,6 +14,7 @@ const props = defineProps<{
   containerHeight?: number
   autoScale?: boolean
   barIndex?: number
+  valueFormat?: 'raw' | 'abbreviated' | 'formatted'
 }>()
 
 const {
@@ -53,6 +55,38 @@ const iconSrc = computed(() => {
 
 const separateRow = computed(() => iconConfig.value.separateRow ?? false)
 
+// Parses "SkillName 23740" or just "23740" - splits into name + formatted value
+const maxHitName = computed(() => {
+  const raw = props.bar.maxHit ?? ''
+  if (!raw || raw === '---') return raw
+  const spaceIdx = raw.lastIndexOf(' ')
+  // If no space, it's just a number (MAXHIT format), no name
+  if (spaceIdx < 0) return ''
+  return raw.slice(0, spaceIdx)
+})
+
+const maxHitValue = computed(() => {
+  const raw = props.bar.maxHit ?? ''
+  if (!raw || raw === '---') return raw
+  const spaceIdx = raw.lastIndexOf(' ')
+  const numStr = spaceIdx < 0 ? raw : raw.slice(spaceIdx + 1)
+  const suffix = numStr.slice(-1).toUpperCase()
+  const multipliers: Record<string, number> = { K: 1e3, M: 1e6, B: 1e9 }
+  const baseStr = multipliers[suffix] ? numStr.slice(0, -1) : numStr
+  const baseNum = parseFloat(baseStr.replace(/,/g, ''))
+  if (isNaN(baseNum)) return raw
+  const num = multipliers[suffix] ? baseNum * multipliers[suffix] : baseNum
+  const fmt: FormatType = props.valueFormat ?? 'abbreviated'
+  return formatValue(num, fmt)
+})
+
+const maxHit = computed(() => {
+  const name = maxHitName.value
+  const value = maxHitValue.value
+  if (!name || name === '---' || !value || value === '---') return name || value || ''
+  return `${name} ${value}`
+})
+
 const tokens = computed(() => ({
   name: props.bar.name,
   job:  props.bar.job,
@@ -62,6 +96,9 @@ const tokens = computed(() => ({
   'crithit%': `${props.bar.crithit}%`,
   'directhit%': `${props.bar.directhit}%`,
   enchps: props.bar.enchps,
+  maxHit: maxHit.value,
+  maxHitName: maxHitName.value,
+  maxHitValue: maxHitValue.value,
 }))
 </script>
 

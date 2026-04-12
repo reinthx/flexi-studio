@@ -120,6 +120,7 @@ function toggleHeaderPin() {
             :orientation="g.orientation" :show-rank="g.rankIndicator.showNumbers"
             :container-height="winH"
             :auto-scale="g.autoScale"
+            :value-format="g.valueFormat"
             :bar-index="bar.barIndex"
           />
         </ScrollableBarsWrapper>

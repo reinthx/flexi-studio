@@ -131,6 +131,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         directhit: c['DirectHitPct'] ?? '---',
         tohit: c.tohit ?? '---',
         enchps: formatValue(parseFloat(c.enchps ?? '0'), g.valueFormat),
+        maxHit: (c.maxhit ?? '---').replace('-', ' '),
         alpha: 1,
       }
     })
@@ -375,6 +376,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       directhit: c['DirectHitPct'] ?? '---',
       tohit: c.tohit ?? '---',
       enchps: formatValue(parseFloat(c.enchps ?? '0'), profile.value.global.valueFormat),
+      maxHit: (c.maxhit ?? '---').replace('-', ' '),
       alpha: 1,
     }))
     engine.push({

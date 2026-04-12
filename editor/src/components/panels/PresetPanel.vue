@@ -304,7 +304,7 @@ const categoryOptions = computed(() => [
       @dragover="onDragOver('', $event)"
       @dragleave="onDragLeave"
       @drop.prevent="onDrop('')"
-      v-if="store.uncategorizedPresets.length > 0 || store.categories.length > 0"
+      v-if="store.uncategorizedPresets.length > 0"
     >
       <div class="category-header" @click="store.toggleCategoryCollapse('__uncategorized')">
         <span class="cat-chevron open">›</span>

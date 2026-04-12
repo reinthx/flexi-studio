@@ -53,6 +53,7 @@ export interface BarData {
   crithit: string
   directhit: string
   enchps: string
+  maxHit: string
   alpha: number
   rank: number
   isSelf?: boolean
