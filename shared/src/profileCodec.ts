@@ -14,6 +14,67 @@
 import { BAR_TEXTURE_PRESETS } from './texturePresets'
 import { JOB_ICONS } from './jobIcons'
 
+// ── JSON Key Minification ──────────────────────────────────────────────────────────
+
+const KEY_TO_SHORT: Record<string, string> = {
+  color: 'c',
+  enabled: 'e',
+  offsetX: 'ox',
+  offsetY: 'oy',
+  show: 's',
+  width: 'w',
+  height: 'h',
+  opacity: 'o',
+  radius: 'r',
+  thickness: 'th',
+  template: 't',
+  background: 'bg',
+  outline: 'ol',
+  shadow: 'sh',
+  padding: 'p',
+  maxCombatants: 'mc',
+}
+
+const SHORT_TO_KEY: Record<string, string> = Object.entries(KEY_TO_SHORT).reduce((acc, [k, v]) => {
+  acc[v] = k
+  return acc
+}, {} as Record<string, string>)
+
+function minifyKeys(json: string): string {
+  let result = json
+  for (const [key, short] of Object.entries(KEY_TO_SHORT)) {
+    result = result.replaceAll(`"${key}":`, `"${short}":`)
+  }
+  return result
+}
+
+function minifyArrays(json: string): string {
+  let result = json
+  // Compact offset objects: {"ox":5,"oy":10} → {"os":[5,10]}
+  result = result.replace(/"ox":(\d+),"oy":(\d+)}/g, '"os":[$1,$2]')
+  // Compact thickness objects: {"top":0,"right":0,"bottom":0,"left":0} → {"th":[0,0,0,0]}
+  result = result.replace(/"top":(\d+),"right":(\d+),"bottom":(\d+),"left":(\d+)}/g, '"th":[$1,$2,$3,$4]')
+  return result
+}
+
+function expandArrays(json: string): string {
+  let result = json
+  // Expand offset arrays: {"os":[5,10]} → {"ox":5,"oy":10}
+  result = result.replace(/"os":\[(\d+),(\d+)\]/g, '"ox":$1,"oy":$2')
+  // Expand thickness arrays: {"th":[0,0,0,0]} → {"top":0,"right":0,"bottom":0,"left":0}
+  result = result.replace(/"th":\[(\d+),(\d+),(\d+),(\d+)\]/g, '"top":$1,"right":$2,"bottom":$3,"left":$4')
+  return result
+}
+
+function expandKeys(json: string): string {
+  let result = json
+  for (const [short, key] of Object.entries(SHORT_TO_KEY)) {
+    result = result.replaceAll(`"${short}":`, `"${key}":`)
+  }
+  return result
+}
+import { JOB_COLORS } from './presets'
+
 const HEADER = 'FLEXI1:'
 const LEGACY_HEADER = 'ACTFLEXI1:'
 
@@ -210,13 +271,335 @@ function fromBase64url(str: string): Uint8Array {
   return bytes
 }
 
+// ── Cleanup dead fields ────────────────────────────────────────────────────
+
+const DEAD_LABEL_FIELDS = ['leftTemplate', 'rightTemplate', 'leftOffsetX', 'leftOffsetY', 'rightOffsetX', 'rightOffsetY']
+
+const DEFAULT_JOB_ENABLED: Record<string, boolean> = {
+  PLD: true, WAR: true, DRK: true, GNB: true,
+  WHM: true, SCH: true, AST: true, SGE: true,
+  MNK: true, DRG: true, NIN: true, SAM: true, RPR: true, VPR: true,
+  BRD: true, MCH: true, DNC: true,
+  BLM: true, SMN: true, RDM: true, PCT: true, BLU: true,
+}
+
+const DEFAULT_ROLE_ENABLED: Record<string, boolean> = {
+  tank: true, healer: true, melee: true, ranged: true, caster: true,
+}
+
+// Default colors (inline to avoid importing from presets at runtime during delta encoding)
+const DEFAULT_JOB_COLORS: Record<string, string> = {
+  PLD: '#A6D100', WAR: '#D30000', DRK: '#B080D0', GNB: '#F0C040',
+  WHM: '#B5D0A0', SCH: '#E080B0', AST: '#F0E080', SGE: '#80C0F0',
+  MNK: '#E08040', DRG: '#5040A0', NIN: '#A04080', SAM: '#E04040', RPR: '#8040A0', VPR: '#40A040',
+  BRD: '#A0C040', MCH: '#6080C0', DNC: '#E060A0',
+  BLM: '#8060C0', SMN: '#40A040', RDM: '#E04040', PCT: '#F0A040', BLU: '#40A0C0',
+}
+
+const DEFAULT_ROLE_COLORS: Record<string, string> = {
+  tank: '#4a90d9', healer: '#52b788', melee: '#e63946', ranged: '#f4a261', caster: '#9b5de5',
+}
+
+const DEFAULT_SHAPE = {
+  leftEdge: 'flat', rightEdge: 'flat', edgeDepth: 10, chamferMode: 'none',
+  cornerCuts: { tl: { x: 0, y: 0 }, tr: { x: 0, y: 0 }, br: { x: 0, y: 0 }, bl: { x: 0, y: 0 } },
+  borderRadius: { tl: 3, tr: 3, br: 3, bl: 3 },
+  outline: { color: 'rgba(255,255,255,0.15)', thickness: { top: 0, right: 0, bottom: 1, left: 0 } },
+  shadow: { enabled: false, color: '#000000', blur: 4, thickness: 0, offsetX: 0, offsetY: 2 },
+  fillShadow: { enabled: false, color: '#000000', blur: 4, thickness: 0, offsetX: 0, offsetY: 1 },
+}
+
+const DEFAULT_LABEL = {
+  font: 'Segoe UI', size: 12, color: '#ffffff',
+  fields: [
+    { id: 'f1', template: '{name}', hAnchor: 'left', vAnchor: 'middle', offsetX: 0, offsetY: 0, enabled: true },
+    { id: 'f2', template: '{value} ({pct})', hAnchor: 'right', vAnchor: 'middle', offsetX: 0, offsetY: 0, enabled: true },
+  ],
+  shadow: { enabled: true, color: '#000000', blur: 2, offsetX: 0, offsetY: 1, thickness: 1 },
+  outline: { enabled: false, color: '#000000', width: 1, gradient: null },
+  iconConfig: {
+    sizeOverride: 0, opacity: 1, show: true, separateRow: false, offsetX: 0, offsetY: 0,
+    shadow: { enabled: false, color: '#000000', blur: 4, offsetX: 0, offsetY: 1 },
+    bgShape: { enabled: false, shape: 'circle', color: '#000000', size: 24, opacity: 0.5 },
+  },
+  textTransform: 'none', padding: 4, gap: 4, gradient: null,
+  separateRowDeaths: false, deathOffsetX: 0, deathOffsetY: 0, deathSize: 12, deathOpacity: 1,
+}
+
+const DEFAULT_GLOBAL = {
+  dpsType: 'encdps', sortBy: 'encdps', maxCombatants: 72, showHeader: true, autoScale: false,
+  transitionDuration: 800, holdDuration: 12000, orientation: 'vertical', opacity: 1,
+  outOfCombat: 'dim', outOfCombatOpacity: 0.4, valueFormat: 'abbreviated',
+  combatantFilter: 'all', partyOnly: false, selfOnly: false, blurNames: false,
+  windowOpacity: 1,
+  windowBorder: { enabled: false, color: '#2a2a3e', width: 1, radius: 4 },
+  windowShadow: { enabled: false, color: 'rgba(0,0,0,0.5)', blur: 8, offsetX: 0, offsetY: 2 },
+  windowBg: 'transparent', windowBackground: { type: 'solid', color: 'transparent' },
+  windowX: 20, windowY: 80, mergePets: true,
+  header: { show: true, template: '{encounter}  {duration}', font: 'Segoe UI', size: 11, color: '#cccccc', background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
+  footer: { show: false, template: 'Total: {totalDPS} DPS', font: 'Segoe UI', size: 11, color: '#cccccc', background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
+  rankIndicator: { rank1Enabled: false, rank1Style: {}, showNumbers: false },
+  pets: { show: false, mergeWithOwner: true, petStyle: {} },
+}
+
+function cleanProfile(profile: any): any {
+  const cleaned = JSON.parse(JSON.stringify(profile))
+
+  // Strip dead label fields
+  if (cleaned.default?.label) {
+    for (const field of DEAD_LABEL_FIELDS) {
+      delete cleaned.default.label[field]
+    }
+  }
+
+  // Clean gradientColor - strip if fill.type is not gradient
+  if (cleaned.default?.fill?.type !== 'gradient') delete cleaned.default.gradientColor
+  if (cleaned.default?.bg?.type !== 'gradient') delete cleaned.default.bg.gradientColor
+  if (cleaned.global?.windowBackground?.type !== 'gradient') delete cleaned.global.windowBackground.gradientColor
+
+  // Strip "enabled: false" blocks that match defaults
+  // label.shadow
+  if (cleaned.default?.label?.shadow?.enabled === false && 
+      JSON.stringify(cleaned.default.label.shadow).length < 80) {
+    delete cleaned.default.label.shadow
+  }
+  // label.outline with enabled: false
+  if (cleaned.default?.label?.outline?.enabled === false) {
+    delete cleaned.default.label.outline
+  }
+  // iconConfig.shadow enabled: false
+  if (cleaned.default?.label?.iconConfig?.shadow?.enabled === false) {
+    delete cleaned.default.label.iconConfig.shadow
+  }
+  // iconConfig.outline enabled: false
+  if (cleaned.default?.label?.iconConfig?.outline?.enabled === false) {
+    delete cleaned.default.label.iconConfig.outline
+  }
+  // iconConfig.classOutline enabled: false
+  if (cleaned.default?.label?.iconConfig?.classOutline?.enabled === false) {
+    delete cleaned.default.label.iconConfig.classOutline
+  }
+  // shape.fillShadow enabled: false
+  if (cleaned.default?.shape?.fillShadow?.enabled === false && 
+      JSON.stringify(cleaned.default.shape.fillShadow).length < 60) {
+    delete cleaned.default.shape.fillShadow
+  }
+
+  // Strip shape fields matching defaults
+  if (cleaned.default?.shape) {
+    for (const [key, value] of Object.entries(DEFAULT_SHAPE)) {
+      if (JSON.stringify(cleaned.default.shape[key]) === JSON.stringify(value)) {
+        delete cleaned.default.shape[key]
+      }
+    }
+    if (Object.keys(cleaned.default.shape).length === 0) delete cleaned.default.shape
+  }
+
+  // Strip label fields matching defaults
+  if (cleaned.default?.label) {
+    const labelDefaults = ['font', 'size', 'color', 'textTransform', 'padding', 'gap', 'gradient', 'separateRowDeaths', 'deathOffsetX', 'deathOffsetY', 'deathSize', 'deathOpacity']
+    for (const key of labelDefaults) {
+      if (cleaned.default.label[key] === DEFAULT_LABEL[key]) delete cleaned.default.label[key]
+    }
+    if (cleaned.default.label.fields) {
+      const defFields = DEFAULT_LABEL.fields
+      const fields = cleaned.default.label.fields.filter((f: any, i: number) => {
+        if (!defFields[i]) return true
+        return JSON.stringify(f) !== JSON.stringify(defFields[i])
+      })
+      cleaned.default.label.fields = fields.length > 0 ? fields : undefined
+      if (!cleaned.default.label.fields) delete cleaned.default.label.fields
+    }
+    if (cleaned.default.label.shadow) {
+      const match = JSON.stringify(cleaned.default.label.shadow) === JSON.stringify(DEFAULT_LABEL.shadow)
+      if (match) delete cleaned.default.label.shadow
+    }
+    if (cleaned.default.label.outline) {
+      const match = cleaned.default.label.outline.gradient === null || JSON.stringify(cleaned.default.label.outline) === JSON.stringify(DEFAULT_LABEL.outline)
+      if (match) delete cleaned.default.label.outline
+    }
+    if (cleaned.default.label.iconConfig) {
+      const match = JSON.stringify(cleaned.default.label.iconConfig) === JSON.stringify(DEFAULT_LABEL.iconConfig)
+      if (match) delete cleaned.default.label.iconConfig
+    }
+  }
+
+  // Strip global fields matching defaults
+  if (cleaned.global) {
+    const globalScalarDefaults: Record<string, any> = {
+      dpsType: 'encdps', sortBy: 'encdps', maxCombatants: 72, showHeader: true, autoScale: false,
+      transitionDuration: 800, holdDuration: 12000, orientation: 'vertical', opacity: 1,
+      outOfCombat: 'dim', outOfCombatOpacity: 0.4, valueFormat: 'abbreviated',
+      combatantFilter: 'all', partyOnly: false, selfOnly: false, blurNames: false,
+      windowOpacity: 1, windowBg: 'transparent', windowX: 20, windowY: 80, mergePets: true,
+      header: { show: true, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
+      footer: { show: false, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
+      rankIndicator: { rank1Enabled: false, showNumbers: false },
+      pets: { show: false, mergeWithOwner: true },
+    }
+    for (const [key, value] of Object.entries(globalScalarDefaults)) {
+      if (cleaned.global[key] === value) delete cleaned.global[key]
+    }
+    if (cleaned.global.windowBorder?.enabled === false) {
+      delete cleaned.global.windowBorder
+    }
+    if (cleaned.global.windowShadow?.enabled === false) {
+      delete cleaned.global.windowShadow
+    }
+    if (cleaned.global.windowBackground?.type === 'solid' && cleaned.global.windowBackground.color === 'transparent') {
+      delete cleaned.global.windowBackground
+    }
+    if (cleaned.global.header?.template === '{encounter}  {duration}' && cleaned.global.header.font === 'Segoe UI' && cleaned.global.header.size === 11 && cleaned.global.header.color === '#cccccc') {
+      delete cleaned.global.header
+    }
+    if (cleaned.global.footer?.show === false) {
+      delete cleaned.global.footer
+    }
+    if (cleaned.global.rankIndicator?.rank1Enabled === false && Object.keys(cleaned.global.rankIndicator).length <= 2) {
+      delete cleaned.global.rankIndicator
+    }
+    if (cleaned.global.pets?.show === false && cleaned.global.pets?.mergeWithOwner === true && Object.keys(cleaned.global.pets).length <= 2) {
+      delete cleaned.global.pets
+    }
+  }
+  if (cleaned.overrides?.byJobEnabled) {
+    for (const [job, enabled] of Object.entries(cleaned.overrides.byJobEnabled)) {
+      if (enabled === true) delete cleaned.overrides.byJobEnabled[job]
+    }
+  }
+  if (cleaned.overrides?.byRoleEnabled) {
+    for (const [role, enabled] of Object.entries(cleaned.overrides.byRoleEnabled)) {
+      if (enabled === true) delete cleaned.overrides.byRoleEnabled[role]
+    }
+  }
+  if (cleaned.overrides?.byJob) {
+    const byJobCompact: Record<string, any> = {}
+    for (const [job, config] of Object.entries(cleaned.overrides.byJob)) {
+      const color = config?.fill?.color
+      const isGradient = config?.fill?.type === 'gradient'
+      if (color !== DEFAULT_JOB_COLORS[job]) {
+        const entry: any = { fill: { type: config.fill.type, color } }
+        if (isGradient && config.gradientColor) entry.gradientColor = config.gradientColor
+        byJobCompact[job] = entry
+      }
+    }
+    cleaned.overrides.byJob = Object.keys(byJobCompact).length > 0 ? byJobCompact : undefined
+  }
+  if (cleaned.overrides?.byRole) {
+    const byRoleCompact: Record<string, any> = {}
+    for (const [role, config] of Object.entries(cleaned.overrides.byRole)) {
+      const color = config?.fill?.color
+      const isGradient = config?.fill?.type === 'gradient'
+      if (color !== DEFAULT_ROLE_COLORS[role]) {
+        const entry: any = { fill: { type: config.fill.type, color } }
+        if (isGradient && config.gradientColor) entry.gradientColor = config.gradientColor
+        byRoleCompact[role] = entry
+      }
+    }
+    cleaned.overrides.byRole = Object.keys(byRoleCompact).length > 0 ? byRoleCompact : undefined
+  }
+  // overrides.self - preserve gradient
+  if (cleaned.overrides?.self) {
+    const self = cleaned.overrides.self
+    if (self.fill?.type !== 'gradient') delete self.gradientColor
+  }
+  return cleaned
+}
+
+function restoreDefaults(profile: any): any {
+  const restored = { ...profile }
+  if (restored.overrides) {
+    if (!restored.overrides.byJobEnabled) {
+      restored.overrides.byJobEnabled = { ...DEFAULT_JOB_ENABLED }
+    } else {
+      for (const [job, enabled] of Object.entries(DEFAULT_JOB_ENABLED)) {
+        if (restored.overrides.byJobEnabled[job] === undefined) {
+          restored.overrides.byJobEnabled[job] = enabled
+        }
+      }
+    }
+    if (!restored.overrides.byRoleEnabled) {
+      restored.overrides.byRoleEnabled = { ...DEFAULT_ROLE_ENABLED }
+    } else {
+      for (const [role, enabled] of Object.entries(DEFAULT_ROLE_ENABLED)) {
+        if (restored.overrides.byRoleEnabled[role] === undefined) {
+          restored.overrides.byRoleEnabled[role] = enabled
+        }
+      }
+    }
+    const byJobFull: Record<string, any> = {}
+    for (const job of Object.keys(DEFAULT_JOB_COLORS)) {
+      const config = restored.overrides.byJob?.[job]
+      if (config) {
+        const fillType = config.fill?.type || 'solid'
+        byJobFull[job] = { fill: { type: fillType, color: config.fill?.color || config }, ...(config.gradientColor && { gradientColor: config.gradientColor }) }
+      } else {
+        byJobFull[job] = { fill: { type: 'solid', color: DEFAULT_JOB_COLORS[job] } }
+      }
+    }
+    restored.overrides.byJob = byJobFull
+    const byRoleFull: Record<string, any> = {}
+    for (const role of Object.keys(DEFAULT_ROLE_COLORS)) {
+      const config = restored.overrides.byRole?.[role]
+      if (config) {
+        const fillType = config.fill?.type || 'solid'
+        byRoleFull[role] = { fill: { type: fillType, color: config.fill?.color || config }, ...(config.gradientColor && { gradientColor: config.gradientColor }) }
+      } else {
+        byRoleFull[role] = { fill: { type: 'solid', color: DEFAULT_ROLE_COLORS[role] } }
+      }
+    }
+    restored.overrides.byRole = byRoleFull
+  }
+
+  // Restore default shape
+  if (!restored.default?.shape) {
+    restored.default.shape = { ...DEFAULT_SHAPE }
+  } else {
+    for (const [key, value] of Object.entries(DEFAULT_SHAPE)) {
+      if (restored.default.shape[key] === undefined) {
+        restored.default.shape[key] = value
+      }
+    }
+  }
+
+  // Restore default label
+  if (!restored.default?.label) {
+    restored.default.label = { ...DEFAULT_LABEL }
+  } else {
+    restored.default.label = { ...DEFAULT_LABEL, ...restored.default.label }
+    if (!restored.default.label.fields) restored.default.label.fields = DEFAULT_LABEL.fields
+    // Restore label.shadow if missing (default has enabled: true)
+    if (!restored.default.label.shadow) restored.default.label.shadow = { ...DEFAULT_LABEL.shadow }
+  }
+
+  // Restore default global
+  if (!restored.global) {
+    restored.global = { ...DEFAULT_GLOBAL }
+  } else {
+    restored.global = { ...DEFAULT_GLOBAL, ...restored.global }
+    if (!restored.global.windowBorder) restored.global.windowBorder = DEFAULT_GLOBAL.windowBorder
+    if (!restored.global.windowShadow) restored.global.windowShadow = DEFAULT_GLOBAL.windowShadow
+    if (!restored.global.windowBackground) restored.global.windowBackground = DEFAULT_GLOBAL.windowBackground
+    if (!restored.global.header) restored.global.header = DEFAULT_GLOBAL.header
+    if (!restored.global.footer) restored.global.footer = DEFAULT_GLOBAL.footer
+    if (!restored.global.rankIndicator) restored.global.rankIndicator = DEFAULT_GLOBAL.rankIndicator
+    if (!restored.global.pets) restored.global.pets = DEFAULT_GLOBAL.pets
+  }
+
+  return restored
+}
+
 // ── Public API ──
 
 /** Encode profile(s) to a compact share string. */
 export async function encodeShareString(presets: Array<{ name: string; profile: any }>): Promise<string> {
-  let json = tokenize(JSON.stringify(presets))
+  const cleanedPresets = presets.map(p => ({ ...p, profile: cleanProfile(p.profile) }))
+  let json = tokenize(JSON.stringify(cleanedPresets))
   json = await optimizeCustomAssets(json)
   json = deduplicateAssets(json)
+  // Skip key minification and array compaction for now - causing decode issues
+  // json = minifyKeys(json)
+  // json = minifyArrays(json)
   const compressed = await deflate(new TextEncoder().encode(json))
   return HEADER + toBase64url(compressed)
 }
@@ -233,13 +616,39 @@ export async function decodeShareString(shareStr: string): Promise<Array<{ name:
     return null
   }
   try {
-    const decompressed = await inflate(fromBase64url(b64))
-    let json = new TextDecoder().decode(decompressed)
-    json = restoreAssets(json)
+    let json: string
+    try {
+      // First try: existing format (deflate)
+      const decompressed = await inflate(fromBase64url(b64))
+      json = new TextDecoder().decode(decompressed)
+    } catch {
+      // If deflate fails, legacy presets might have different format - try as-is
+      return null
+    }
+    // Restore minified keys and arrays (backward compatibility)
+    // Only attempt if JSON was actually minified - check for short keys/arrays pattern first
+    const hasShortKeys = json.includes('"c":') || json.includes('"e":') || json.includes('"os":') || json.includes('"th":')
+    if (hasShortKeys) {
+      try {
+        json = expandKeys(json)
+        json = expandArrays(json)
+      } catch {
+        // expansion failed, keep original
+      }
+    }
+    // Always try restore assets
+    try {
+      json = restoreAssets(json)
+    } catch {
+      // no assets to restore
+    }
     json = detokenize(json)
     const parsed = JSON.parse(json)
     if (!Array.isArray(parsed)) return null
-    return parsed
+    return parsed.map((p: any) => ({
+      ...p,
+      profile: restoreDefaults(p.profile),
+    }))
   } catch {
     return null
   }

@@ -17,7 +17,8 @@
     "preview:overlay": "cd dist/overlay && npx http-server -p 3001"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "pako": "^2.1.0"
   },
   "packageManager": "pnpm@10.33.0"
 }
