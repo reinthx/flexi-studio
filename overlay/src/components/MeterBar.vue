@@ -27,7 +27,7 @@ const {
   bgShadowDirectionalClip, bgShadowStyle, bgShadowSourceStyle,
   bgStyle, bgTextureInnerStyle,
   fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
-  label, labelStyle, processedFields, textStyle, gradientTextStyle,
+  label, labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
   showDeath, deathText, deathStyle,
   iconConfig, iconSrc, showIcon, iconSize,
   iconContainerStyle, iconInlineStyle, iconImageStyle,
@@ -189,7 +189,8 @@ function fieldText(template: string): string {
     <div :style="labelStyle">
       <template v-for="field in processedFields" :key="field.id">
         <div :style="field.style">
-          <span :style="{ overflow:'hidden', textOverflow:'ellipsis', minWidth:0, filter: textStyle, ...blurStyle, ...gradientTextStyle }">{{ fieldText(field.template) }}</span>
+          <span v-if="labelOutlineShadow" :style="{ position:'absolute', inset:0, color:'transparent', textShadow:labelOutlineShadow, overflow:'visible', whiteSpace:'nowrap', pointerEvents:'none' }">{{ fieldText(field.template) }}</span>
+          <span :style="{ overflow:'hidden', textOverflow:'ellipsis', minWidth:0, filter: textStyle, ...(field.template.includes('{name}') ? blurStyle : undefined), ...gradientTextStyle }">{{ fieldText(field.template) }}</span>
         </div>
       </template>
     </div>

@@ -345,31 +345,30 @@ export function useBarStyles(
     return { ...DEFAULT_LABEL, ...sc().label }
   })
 
+  const labelOutlineShadow = computed(() => {
+    const l = label.value
+    if (!l.outline?.enabled) return ''
+    const shift = l.outline.width ?? 0
+    return Array.from({ length: 8 }, (_, i) => {
+      const angle = (i / 8) * Math.PI * 2
+      const x = Math.round(Math.cos(angle) * shift)
+      const y = Math.round(Math.sin(angle) * shift)
+      const color = l.outline?.gradient
+        ? sampleGradientColor(l.outline.gradient, i / 8)
+        : (l.outline?.color ?? '#000000')
+      return `${x}px ${y}px 0 ${color}`
+    }).join(', ')
+  })
+
   const labelStyle = computed(() => {
     const l = label.value
-    const outlineShift = l.outline?.enabled ? (l.outline?.width ?? 0) : 0
-    const outlineShadows = l.outline?.enabled
-      ? Array.from({ length: 8 }, (_, i) => {
-          const angle = (i / 8) * Math.PI * 2
-          const x = Math.round(Math.cos(angle) * outlineShift)
-          const y = Math.round(Math.sin(angle) * outlineShift)
-          const color = l.outline?.gradient
-            ? sampleGradientColor(l.outline.gradient, i / 8)
-            : (l.outline?.color ?? '#000000')
-          return `${x}px ${y}px 0 ${color}`
-        }).join(', ')
-      : ''
-
     const textTransform = l.textTransform || 'none'
-
     return {
       position: 'absolute' as const,
       left: 0, right: 0, top: 0, bottom: 0, zIndex: 2,
-      overflow: 'hidden' as const,
       fontFamily: l.font,
       fontSize: `${l.size}px`,
       color: l.color,
-      textShadow: outlineShadows || undefined,
       userSelect: 'none' as const,
       textTransform,
       pointerEvents: 'none' as const,
@@ -624,7 +623,7 @@ export function useBarStyles(
     bgStyle, bgTextureInnerStyle,
     fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
     // Label
-    label, labelStyle, processedFields, textStyle, gradientTextStyle,
+    label, labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
     // Death indicator
     showDeath, deathText, deathStyle,
     // Icon

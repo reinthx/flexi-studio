@@ -27,7 +27,7 @@ const {
   bgShadowDirectionalClip, bgShadowStyle, bgShadowSourceStyle,
   bgStyle, bgTextureInnerStyle,
   fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
-  label, labelStyle, processedFields, textStyle, gradientTextStyle,
+  label, labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
   showDeath, deathText, deathStyle,
   iconConfig, showIcon, iconSize,
   iconContainerStyle, iconInlineStyle, iconImageStyle,
@@ -174,6 +174,7 @@ const tokens = computed(() => ({
     <div :style="labelStyle">
       <template v-for="field in processedFields" :key="field.id">
         <div :style="field.style">
+          <span v-if="labelOutlineShadow" :style="{ position:'absolute', inset:0, color:'transparent', textShadow:labelOutlineShadow, overflow:'visible', whiteSpace:'nowrap', pointerEvents:'none' }">{{ renderTemplate(field.template, tokens) }}</span>
           <span :style="{ overflow:'hidden', textOverflow:'ellipsis', minWidth:0, filter:textStyle, ...gradientTextStyle }">
             {{ renderTemplate(field.template, tokens) }}
           </span>
