@@ -6,6 +6,7 @@ import MeterHeader from './MeterHeader.vue'
 import type { BarStyle } from '@shared/configSchema'
 import { resolveBarStyle } from '@shared/styleResolver'
 import { buildFillCss } from '@shared/cssBuilder'
+import { loadCustomFont } from '@shared/googleFonts'
 import { ref, nextTick } from 'vue'
 import ScrollableBarsWrapper from '@shared/components/ScrollableBarsWrapper.vue'
 
@@ -115,10 +116,11 @@ const contentStyle = computed(() => {
 
 // Bars container max-height driven by viewport (shared wrapper will handle scrolling)
 const barsMaxHeight = ref<string>('unset')
-let updateBarsHeightFn: (() => void) | null = null
+let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
   store.start()
+  loadCustomFont('redacted-script-bold')
   ;(window as any).actFlexiDebug = () => {
     const root = document.querySelector('.meter-root') as HTMLElement
     const app = document.getElementById('app')
@@ -133,21 +135,26 @@ onMounted(() => {
     }
   }
   // Compute available height for the bars area (header height taken into account)
-  updateBarsHeightFn = () => {
+  const updateBarsHeight = () => {
     const root = document.querySelector('.meter-root') as HTMLElement | null
     const header = root?.querySelector('.header-outside') as HTMLElement | null
     const headerHeight = header?.offsetHeight ?? 0
-    const vh = window.innerHeight
+    const vh = root?.offsetHeight ?? window.innerHeight
     const available = Math.max(0, vh - headerHeight)
     barsMaxHeight.value = `${available}px`
   }
-  (updateBarsHeightFn)()
-  window.addEventListener('resize', updateBarsHeightFn as any)
+  updateBarsHeight()
+  const root = document.querySelector('.meter-root') as HTMLElement | null
+  if (root) {
+    resizeObserver = new ResizeObserver(updateBarsHeight)
+    resizeObserver.observe(root)
+  }
 })
 
 onUnmounted(() => {
   store.stop()
-  if (updateBarsHeightFn) window.removeEventListener('resize', updateBarsHeightFn as any)
+  resizeObserver?.disconnect()
+  resizeObserver = null
 })
 </script>
 

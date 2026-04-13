@@ -64,7 +64,7 @@ const displayName = computed(() => {
 
 const blurStyle = computed(() => {
   if (props.blurName) {
-    return { filter: 'blur(2px)', opacity: '0.85', userSelect: 'none' as const }
+    return { fontFamily: "'redacted-script-bold'", filter: 'blur(1px)', opacity: '0.85', userSelect: 'none' as const, letterSpacing: '-0.06em', fontSize: '1.15em', lineHeight: '1.15', transform: 'translateY(-3px)' }
   }
   return undefined
 })
@@ -188,8 +188,8 @@ function fieldText(template: string): string {
     <!-- Label: independently positioned text fields -->
     <div :style="labelStyle">
       <template v-for="field in processedFields" :key="field.id">
-        <div :style="field.style">
-          <span v-if="labelOutlineShadow" :style="{ position:'absolute', inset:0, color:'transparent', textShadow:labelOutlineShadow, overflow:'visible', whiteSpace:'nowrap', pointerEvents:'none' }">{{ fieldText(field.template) }}</span>
+        <div :style="[field.style, blurStyle ? { maxWidth: 'none' } : {}]">
+          <span v-if="labelOutlineShadow" :style="{ position:'absolute', inset:0, color:'transparent', textShadow:labelOutlineShadow, overflow:'visible', whiteSpace:'nowrap', pointerEvents:'none', ...(field.template.includes('{name}') && blurStyle ? { fontFamily: blurStyle.fontFamily, opacity: blurStyle.opacity, transform: blurStyle.transform } : {}) }">{{ fieldText(field.template) }}</span>
           <span :style="{ overflow:'hidden', textOverflow:'ellipsis', minWidth:0, filter: textStyle, ...(field.template.includes('{name}') ? blurStyle : undefined), ...gradientTextStyle }">{{ fieldText(field.template) }}</span>
         </div>
       </template>

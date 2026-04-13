@@ -309,8 +309,8 @@ export function useBarStyles(
     return {
       position: 'absolute' as const,
       ...(isHorizontal.value
-        ? { bottom: '0', left: '0', right: '0', height: `${frac * 100}%` }
-        : { top: '0', left: '0', bottom: '0', width: `${frac * 100}%` }),
+        ? { bottom: '0', left: '0', right: '0', height: frac >= 1 ? '100%' : `${frac * 100}%` }
+        : { top: '0', left: '0', bottom: '0', ...(frac >= 1 ? { right: '0' } : { width: `${frac * 100}%` }) }),
       ...fillCss,
       // Texture fills use an inner div to avoid rubberband stretch in CEF
       ...(isTextureFill.value ? { overflow: 'hidden' as const } : {}),
