@@ -1,206 +1,36 @@
-# act-flexi
+# Flexi Studio
 
-A customizable DPS/HPS overlay for FFXIV with ACT and OverlayPlugin.
+A customizable DPS meter overlay for Final Fantasy XIV, built for use with [ACT](https://advancedcombattracker.com/) and the OverlayPlugin.
 
-## 🚀 Quick Start
+## What it does
 
-### For Users (Download & Use)
+Flexi Studio displays a live damage meter during combat. You can customize how it looks — bar styles, colors, gradients, textures, fonts, animations, and more — using the built-in visual editor.
 
-1. **Download** the latest release from [Releases](../../releases)
-2. **Extract** the ZIP file
-3. **Configure ACT** (see setup below)
-4. **Load** `dist/overlay/index.html` in OverlayPlugin
+## How to use
 
-### For Developers (Clone & Develop)
+### Option 1: GitHub Pages (easiest)
 
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/act-flexi.git
-cd act-flexi
+1. In ACT, open the OverlayPlugin tab
+2. Add a new overlay, set the URL to the GitHub Pages link `https://reinthx.github.io/flexi-studio/`
+3. Open the editor by clicking the settings button on the overlay, or by visiting `https://reinthx.github.io/flexi-studio/#/editor` in a browser
 
-# Install dependencies
-pnpm install
+### Option 2: Self-hosted
 
-# Start development servers
-pnpm run dev:editor   # Editor UI on http://localhost:5174
-pnpm run dev:overlay  # Overlay preview on http://localhost:5175
+Download the latest build artifacts from [Actions](../../actions) and host the files yourself. Point ACT to your local URL.
 
-# Build for production
-pnpm run build
-```
+## Editor
 
-## 🌐 GitHub Pages Deployment
+The editor lets you configure:
 
-### Build for GitHub Pages
+- **Meter bars** — style, size, colors, gradients, textures, animations
+- **Player rows** — what stats to show (DPS, HPS, job icons, etc.)
+- **Fonts** — pick from built-in fonts or point to a folder of your own
+- **Presets** — save and switch between different looks
 
-```bash
-# Build both editor and overlay
-pnpm run build
+Changes sync live to the overlay when clicking "Apply changes" — no reload needed.
 
-# Copy dist/ to your GitHub Pages branch
-git checkout gh-pages
-cp -r dist/* gh-pages/
-git add gh-pages/
-git commit -m "Deploy to GitHub Pages"
-git push origin gh-pages
-```
+## Requirements
 
-### Automatic Deployment
-
-Enable GitHub Pages in your repository settings and push to `main` branch. The included GitHub Actions workflow will automatically build and deploy.
-
-### Usage on GitHub Pages
-
-- **Editor**: `https://yourusername.github.io/act-flexi/`
-- **Overlay**: `https://yourusername.github.io/act-flexi/?mode=overlay`
-
-### Communication on GitHub Pages
-
-The editor and overlay communicate via `localStorage` events:
-
-1. **Editor** saves changes to `localStorage`
-2. **Overlay** listens for `storage` events and updates instantly
-3. Click **"Open Overlay"** in editor to open overlay in new tab
-4. Click **"Apply to Live Overlay"** to sync changes immediately
-
-### Environment Configuration
-
-For custom deployment URLs, create `.env` files:
-
-```bash
-# Copy example env files
-cp .env.example .env
-cp editor/.env.example editor/.env
-cp overlay/.env.example overlay/.env
-
-# Edit for your deployment
-# MODE=production (for deployment)
-# VITE_WS_URL=ws://your-server:5176 (optional, only for dev)
-```
-
-## 📋 ACT Setup
-
-### Prerequisites
-
-- [ACT (Advanced Combat Tracker)](https://ravahn.github.io/)
-- [OverlayPlugin](https://github.com/OverlayPlugin/OverlayPlugin) for ACT
-- FFXIV ACT Plugin for combat parsing
-
-### Overlay Configuration
-
-1. In ACT: **Plugins → OverlayPlugin.dll**
-2. Click **New** to create overlay:
-   ```
-   Name: act-flexi
-   Type: Mini Parse
-   URL: file:///C:/path/to/act-flexi/dist/overlay/index.html
-   Width: 400
-   Height: 600
-   ```
-3. Position and configure as needed
-
-### Alternative: Web Server (Recommended)
-
-For better compatibility, serve via HTTP to avoid ACT's CSP restrictions:
-
-**Option 1: Simple HTTP Server**
-```bash
-cd dist/overlay
-npx http-server -p 8080
-# ACT Plugin → URL: http://localhost:8080
-```
-
-**Option 2: Local OverlayPlugin Library (Best for ACT)**
-
-If you encounter "script is not accessible" errors in ACT:
-
-1. Run the local server:
-   ```bash
-   cd public
-   node server.cjs
-   ```
-   
-2. Configure ACT Plugin URL:
-   ```
-   file:///C:/path/to/act-flexi/dist/overlay/index.html
-   ```
-
-The local server at `public/server.cjs` serves the OverlayPlugin library locally, bypassing ACT's browser CSP restrictions.
-
-## 🎨 Customization
-
-### Editor Interface
-
-- Run `pnpm run dev:editor`
-- Open http://localhost:5174
-- Configure bars, colors, layouts, and styles
-- Changes sync live to the overlay
-
-### Available Features
-
-- **Role-based colors**: Tank, Healer, Melee, Ranged, Caster
-- **Job-specific overrides**: Individual job colors
-- **Self highlighting**: Special styling for your character
-- **Texture fills**: Custom patterns and images
-- **Flexible layouts**: Vertical/horizontal, auto-scaling
-- **Animation**: Smooth transitions and effects
-
-## 🏗️ Project Structure
-
-```
-act-flexi/
-├── editor/          # Vue.js editor interface
-├── overlay/         # Vue.js overlay display
-├── shared/          # Common types and utilities
-├── dist/            # Built output (generated)
-├── scripts/         # Build utilities
-├── .env.example     # Environment template
-└── README.md
-```
-
-## 🛠️ Development
-
-### Tech Stack
-
-- **Frontend**: Vue 3 + TypeScript + Pinia
-- **Build**: Vite + pnpm workspaces
-- **Styling**: CSS Variables + Custom Properties
-- **ACT Integration**: OverlayPlugin WebSocket API
-
-### Scripts
-
-```bash
-pnpm run dev:editor    # Start editor dev server
-pnpm run dev:overlay   # Start overlay dev server
-pnpm run build         # Build all for production
-pnpm run build:editor  # Build only editor
-pnpm run build:overlay # Build only overlay
-```
-
-### Architecture
-
-- **Editor**: Configuration UI with live preview
-- **Overlay**: Real-time display receiving ACT data
-- **Shared**: Type definitions and business logic
-- **Bridge**: Handles ACT ↔ Overlay communication
-
-## 📦 Distribution
-
-Built files are in `dist/`:
-
-- `dist/editor/index.html` - Configuration interface
-- `dist/overlay/index.html` - ACT overlay
-
-Host these on any static web server or use file:// protocol with OverlayPlugin.
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test with ACT
-5. Submit a pull request
-
-## 📄 License
-
-MIT License - see LICENSE file for details.
+- [ACT (Advanced Combat Tracker)](https://advancedcombattracker.com/)
+- [OverlayPlugin](https://github.com/OverlayPlugin/OverlayPlugin) — install via the ACT plugin manager
+- FFXIV with the FFXIV parsing plugin enabled in ACT
