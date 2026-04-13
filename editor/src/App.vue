@@ -40,8 +40,12 @@ onMounted(async () => {
   if (isOverlayMode.value) return
   liveData.setProfileGetter(() => config.profile)
   liveData.start()
-  config.load()
+  const hasData = await config.load()
   await presets.init()
+  if (!hasData) {
+    const defaultPreset = presets.builtInPresets.find(p => p.filename === 'default')
+    if (defaultPreset) presets.applyBuiltIn(presets.builtInPresets.indexOf(defaultPreset))
+  }
   restoreDirectoryFonts().catch(() => {})
 })
 onUnmounted(() => {

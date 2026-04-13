@@ -97,7 +97,11 @@ export const usePresetsStore = defineStore('presets', () => {
 
   function loadCategories() {
     const saved = localStorage.getItem(CATEGORIES_KEY)
-    if (!saved) return
+    if (!saved) {
+      categories.value = [{ name: 'User', collapsed: false }]
+      saveCategories()
+      return
+    }
     try { categories.value = JSON.parse(saved) } catch { categories.value = [] }
   }
 

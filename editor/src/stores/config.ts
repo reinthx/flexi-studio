@@ -11,7 +11,7 @@ export const useConfigStore = defineStore('config', () => {
   const dirty = ref(false)
 
   // ── Persistence ────────────────────────────────────────────────────────────
-  async function load(): Promise<void> {
+  async function load(): Promise<boolean> {
     // Try OverlayPlugin first, fall back to localStorage for dev
     try {
       const res = await callHandler({ call: 'loadData', key: 'act-flexi-profile' }) as { data?: string }
@@ -19,7 +19,7 @@ export const useConfigStore = defineStore('config', () => {
         const saved = JSON.parse(res.data)
         profile.value = deepMerge(deepClone(DEFAULT_PROFILE), saved)
         loadFontBatch(profile.value)
-        return
+        return true
       }
     } catch { /* OverlayPlugin not available */ }
 
@@ -29,8 +29,10 @@ export const useConfigStore = defineStore('config', () => {
       try {
         profile.value = deepMerge(deepClone(DEFAULT_PROFILE), JSON.parse(saved))
         loadFontBatch(profile.value)
+        return true
       } catch { /* keep default */ }
     }
+    return false
   }
 
   async function save(): Promise<void> {

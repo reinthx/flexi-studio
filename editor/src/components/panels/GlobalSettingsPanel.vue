@@ -587,7 +587,8 @@ function onBrowseChange(e: Event) {
       </template>
     </div>
 
-    <!-- Custom Fonts -->
+    <!-- Custom Fonts — hidden until rework branch -->
+    <template v-if="false">
     <div class="section-header" @click="fontsOpen = !fontsOpen">
       <span class="section-title">Custom Fonts</span>
       <span class="section-badge" :class="fontSources.length ? 'badge-on' : 'badge-off'">
@@ -679,6 +680,7 @@ function onBrowseChange(e: Event) {
 
       <button class="add-source" @click="addSource">+ Add Font Source</button>
     </div>
+    </template>
 
   </div>
 </template>

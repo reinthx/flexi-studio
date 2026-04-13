@@ -187,6 +187,7 @@ onUnmounted(() => {
       <div v-if="g.header?.pinned" class="resize-corner" />
 
     <div class="bars-container" :style="containerStyle">
+      <div v-if="bars.length === 0" class="empty-state">Waiting for combat data...</div>
       <ScrollableBarsWrapper :maxHeight="barsMaxHeight">
         <MeterBar
           v-for="bar in bars"
@@ -263,6 +264,18 @@ onUnmounted(() => {
   overflow-y: auto;
   width: 100%;
   padding: 4px;
+}
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  pointer-events: none;
+  user-select: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.7);
 }
 .header-outside {
   position: relative;
