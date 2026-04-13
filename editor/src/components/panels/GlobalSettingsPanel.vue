@@ -6,6 +6,11 @@ import DragNumber from '../controls/DragNumber.vue'
 import ColorPicker from '../controls/ColorPicker.vue'
 import TextureEditor from '../controls/TextureEditor.vue'
 import type { GradientFill } from '@shared/configSchema'
+import {
+  getFontSources, setFontSources, loadFontFromFile,
+  storeDirectoryHandle, removeDirectoryHandle, loadFontsFromDirectoryHandle,
+} from '@shared/googleFonts'
+import type { FontSource } from '@shared/googleFonts'
 
 const config = useConfigStore()
 const g = computed(() => config.profile.global)
@@ -171,6 +176,128 @@ const windowShadow = computed(() => ({
 function patchShadow(p: Partial<typeof windowShadow.value>) {
   patch({ windowShadow: { ...windowShadow.value, ...p } })
 }
+
+// Custom fonts
+const fontsOpen = ref(false)
+const fontSources = ref<FontSource[]>(getFontSources())
+const scanningId = ref<string | null>(null)
+const scanError = ref<string | null>(null)
+const scanErrorId = ref<string | null>(null)
+let browseTargetId: string | null = null
+const browseInputRef = ref<HTMLInputElement | null>(null)
+
+const FONT_EXTS = ['.ttf', '.otf', '.woff', '.woff2']
+
+function addSource() {
+  fontSources.value = [
+    ...fontSources.value,
+    { id: Math.random().toString(36).slice(2) + Date.now().toString(36), label: '', baseUrl: '', fonts: [] },
+  ]
+  saveSources()
+}
+
+function removeSource(id: string) {
+  fontSources.value = fontSources.value.filter(s => s.id !== id)
+  saveSources()
+  removeDirectoryHandle(id).catch(() => {})
+}
+
+function patchSource(id: string, patch: Partial<FontSource>) {
+  fontSources.value = fontSources.value.map(s => s.id === id ? { ...s, ...patch } : s)
+}
+
+function getFontsText(source: FontSource): string {
+  return source.fonts.join('\n')
+}
+
+function setFontsText(id: string, text: string) {
+  const fonts = text.split('\n').map(f => f.trim()).filter(Boolean)
+  patchSource(id, { fonts })
+}
+
+function saveSources() {
+  setFontSources(fontSources.value)
+}
+
+async function scanSource(id: string) {
+  const source = fontSources.value.find(s => s.id === id)
+  if (!source?.baseUrl) return
+  scanningId.value = id
+  scanError.value = null
+  scanErrorId.value = null
+  try {
+    const base = source.baseUrl.endsWith('/') ? source.baseUrl : source.baseUrl + '/'
+    const res = await fetch(base, { cache: 'no-store' })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const html = await res.text()
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    const found: string[] = []
+    for (const a of Array.from(doc.querySelectorAll('a[href]'))) {
+      // Use raw href attr — avoids browser absolutizing file:// links
+      const href = a.getAttribute('href') ?? ''
+      const filename = decodeURIComponent(href.split('/').pop() ?? '')
+      const ext = FONT_EXTS.find(e => filename.toLowerCase().endsWith(e))
+      if (ext) found.push(filename.slice(0, -ext.length))
+    }
+    if (!found.length) throw new Error('No font files found in directory listing')
+    const merged = [...new Set([...source.fonts, ...found])].sort()
+    patchSource(id, { fonts: merged })
+    saveSources()
+  } catch (e: any) {
+    scanError.value = e?.message ?? 'Scan failed'
+    scanErrorId.value = id
+  } finally {
+    scanningId.value = null
+  }
+}
+
+async function browseSource(id: string) {
+  // Use File System Access API when available — stores a handle for session restore
+  if ('showDirectoryPicker' in window) {
+    try {
+      const handle = await (window as any).showDirectoryPicker({ mode: 'read' })
+      const source = fontSources.value.find(s => s.id === id)
+      if (!source) return
+      const names = await loadFontsFromDirectoryHandle(handle)
+      await storeDirectoryHandle(id, handle)
+      const merged = [...new Set([...source.fonts, ...names])].sort()
+      patchSource(id, { fonts: merged, label: source.label || handle.name })
+      saveSources()
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') console.warn('Directory picker failed:', e)
+    }
+    return
+  }
+  // Fallback: webkitdirectory input (session-only blob URLs)
+  browseTargetId = id
+  browseInputRef.value?.click()
+}
+
+function onBrowseChange(e: Event) {
+  const files = Array.from((e.target as HTMLInputElement).files ?? [])
+  const id = browseTargetId
+  browseTargetId = null
+  ;(e.target as HTMLInputElement).value = ''
+  if (!files.length || !id) return
+
+  const source = fontSources.value.find(s => s.id === id)
+  if (!source) return
+
+  // Load each font file directly via blob URL — no server or file:// URL needed
+  const names: string[] = []
+  for (const file of files) {
+    const ext = FONT_EXTS.find(ex => file.name.toLowerCase().endsWith(ex))
+    if (!ext) continue
+    const family = file.name.slice(0, -ext.length)
+    names.push(family)
+    loadFontFromFile(file, family)
+  }
+
+  const merged = [...new Set([...source.fonts, ...names])].sort()
+  patchSource(id, { fonts: merged })
+  saveSources()
+}
+
 </script>
 
 <template>
@@ -353,8 +480,6 @@ function patchShadow(p: Partial<typeof windowShadow.value>) {
         <div class="btn-group">
           <button :class="['tog', { active: g.orientation === 'vertical' }]"
             @click="patch({ orientation: 'vertical' })">Vertical</button>
-          <button :class="['tog', { active: g.orientation === 'horizontal' }]"
-            @click="patch({ orientation: 'horizontal' })">Horizontal</button>
         </div>
       </div>
       <div class="row">
@@ -386,6 +511,7 @@ function patchShadow(p: Partial<typeof windowShadow.value>) {
         <select class="ctrl-select" :value="g.dpsType" @change="e => patch({ dpsType: (e.target as HTMLSelectElement).value as any, sortBy: (e.target as HTMLSelectElement).value })">
           <option value="encdps">DPS</option>
           <option value="enchps">HPS</option>
+          <option value="dtps">DTPS</option>
           <option value="damage%">DMG%</option>
           <option value="crithit%">Crit%</option>
         </select>
@@ -461,6 +587,99 @@ function patchShadow(p: Partial<typeof windowShadow.value>) {
       </template>
     </div>
 
+    <!-- Custom Fonts -->
+    <div class="section-header" @click="fontsOpen = !fontsOpen">
+      <span class="section-title">Custom Fonts</span>
+      <span class="section-badge" :class="fontSources.length ? 'badge-on' : 'badge-off'">
+        {{ fontSources.length || 'off' }}
+      </span>
+      <span class="chevron" :class="{ open: fontsOpen }">›</span>
+    </div>
+    <div v-if="fontsOpen" class="section-body">
+      <!-- Hidden directory picker — populated by browseSource() -->
+      <input
+        ref="browseInputRef"
+        type="file"
+        style="display:none"
+        webkitdirectory
+        multiple
+        @change="onBrowseChange"
+      />
+
+      <div class="setting-note">
+        Add font sources pointing to folders with your licensed fonts (.ttf, .woff2, .otf).
+        Use <strong>Browse</strong> to pick a local folder, or paste a <code>file:///</code> / <code>https://</code> URL and click <strong>Scan</strong>.
+      </div>
+
+      <div class="font-sources-list">
+        <div
+          v-for="source in fontSources"
+          :key="source.id"
+          class="font-source-card"
+        >
+          <!-- Source header: name + remove -->
+          <div class="font-source-header">
+            <input
+              class="ctrl-input source-label-input"
+              type="text"
+              placeholder="Source name (e.g. My Fonts)"
+              :value="source.label"
+              @input="patchSource(source.id, { label: ($event.target as HTMLInputElement).value })"
+              @change="saveSources"
+            />
+            <button class="remove-source" @click="removeSource(source.id)" title="Remove">✕</button>
+          </div>
+
+          <!-- URL row with Browse + Scan -->
+          <div class="row">
+            <span class="ctrl-label">URL / Path</span>
+            <input
+              class="ctrl-input font-url-input"
+              type="text"
+              placeholder="https://... (for overlay use; Browse loads fonts without this)"
+              :value="source.baseUrl"
+              @input="patchSource(source.id, { baseUrl: ($event.target as HTMLInputElement).value })"
+              @change="saveSources"
+            />
+            <button class="btn-source-action" @click="browseSource(source.id)" title="Browse for local folder">
+              📁
+            </button>
+            <button
+              class="btn-source-action"
+              :disabled="!source.baseUrl || scanningId === source.id"
+              @click="scanSource(source.id)"
+              title="Scan URL for font files"
+            >
+              {{ scanningId === source.id ? '…' : '⟳' }}
+            </button>
+          </div>
+
+          <!-- Scan error -->
+          <div v-if="scanError && scanErrorId === source.id && scanningId !== source.id" class="scan-error">
+            {{ scanError }}
+          </div>
+
+          <!-- Discovered fonts list -->
+          <div class="fonts-found-row">
+            <span class="ctrl-label">Fonts</span>
+            <div class="fonts-textarea-wrap">
+              <textarea
+                class="fonts-textarea"
+                placeholder="Scan or Browse to discover fonts&#10;— or type names manually (one per line)"
+                :value="getFontsText(source)"
+                @input="setFontsText(source.id, ($event.target as HTMLTextAreaElement).value)"
+                @change="saveSources"
+                rows="3"
+              />
+              <span class="fonts-count" v-if="source.fonts.length">{{ source.fonts.length }} font{{ source.fonts.length !== 1 ? 's' : '' }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button class="add-source" @click="addSource">+ Add Font Source</button>
+    </div>
+
   </div>
 </template>
 
@@ -530,4 +749,93 @@ function patchShadow(p: Partial<typeof windowShadow.value>) {
 }
 .add-stop:hover { background: var(--bg-hover); color: var(--text); }
 .texture-section { display: flex; flex-direction: column; gap: var(--control-gap-md); padding-left: var(--label-width); }
+
+.tabs-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.tab-row { display: flex; align-items: center; gap: 6px; }
+.tab-label-btn {
+  background: var(--bg-control); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font-size: 11px; padding: 4px 10px; cursor: pointer; min-width: 60px;
+}
+.tab-label-btn:hover { background: var(--bg-hover); }
+.tab-label-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tab-name-input {
+  background: var(--bg-control); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font-size: 11px; padding: 2px 6px; width: 70px; outline: none;
+}
+.tab-name-input:focus { border-color: var(--accent); }
+.tab-dps-select {
+  background: var(--bg-control); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font-size: 11px; padding: 2px 4px; outline: none; width: 70px;
+}
+.remove-tab {
+  background: transparent; border: none; color: var(--text-muted); font-size: 14px; cursor: pointer; padding: 2px 6px;
+}
+.remove-tab:hover { color: #e63946; }
+.tab-edit-btn {
+  background: var(--bg-control); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font-size: 10px; padding: 2px 6px; cursor: pointer;
+}
+.tab-edit-btn:hover { background: var(--bg-hover); }
+.tab-label-config {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--bg-section);
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.add-tab {
+  background: var(--bg-control); border: 1px dashed var(--border); border-radius: 4px;
+  color: var(--text-muted); font-size: 11px; padding: 6px 10px; cursor: pointer; margin-top: 8px;
+  align-self: flex-start;
+}
+.add-tab:hover { background: var(--bg-hover); color: var(--text); }
+
+.setting-note {
+  font-size: 10px; color: var(--text-muted); line-height: 1.5;
+  padding: 4px 0 8px;
+}
+.setting-note code {
+  font-family: monospace; font-size: 10px;
+  background: var(--bg-control); border-radius: 2px; padding: 1px 3px;
+}
+.ctrl-input {
+  flex: 1; background: var(--bg-control); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--text); font-size: 12px; padding: 0 8px;
+  outline: none; height: var(--control-height);
+}
+.ctrl-input:focus { border-color: var(--accent); }
+.font-url-input { font-family: monospace; font-size: 11px; }
+
+/* Font source cards */
+.font-sources-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.font-source-card {
+  display: flex; flex-direction: column; gap: 6px;
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 4px; padding: 8px;
+}
+.font-source-header { display: flex; align-items: center; gap: 6px; }
+.source-label-input { font-weight: 600; }
+.remove-source {
+  background: transparent; border: none; color: var(--text-muted);
+  font-size: 12px; cursor: pointer; padding: 2px 6px; flex-shrink: 0;
+}
+.remove-source:hover { color: #e63946; }
+.fonts-textarea-row { display: flex; align-items: flex-start; gap: var(--control-gap-md); }
+.fonts-textarea-wrap { flex: 1; position: relative; }
+.fonts-textarea {
+  width: 100%; background: var(--bg-control); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--text); font-size: 11px; font-family: monospace;
+  padding: 6px 8px; outline: none; resize: vertical; box-sizing: border-box;
+  line-height: 1.5;
+}
+.fonts-textarea:focus { border-color: var(--accent); }
+.fonts-count {
+  position: absolute; bottom: 4px; right: 6px;
+  font-size: 9px; color: var(--text-muted); pointer-events: none;
+}
+.add-source {
+  background: var(--bg-control); border: 1px dashed var(--border); border-radius: 4px;
+  color: var(--text-muted); font-size: 11px; padding: 6px 10px; cursor: pointer;
+  align-self: flex-start;
+}
+.add-source:hover { background: var(--bg-hover); color: var(--text); }
 </style>

@@ -140,6 +140,10 @@ export const DEFAULT_GLOBAL: GlobalConfig = {
     mergeWithOwner: true,
     petStyle: {},
   },
+  tabsEnabled: false,
+  tabs: [],
+  activeTab: 'dps',
+  tabsPinned: true,
 }
 
 // ─── Default profile — role colors preset ─────────────────────────────────────

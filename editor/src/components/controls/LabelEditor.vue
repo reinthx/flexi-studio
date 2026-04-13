@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, useTemplateRef } from 'vue'
 import { useDraggable } from '@vueuse/core'
-import type { BarLabel, LabelField, GradientFill } from '@shared/configSchema'
+import type { BarLabel, LabelField } from '@shared/configSchema'
 import ColorPicker from './ColorPicker.vue'
 import FontSelector from './FontSelector.vue'
 import DragNumber from './DragNumber.vue'
@@ -61,6 +61,42 @@ const TOKENS = [
 
 const activeFieldId = ref<string | null>(null)
 const fieldInputRefs = ref<Record<string, HTMLInputElement | null>>({})
+
+// Drag-to-reorder
+const dragSrcIdx = ref<number | null>(null)
+const dragOverIdx = ref<number | null>(null)
+
+function onDragStart(e: DragEvent, idx: number) {
+  dragSrcIdx.value = idx
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+
+function onDragOver(e: DragEvent, idx: number) {
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  dragOverIdx.value = idx
+}
+
+function onDragLeave() {
+  dragOverIdx.value = null
+}
+
+function onDrop(e: DragEvent, idx: number) {
+  e.preventDefault()
+  const src = dragSrcIdx.value
+  if (src === null || src === idx) { dragSrcIdx.value = null; dragOverIdx.value = null; return }
+  const fields = [...getFields()]
+  const [moved] = fields.splice(src, 1)
+  fields.splice(idx, 0, moved)
+  patchFields(fields)
+  dragSrcIdx.value = null
+  dragOverIdx.value = null
+}
+
+function onDragEnd() {
+  dragSrcIdx.value = null
+  dragOverIdx.value = null
+}
 
 function getFields(): LabelField[] {
   return props.modelValue.fields ?? []
@@ -162,10 +198,17 @@ function insertToken(fieldId: string, token: string) {
       <div v-if="open.fields" class="sub-body">
 
         <div v-for="(field, idx) in getFields()" :key="field.id" class="field-card"
-          :class="{ active: activeFieldId === field.id }">
+          :class="{ active: activeFieldId === field.id, 'drag-over': dragOverIdx === idx && dragSrcIdx !== idx }"
+          draggable="true"
+          @dragstart="onDragStart($event, idx)"
+          @dragover="onDragOver($event, idx)"
+          @dragleave="onDragLeave"
+          @drop="onDrop($event, idx)"
+          @dragend="onDragEnd">
 
           <!-- Field header row -->
           <div class="field-header" @click="activeFieldId = activeFieldId === field.id ? null : field.id">
+            <span class="drag-handle" title="Drag to reorder">⠿</span>
             <label class="effect-toggle" @click.stop>
               <input type="checkbox" :checked="field.enabled"
                 @change="e => patchField(field.id, { enabled: (e.target as HTMLInputElement).checked })" />
@@ -236,6 +279,16 @@ function insertToken(fieldId: string, token: string) {
                 @update:model-value="v => patchField(field.id, { offsetY: v })" />
               <DragNumber :model-value="field.offsetY ?? 0" :min="-60" :max="60" unit="px" :speed="1"
                 @update:model-value="v => patchField(field.id, { offsetY: v })" />
+            </div>
+
+            <!-- Opacity -->
+            <div class="row">
+              <label class="ctrl-label">Opacity</label>
+              <BarSlider :model-value="field.opacity ?? 1" :min="0" :max="1" :step="0.01"
+                track-color="linear-gradient(to right, transparent, #fff)"
+                @update:model-value="v => patchField(field.id, { opacity: v >= 1 ? undefined : v })" />
+              <DragNumber :model-value="field.opacity ?? 1" :min="0" :max="1" :step="0.01" :speed="0.005"
+                @update:model-value="v => patchField(field.id, { opacity: v >= 1 ? undefined : v })" />
             </div>
 
             <!-- Style Override button -->
@@ -349,7 +402,8 @@ function insertToken(fieldId: string, token: string) {
               <DragNumber :model-value="modelValue.outline?.width ?? 1" :min="1" :max="6" unit="px" :speed="1"
                 @update:model-value="v => patch({ outline: { ...(modelValue.outline ?? {}), width: v } })" />
             </div>
-            <div class="row">
+            <!-- Gradient Outline: hidden until feature is complete -->
+            <!-- <div class="row">
               <label class="effect-toggle" style="font-size:11px">
                 <input type="checkbox" :checked="!!modelValue.outline?.gradient"
                   @change="e => patch({ outline: { ...(modelValue.outline ?? {}), gradient: (e.target as HTMLInputElement).checked ? { type: 'linear', angle: 90, stops: [{ position: 0, color: modelValue.outline?.color ?? '#000000' }, { position: 1, color: '#444444' }] } : null } })" />
@@ -358,19 +412,7 @@ function insertToken(fieldId: string, token: string) {
             </div>
             <template v-if="modelValue.outline?.gradient">
               <GradientEditor :model-value="modelValue.outline.gradient" @update:model-value="g => patch({ outline: { ...(modelValue.outline ?? {}), gradient: g } })" />
-            </template>
-          </template>
-        </div>
-
-        <!-- Gradient Text -->
-        <div class="effect-group">
-          <label class="effect-toggle">
-            <input type="checkbox" :checked="!!modelValue.gradient"
-              @change="e => patch({ gradient: (e.target as HTMLInputElement).checked ? { type: 'linear', angle: 90, stops: [{ position: 0, color: props.modelValue.color }, { position: 1, color: '#000000' }] } : null })" />
-            <span>Gradient Text</span>
-          </label>
-          <template v-if="modelValue.gradient">
-            <GradientEditor :model-value="modelValue.gradient" @update:model-value="g => patch({ gradient: g as GradientFill })" />
+            </template> -->
           </template>
         </div>
 
@@ -475,9 +517,15 @@ function insertToken(fieldId: string, token: string) {
 /* Field cards */
 .field-card {
   border: 1px solid var(--border); border-radius: 4px;
-  overflow: hidden;
+  overflow: hidden; cursor: grab;
 }
 .field-card.active { border-color: var(--accent); }
+.field-card.drag-over { border-color: var(--accent); box-shadow: 0 -2px 0 var(--accent); }
+.drag-handle {
+  font-size: 13px; color: var(--text-muted); cursor: grab; flex-shrink: 0;
+  line-height: 1; padding: 0 2px; user-select: none;
+}
+.drag-handle:hover { color: var(--text); }
 .field-header {
   display: flex; align-items: center; gap: 6px;
   padding: 5px 8px; cursor: pointer; background: var(--bg-hover);

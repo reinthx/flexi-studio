@@ -415,7 +415,7 @@ function cleanProfile(profile: any): any {
       if (match) delete cleaned.default.label.shadow
     }
     if (cleaned.default.label.outline) {
-      const match = cleaned.default.label.outline.gradient === null || JSON.stringify(cleaned.default.label.outline) === JSON.stringify(DEFAULT_LABEL.outline)
+      const match = JSON.stringify(cleaned.default.label.outline) === JSON.stringify(DEFAULT_LABEL.outline)
       if (match) delete cleaned.default.label.outline
     }
     if (cleaned.default.label.iconConfig) {

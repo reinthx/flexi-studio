@@ -10,3 +10,10 @@ editor/jobs/
 overlay/jobs/
 test/
 test-debug.html
+
+# Custom/licensed fonts — kept local, never committed to the public repo.
+# Put your fonts in /fonts or set CUSTOM_FONTS_DIR in .env.local
+fonts/*.ttf
+fonts/*.otf
+fonts/*.woff
+fonts/*.woff2

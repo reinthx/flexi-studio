@@ -34,6 +34,7 @@ export interface Frame {
   encounterDuration: string
   totalDps: string
   totalHps: string
+  totalDtps: string
   isActive: boolean
 }
 
@@ -155,6 +156,7 @@ export class TransitionEngine {
       encounterDuration: next.encounterDuration,
       totalDps: next.totalDps,
       totalHps: next.totalHps,
+      totalDtps: next.totalDtps,
       isActive: next.isActive,
     }
   }

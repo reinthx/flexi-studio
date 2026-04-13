@@ -11,6 +11,7 @@ const props = defineProps<{
   encounterDuration: string
   totalDPS: string
   totalHPS: string
+  totalDTPS?: string
   pullNumber: number
   pullCount: number
   global: GlobalConfig
@@ -29,6 +30,7 @@ const tokens = computed(() => ({
   duration:   props.encounterDuration,
   totalDPS:   props.totalDPS,
   totalHPS:   props.totalHPS,
+  totalDTPS:  props.totalDTPS ?? '',
   pullNumber: String(props.pullNumber),
   pullCount:  String(props.pullCount),
 }))

@@ -1,12 +1,7 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
-import { useLiveDataStore } from './stores/liveData'
 import MeterView from './components/MeterView.vue'
-
-const liveData = useLiveDataStore()
-
-onMounted(() => liveData.start())
-onUnmounted(() => liveData.stop())
+// Lifecycle (start/stop) is owned by MeterView so it works in both the
+// standalone overlay build AND the editor's unified GitHub Pages build.
 </script>
 
 <template>

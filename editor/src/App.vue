@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, ref, computed, defineAsyncComponent, provide } 
 import { useLiveDataStore } from './stores/liveData'
 import { useConfigStore }   from './stores/config'
 import { usePresetsStore }  from './stores/presets'
+import { restoreDirectoryFonts } from '@shared/googleFonts'
 import PreviewArea from './components/preview/PreviewArea.vue'
 import GlobalSettingsPanel from './components/panels/GlobalSettingsPanel.vue'
 import BarStylePanel from './components/panels/BarStylePanel.vue'
@@ -41,6 +42,7 @@ onMounted(async () => {
   liveData.start()
   config.load()
   await presets.init()
+  restoreDirectoryFonts().catch(() => {})
 })
 onUnmounted(() => {
   if (!isOverlayMode.value) liveData.stop()

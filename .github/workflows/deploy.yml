@@ -34,13 +34,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build all (editor + overlay)
-        run: pnpm run build
+      - name: Build unified GitHub Pages app
+        run: pnpm run build:github
 
-      - name: Upload overlay artifact
+      - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './dist/overlay'
+          path: './dist/editor'
 
   deploy:
     environment:

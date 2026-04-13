@@ -4,10 +4,11 @@
  * Uses Font Access API (window.queryLocalFonts) with graceful fallback.
  * Font lists and loading are delegated to @shared/googleFonts.
  */
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import {
   getGoogleFontsList,
   getCustomFontsList,
+  getUserCustomFontNames,
   loadGoogleFont,
   loadCustomFont,
 } from '@shared/googleFonts'
@@ -32,12 +33,20 @@ const FALLBACK_FONTS = [
 ]
 
 const GOOGLE_FONTS = getGoogleFontsList().map(f => f.name)
-const CUSTOM_FONTS = getCustomFontsList().map(f => f.name)
+// Build-time custom fonts (from /fonts dir)
+const BUILT_IN_CUSTOM = getCustomFontsList().map(f => f.name)
 
 const systemFonts = ref<string[]>([])
+// User-configured runtime fonts — refreshed each time the dropdown opens
+const userCustomFonts = ref<string[]>(getUserCustomFontNames())
 const loaded = ref(false)
 const searchQuery = ref('')
 const isOpen = ref(false)
+
+// Refresh user fonts from localStorage whenever dropdown opens
+watch(isOpen, (open) => {
+  if (open) userCustomFonts.value = getUserCustomFontNames()
+})
 
 onMounted(async () => {
   try {
@@ -56,6 +65,12 @@ onMounted(async () => {
   loaded.value = true
 })
 
+// All custom fonts = build-time + user-configured (deduped, sorted)
+const allCustomFonts = computed(() => {
+  const combined = new Set([...BUILT_IN_CUSTOM, ...userCustomFonts.value])
+  return Array.from(combined).sort((a, b) => a.localeCompare(b))
+})
+
 const allFonts = computed(() => {
   const base = systemFonts.value.length ? systemFonts.value : FALLBACK_FONTS
   const q = searchQuery.value.toLowerCase()
@@ -71,8 +86,8 @@ const googleFontsFiltered = computed(() => {
 
 const customFontsFiltered = computed(() => {
   const q = searchQuery.value.toLowerCase()
-  if (!q) return CUSTOM_FONTS
-  return CUSTOM_FONTS.filter(f => f.toLowerCase().includes(q))
+  if (!q) return allCustomFonts.value
+  return allCustomFonts.value.filter(f => f.toLowerCase().includes(q))
 })
 
 const showGoogleSection = computed(() => googleFontsFiltered.value.length > 0)
@@ -81,7 +96,7 @@ const showCustomSection = computed(() => customFontsFiltered.value.length > 0)
 function select(font: string): void {
   if (GOOGLE_FONTS.includes(font)) {
     loadGoogleFont(font)
-  } else if (CUSTOM_FONTS.includes(font)) {
+  } else if (allCustomFonts.value.includes(font)) {
     loadCustomFont(font)
   }
   emit('update:modelValue', font)
@@ -117,7 +132,7 @@ function onBlur(e: FocusEvent): void {
       />
       <div v-if="!loaded" class="loading">Loading fonts…</div>
       <div v-else class="list">
-        <!-- Custom fonts section -->
+        <!-- Custom fonts section (build-time + user-configured) -->
         <div v-if="showCustomSection" class="section-header">Custom Fonts</div>
         <button
           v-for="font in customFontsFiltered"

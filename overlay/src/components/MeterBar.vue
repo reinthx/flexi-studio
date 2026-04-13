@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { BarStyle, Orientation } from '@shared/configSchema'
+import type { BarStyle, Orientation, BarLabel } from '@shared/configSchema'
+import { useBarStyles } from '@shared/useBarStyles'
+import type { BarData } from '@shared/useBarStyles'
 import { renderTemplate } from '../lib/templateRenderer'
 import { getJobIconSrc } from '@shared/jobMap'
-import { MOCK_NAMES } from '@shared'
-import { useBarStyles, type BarData } from '@shared/useBarStyles'
-import { formatValue, type FormatType } from '@shared/formatValue'
+import { MOCK_NAMES } from '@shared/overlayBridge'
+import { formatValue } from '@shared/formatValue'
+import type { FormatType } from '@shared/formatValue'
 
 const props = defineProps<{
   bar: BarData
@@ -15,6 +17,7 @@ const props = defineProps<{
   blurName?: boolean
   valueFormat?: 'raw' | 'abbreviated' | 'formatted'
   barIndex?: number
+  tabLabelConfig?: BarLabel
 }>()
 
 const {
@@ -30,7 +33,7 @@ const {
   iconContainerStyle, iconInlineStyle, iconImageStyle,
   iconOutlineStyle, iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
   iconFallback,
-} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0)
+} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig)
 
 const isValid = computed(() => {
   const sc = props.styleConfig

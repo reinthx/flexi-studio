@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, nextTick, onMounted, onUnmounted, useTemplateRef } from 'vue'
-import { useLiveDataStore } from '@shared/index'
+import { useLiveDataStore } from '../stores/liveData'
 
 const store = useLiveDataStore()
 

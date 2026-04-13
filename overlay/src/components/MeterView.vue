@@ -152,7 +152,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="meter-root" :style="{ opacity: g.opacity }">
+  <div class="meter-root">
     <div class="meter-border" :style="rootStyle" />
 
     <MeterHeader
@@ -163,6 +163,7 @@ onUnmounted(() => {
       :encounter-duration="frame?.encounterDuration ?? ''"
       :total-d-p-s="frame?.totalDps ?? ''"
       :total-h-p-s="frame?.totalHps ?? ''"
+      :total-d-t-p-s="frame?.totalDtps ?? ''"
       :pull-number="store.sessionPulls.length"
       :pull-count="store.sessionPulls.length"
       :global="g"
@@ -201,12 +202,14 @@ onUnmounted(() => {
         :encounter-duration="frame?.encounterDuration ?? ''"
         :total-d-p-s="frame?.totalDps ?? ''"
         :total-h-p-s="frame?.totalHps ?? ''"
+        :total-d-t-p-s="frame?.totalDtps ?? ''"
         :pull-number="store.sessionPulls.length"
         :pull-count="store.sessionPulls.length"
         :global="g"
         :is-footer="true"
       />
     </div>
+
   </div>
 </template>
 

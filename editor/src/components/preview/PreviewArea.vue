@@ -30,6 +30,13 @@ const bars = computed(() => {
 
 const isHorizontal = computed(() => g.value.orientation === 'horizontal')
 
+const activeTabConfig = computed(() => {
+  if (!g.value.tabsEnabled) return undefined
+  return g.value.tabs.find(t => t.id === g.value.activeTab)
+})
+
+const activeTabLabelConfig = computed(() => activeTabConfig.value?.labelConfig)
+
 // Draggable wrapper refs
 const wrapperRef = useTemplateRef<HTMLElement>('wrapperEl')
 const titlebarRef = useTemplateRef<HTMLElement>('titlebarEl')
@@ -122,6 +129,7 @@ function toggleHeaderPin() {
             :auto-scale="g.autoScale"
             :value-format="g.valueFormat"
             :bar-index="bar.barIndex"
+            :tab-label-config="activeTabLabelConfig"
           />
         </ScrollableBarsWrapper>
         <div v-if="!bars.length" class="no-data">Waiting for combat data…</div>

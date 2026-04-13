@@ -256,7 +256,7 @@ function emit<K extends EventName>(event: K, data: OverlayEventMap[K]): void {
   devListeners.get(event)?.forEach(cb => (cb as EventCallback<K>)(data))
 }
 
-const MOCK_COMBATANTS: Array<{ name: string; job: string; baseDps: number; baseHps: number }> = [
+const MOCK_COMBATANTS: Array<{ name: string; job: string; baseDps: number; baseHps: number; damageTaken?: number }> = [
   { name: 'Tester McTestface', job: 'WAR', baseDps: 28500, baseHps: 1200 },
   { name: 'Healy Healface',    job: 'WHM', baseDps: 4200,  baseHps: 18000 },
   { name: 'Stabby McStab',     job: 'NIN', baseDps: 31200, baseHps: 800 },
@@ -280,14 +280,21 @@ function buildMockCombatData(): CombatDataEvent {
 
   const totalDps = combatants.reduce((s, c) => s + c.dps, 0)
   const totalHps = combatants.reduce((s, c) => s + c.hps, 0)
+  const totalDamageTaken = combatants.reduce((s, c) => s + (c.damageTaken ?? 0), 0)
 
   const Combatant: Record<string, Record<string, string>> = {}
+  const durationSeconds = devPullIndex * 10 // mock duration in seconds
+
   combatants.forEach((c, i) => {
+    const dt = c.damageTaken ?? Math.round(c.dps * (0.3 + Math.random() * 0.4)) // mock damage taken ~30-70% of dps
+    const dtps = durationSeconds > 0 ? (dt / durationSeconds).toFixed(1) : '0'
+    
     Combatant[c.name] = {
       name: c.name,
       Job: c.job,
       encdps: String(c.dps),
       enchps: String(c.hps),
+      dtps: dtps,
       'damage%': ((c.dps / totalDps) * 100).toFixed(1),
       'healed%': ((c.hps / totalHps) * 100).toFixed(1),
       'crithit%': (18 + Math.random() * 10).toFixed(1),
@@ -307,6 +314,7 @@ function buildMockCombatData(): CombatDataEvent {
       duration: formatDuration(devPullIndex),
       ENCDPS: String(totalDps),
       ENCHPS: String(totalHps),
+      DTRPS: durationSeconds > 0 ? String(Math.round(totalDamageTaken / durationSeconds)) : '0',
     },
     Combatant,
   }

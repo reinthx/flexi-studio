@@ -1,7 +1,6 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
-import { useLiveDataStore } from '@shared/index'
 import { loadCommonJs } from './commonJsLoader'
 import { loadGoogleFont, isGoogleFont, loadAllConfiguredFonts, getCustomFontsList, loadCustomFont } from '@shared/googleFonts'
 import '@shared/animations.css'
@@ -20,14 +19,6 @@ async function init(): Promise<void> {
   const pinia = createPinia()
   const app = createApp(App)
   app.use(pinia)
-
-  try {
-    const store = useLiveDataStore()
-    store.start()
-  } catch (e) {
-    console.error('[Overlay] Error starting store:', e)
-  }
-
   app.mount('#app')
 }
 

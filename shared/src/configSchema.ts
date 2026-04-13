@@ -195,6 +195,7 @@ export interface LabelField {
   offsetX: number                         // px offset from anchor (positive = right/left)
   offsetY: number                         // px offset from anchor (positive = down/up)
   enabled: boolean
+  opacity?: number                        // 0–1, field-level opacity (undefined = 1.0)
   // Per-field style overrides (optional — falls back to BarLabel globals when absent)
   font?: string                           // override global label font
   fontSize?: number                       // px — override global label size (0 = use global)
@@ -223,6 +224,16 @@ export interface BarLabel {
   deathOffsetY: number    // px — vertical offset for death indicator
   deathSize: number       // px — font size of death indicator
   deathOpacity: number    // 0–1
+}
+
+// ─── Tab Config ───────────────────────────────────────────────────────────────
+
+export interface TabConfig {
+  id: string           // stable key, e.g. "dps", "hps", "dtps"
+  label: string        // display name for tab button, e.g. "DPS", "HPS"
+  dpsType: DpsType     // which metric drives sorting and values
+  labelConfig: BarLabel  // per-tab label configuration
+  enabled: boolean     // individual tab on/off toggle
 }
 
 // Available template tokens (for editor token picker):
@@ -281,7 +292,7 @@ export interface RankIndicatorConfig {
 
 // ─── Header / Footer ──────────────────────────────────────────────────────────
 
-// Available tokens: {zone} {encounter} {duration} {totalDPS} {totalHPS} {pullNumber} {pullCount}
+// Available tokens: {zone} {encounter} {duration} {totalDPS} {totalHPS} {totalDTPS} {pullNumber} {pullCount}
 export interface HeaderConfig {
   show: boolean
   template: string
@@ -303,7 +314,7 @@ export interface PetConfig {
 
 // ─── Global Config ────────────────────────────────────────────────────────────
 
-export type DpsType = 'encdps' | 'enchps' | 'damage%' | 'healed%' | 'crithit%'
+export type DpsType = 'encdps' | 'enchps' | 'dtps' | 'damage%' | 'healed%' | 'crithit%'
 export type ValueFormat = 'raw' | 'abbreviated' | 'formatted'
 export type Orientation = 'vertical' | 'horizontal'
 export type OutOfCombatBehavior = 'show' | 'dim' | 'hide'
@@ -345,6 +356,10 @@ export interface GlobalConfig {
   windowX: number             // window position X (px)
   windowY: number             // window position Y (px)
   mergePets: boolean          // merge pet damage into owner
+  tabsEnabled: boolean        // master toggle to enable tab system
+  tabs: TabConfig[]          // all available tab configurations
+  activeTab: string          // ID of currently selected tab
+  tabsPinned: boolean        // whether tabs are always visible (vs. hover to show)
   header: HeaderConfig
   footer: HeaderConfig
   rankIndicator: RankIndicatorConfig

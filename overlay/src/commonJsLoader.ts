@@ -22,7 +22,7 @@ async function resolve(): Promise<string> {
 
   try {
     const res = await fetch('https://overlayplugin.github.io/OverlayPlugin/assets/shared/common.min.js', { cache: 'no-store' })
-    if (res.ok) return res.text()
+    if (res.ok) return await res.text()
   } catch { /* offline or CDN unreachable */ }
 
   return ''

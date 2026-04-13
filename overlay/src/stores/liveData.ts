@@ -19,6 +19,7 @@ import {
   TransitionEngine,
   DEFAULT_PROFILE,
   deepClone,
+  deepMerge,
 } from '@shared'
 import type {
   CombatDataEvent,
@@ -54,6 +55,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
   // Polling state for config sync (CEF compatibility)
   let pollCount = 0
   let lastPersistentConfig: string | null = null
+  let pollInterval: ReturnType<typeof setInterval> | null = null
 
   // Transition engine
   const engine = new TransitionEngine((f) => { frame.value = f })
@@ -118,8 +120,22 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
     const maxVal = parseFloat(filtered[0]?.[g.dpsType] ?? '1') || 1
 
+    // For DTPS, we need to calculate from damagetaken / DURATION (integer seconds from ACT)
+    const encounterDuration = parseFloat(event.Encounter['DURATION'] ?? '0')
+    const getDtpsValue = (c: Record<string, string>) => {
+      if (g.dpsType !== 'dtps') return 0
+      const dt = parseFloat(c['damagetaken'] ?? '0')
+      const dur = parseFloat(c['DURATION'] ?? '0')
+      return dur > 0 ? dt / dur : 0
+    }
+
     const bars: BarFrame[] = filtered.map((c, i) => {
-      const rawVal = parseFloat(c[g.dpsType] ?? '0')
+      let rawVal: number
+      if (g.dpsType === 'dtps') {
+        rawVal = getDtpsValue(c)
+      } else {
+        rawVal = parseFloat(c[g.dpsType] ?? '0')
+      }
       return {
         name: c.name,
         job: normalizeJob(c['Job'] ?? ''),
@@ -142,6 +158,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       encounterDuration: event.Encounter['duration'] ?? '',
       totalDps: formatValue(parseFloat(event.Encounter['ENCDPS'] ?? '0'), g.valueFormat),
       totalHps: formatValue(parseFloat(event.Encounter['ENCHPS'] ?? '0'), g.valueFormat),
+      totalDtps: formatValue(parseFloat(event.Encounter['DTRPS'] ?? event.Encounter['damagetaken'] ?? '0') / (parseFloat(event.Encounter['DURATION'] ?? '0') || 1), g.valueFormat),
       isActive: event.isActive === 'true',
     }
 
@@ -154,11 +171,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
   // ─── Pull history ────────────────────────────────────────────────────────────
   function detectNewPull(event: CombatDataEvent): void {
     const title = event.Encounter['title'] ?? ''
-    const duration = event.Encounter['duration'] ?? ''
+    // Use DURATION (integer seconds) for numeric comparison — avoids lexicographic
+    // failures on 10+ min fights where "10:00" < "09:59" as strings
+    const duration = event.Encounter['DURATION'] ?? '0'
 
-    // A new pull starts when duration resets (goes back below a threshold)
-    // or encounter title changes
-    if (title !== lastEncounterTitle || duration < lastEncounterStart) {
+    if (title !== lastEncounterTitle || parseInt(duration) < parseInt(lastEncounterStart)) {
       lastEncounterTitle = title
       lastEncounterStart = duration
     }
@@ -271,6 +288,16 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
   function start(): void {
+    // Sync: pre-load localStorage config before first render to prevent flash of DEFAULT_PROFILE
+    try {
+      const raw = localStorage.getItem('act-flexi-overlay-config')
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        profile.value = deepMerge(deepClone(DEFAULT_PROFILE), parsed)
+        engine.setDuration(profile.value.global.transitionDuration)
+      }
+    } catch { /* corrupt — DEFAULT_PROFILE stays */ }
+
     addListener('CombatData', onCombatData)
     addListener('ChangePrimaryPlayer', onChangePrimaryPlayer)
     addListener('ChangeZone', onChangeZone)
@@ -281,7 +308,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (typeof window !== 'undefined') {
       window.addEventListener('storage', onStorageEvent)
       // Poll as fallback (storage events don't fire on same-origin in some browsers)
-      setInterval(pollForConfig, 500)
+      pollInterval = setInterval(pollForConfig, 500)
     }
 
     startEvents()
@@ -299,6 +326,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (typeof window !== 'undefined') {
       window.removeEventListener('storage', onStorageEvent)
     }
+
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null }
 
     engine.stop()
     clearHoldTimer()
@@ -364,27 +393,43 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
     const pull = sessionPulls.value[index]
     if (!pull) return
-    const maxVal = Math.max(...pull.combatants.map(c => parseFloat(c[profile.value.global.dpsType] ?? '0')))
-    const bars: BarFrame[] = pull.combatants.map((c, i) => ({
-      name: c.name,
-      job: normalizeJob(c['Job'] ?? ''),
-      fillFraction: (parseFloat(c[profile.value.global.dpsType] ?? '0')) / (maxVal || 1),
-      displayValue: formatValue(parseFloat(c[profile.value.global.dpsType] ?? '0'), profile.value.global.valueFormat),
-      displayPct: c['damage%'] ?? '0',
-      deaths: c.deaths ?? '0',
-      crithit: c['crithit%'] ?? '---',
-      directhit: c['DirectHitPct'] ?? '---',
-      tohit: c.tohit ?? '---',
-      enchps: formatValue(parseFloat(c.enchps ?? '0'), profile.value.global.valueFormat),
-      maxHit: (c.maxhit ?? '---').replace('-', ' '),
-      alpha: 1,
-    }))
+    
+    const getDtpsValue = (c: Record<string, string>) => {
+      const dt = parseFloat(c['damagetaken'] ?? '0')
+      const dur = parseFloat(c['DURATION'] ?? '0')
+      return dur > 0 ? dt / dur : 0
+    }
+    const maxVal = profile.value.global.dpsType === 'dtps'
+      ? Math.max(...pull.combatants.map(c => getDtpsValue(c)))
+      : Math.max(...pull.combatants.map(c => parseFloat(c[profile.value.global.dpsType] ?? '0')))
+    
+    const bars: BarFrame[] = pull.combatants.map((c, i) => {
+      const rawVal = profile.value.global.dpsType === 'dtps'
+        ? getDtpsValue(c)
+        : parseFloat(c[profile.value.global.dpsType] ?? '0')
+      return {
+        name: c.name,
+        job: normalizeJob(c['Job'] ?? ''),
+        fillFraction: rawVal / (maxVal || 1),
+        displayValue: formatValue(rawVal, profile.value.global.valueFormat),
+        displayPct: c['damage%'] ?? '0',
+        deaths: c.deaths ?? '0',
+        crithit: c['crithit%'] ?? '---',
+        directhit: c['DirectHitPct'] ?? '---',
+        tohit: c.tohit ?? '---',
+        enchps: formatValue(parseFloat(c.enchps ?? '0'), profile.value.global.valueFormat),
+        maxHit: (c.maxhit ?? '---').replace('-', ' '),
+        alpha: 1,
+      }
+    })
+
     engine.push({
       bars,
       encounterTitle: pull.encounterName,
       encounterDuration: pull.duration,
       totalDps: pull.encounter['ENCDPS'] ?? '',
       totalHps: pull.encounter['ENCHPS'] ?? '',
+      totalDtps: formatValue(parseFloat(pull.encounter['damagetaken'] ?? '0') / (parseFloat(pull.encounter['DURATION'] ?? '0') || 1), profile.value.global.valueFormat),
       isActive: true,
     })
   }
@@ -426,5 +471,45 @@ export const useLiveDataStore = defineStore('liveData', () => {
     toggleBlurNames: () => { profile.value.global.blurNames = !profile.value.global.blurNames },
     setHeaderPinned: (pinned: boolean) => { profile.value.global.header.pinned = pinned },
     setMergePets: (merge: boolean) => { profile.value.global.mergePets = merge },
+    setActiveTab: (tabId: string) => { 
+      const tab = profile.value.global.tabs.find(t => t.id === tabId)
+      if (tab && tab.enabled) {
+        profile.value.global.activeTab = tabId
+        profile.value.global.dpsType = tab.dpsType
+        // Rebuild current frame with new dpsType
+        if (frame.value) {
+          const g = profile.value.global
+          const getDtpsValue = (c: Record<string, string>) => {
+            const dt = parseFloat(c['damagetaken'] ?? '0')
+            const dur = parseFloat(c['DURATION'] ?? '0')
+            return dur > 0 ? dt / dur : 0
+          }
+          const maxVal = g.dpsType === 'dtps'
+            ? Math.max(...frame.value!.bars.map((_, i) => {
+                const c = sessionPulls.value[viewingPull.value ?? -1]?.combatants[i]
+                return c ? getDtpsValue(c) : 0
+              }))
+            : Math.max(...frame.value!.bars.map((_, i) => {
+                const c = sessionPulls.value[viewingPull.value ?? -1]?.combatants[i]
+                return c ? parseFloat(c[g.dpsType] ?? '0') : 0
+              }))
+          
+          const pull = viewingPull.value !== null ? sessionPulls.value[viewingPull.value] : null
+          const combatants = pull?.combatants ?? []
+          
+          const bars: BarFrame[] = frame.value!.bars.map((_, i) => {
+            const c = combatants[i]
+            const rawVal = c ? (g.dpsType === 'dtps' ? getDtpsValue(c) : parseFloat(c[g.dpsType] ?? '0')) : 0
+            return {
+              ...frame.value!.bars[i],
+              fillFraction: rawVal / (maxVal || 1),
+              displayValue: formatValue(rawVal, g.valueFormat),
+            }
+          })
+          
+          frame.value = { ...frame.value!, bars }
+        }
+      }
+    },
   }
 })

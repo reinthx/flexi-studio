@@ -113,6 +113,7 @@ function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number
   }
   if (field.font) style.fontFamily = field.font
   if (field.fontSize && field.fontSize > 0) style.fontSize = `${field.fontSize}px`
+  if (field.opacity !== undefined && field.opacity < 1) style.opacity = String(field.opacity)
 
   let xTransform = ''
   if (field.hAnchor === 'left') {
@@ -168,10 +169,12 @@ export function useBarStyles(
   styleConfig: MaybeRefOrGetter<BarStyle>,
   orientation: MaybeRefOrGetter<Orientation>,
   barIndex: MaybeRefOrGetter<number> = () => 0,
+  tabLabelConfig: MaybeRefOrGetter<BarLabel | undefined> = () => undefined,
 ) {
   const sc = () => toValue(styleConfig) ?? DEFAULT_STYLE
   const b = () => toValue(bar)
   const ori = () => toValue(orientation)
+  const tabLabel = () => toValue(tabLabelConfig)
 
   // ── Shape ─────────────────────────────────────────────────────────────────
   const shapeCss = computed(() => buildShapeCss(sc().shape ?? DEFAULT_SHAPE))
@@ -336,7 +339,11 @@ export function useBarStyles(
   })
 
   // ── Label ─────────────────────────────────────────────────────────────────
-  const label = computed(() => ({ ...DEFAULT_LABEL, ...sc().label }))
+  const label = computed(() => {
+    const tab = tabLabel()
+    if (tab) return { ...DEFAULT_LABEL, ...tab }
+    return { ...DEFAULT_LABEL, ...sc().label }
+  })
 
   const labelStyle = computed(() => {
     const l = label.value
