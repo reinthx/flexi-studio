@@ -26,13 +26,6 @@ jobs:
         node-version: '20'
         cache: 'pnpm'
 
-    - name: Debug environment
-      run: |
-        node -v
-        pnpm -v
-        ls -la
-        cat pnpm-lock.yaml | head -n 20
-
     - name: Enable corepack
       run: corepack enable
 

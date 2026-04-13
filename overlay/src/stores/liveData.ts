@@ -471,45 +471,5 @@ export const useLiveDataStore = defineStore('liveData', () => {
     toggleBlurNames: () => { profile.value.global.blurNames = !profile.value.global.blurNames },
     setHeaderPinned: (pinned: boolean) => { profile.value.global.header.pinned = pinned },
     setMergePets: (merge: boolean) => { profile.value.global.mergePets = merge },
-    setActiveTab: (tabId: string) => { 
-      const tab = profile.value.global.tabs.find(t => t.id === tabId)
-      if (tab && tab.enabled) {
-        profile.value.global.activeTab = tabId
-        profile.value.global.dpsType = tab.dpsType
-        // Rebuild current frame with new dpsType
-        if (frame.value) {
-          const g = profile.value.global
-          const getDtpsValue = (c: Record<string, string>) => {
-            const dt = parseFloat(c['damagetaken'] ?? '0')
-            const dur = parseFloat(c['DURATION'] ?? '0')
-            return dur > 0 ? dt / dur : 0
-          }
-          const maxVal = g.dpsType === 'dtps'
-            ? Math.max(...frame.value!.bars.map((_, i) => {
-                const c = sessionPulls.value[viewingPull.value ?? -1]?.combatants[i]
-                return c ? getDtpsValue(c) : 0
-              }))
-            : Math.max(...frame.value!.bars.map((_, i) => {
-                const c = sessionPulls.value[viewingPull.value ?? -1]?.combatants[i]
-                return c ? parseFloat(c[g.dpsType] ?? '0') : 0
-              }))
-          
-          const pull = viewingPull.value !== null ? sessionPulls.value[viewingPull.value] : null
-          const combatants = pull?.combatants ?? []
-          
-          const bars: BarFrame[] = frame.value!.bars.map((_, i) => {
-            const c = combatants[i]
-            const rawVal = c ? (g.dpsType === 'dtps' ? getDtpsValue(c) : parseFloat(c[g.dpsType] ?? '0')) : 0
-            return {
-              ...frame.value!.bars[i],
-              fillFraction: rawVal / (maxVal || 1),
-              displayValue: formatValue(rawVal, g.valueFormat),
-            }
-          })
-          
-          frame.value = { ...frame.value!, bars }
-        }
-      }
-    },
   }
 })
