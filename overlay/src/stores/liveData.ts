@@ -149,6 +149,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         enchps: formatValue(parseFloat(c.enchps ?? '0'), g.valueFormat),
         maxHit: (c.maxhit ?? '---').replace('-', ' '),
         alpha: 1,
+        rank: i + 1,
       }
     })
 
@@ -276,13 +277,14 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   function applyConfig(incoming: Profile): void {
-    profile.value = incoming
-    engine.setDuration(incoming.global.transitionDuration)
+    const merged = deepMerge(deepClone(DEFAULT_PROFILE), incoming)
+    profile.value = merged
+    engine.setDuration(merged.global.transitionDuration)
     // Persist to overlay's localStorage (persists across sessions)
-    overlayConfig.applyConfig(incoming)
+    overlayConfig.applyConfig(merged)
     // Also sync to editor's key for compatibility
     try {
-      localStorage.setItem('act-flexi-profile', JSON.stringify(incoming))
+      localStorage.setItem('act-flexi-profile', JSON.stringify(merged))
     } catch { /* storage full or unavailable */ }
   }
 
@@ -420,6 +422,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         enchps: formatValue(parseFloat(c.enchps ?? '0'), profile.value.global.valueFormat),
         maxHit: (c.maxhit ?? '---').replace('-', ' '),
         alpha: 1,
+        rank: i + 1,
       }
     })
 

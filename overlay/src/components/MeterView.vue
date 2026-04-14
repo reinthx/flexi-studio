@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted } from 'vue'
 import { useLiveDataStore } from '../stores/liveData'
 import MeterBar from './MeterBar.vue'
 import MeterHeader from './MeterHeader.vue'
-import type { BarStyle } from '@shared/configSchema'
+import type { BarStyle, TabConfig } from '@shared/configSchema'
 import { resolveBarStyle } from '@shared/styleResolver'
 import { buildFillCss } from '@shared/cssBuilder'
 import { loadCustomFont } from '@shared/googleFonts'
@@ -13,6 +13,11 @@ import ScrollableBarsWrapper from '@shared/components/ScrollableBarsWrapper.vue'
 const store = useLiveDataStore()
 const g = computed(() => store.profile.global)
 const frame = computed(() => store.frame)
+
+const activeTabLabelConfig = computed(() => {
+  if (!g.value.tabsEnabled) return undefined
+  return g.value.tabs?.find((t: TabConfig) => t.id === g.value.activeTab)?.labelConfig
+})
 
 const openEditor = () => {
   const url = new URL(window.location.href)
@@ -34,7 +39,9 @@ interface ResolvedBar {
   alpha: number
   rank: number
   barIndex: number
-  style: BarStyle
+  style: BarStyle & { rank1HeightIncrease?: number }
+  isSelf: boolean
+  isRank1: boolean
 }
 
 const bars = computed<ResolvedBar[]>(() => {
@@ -45,6 +52,7 @@ const bars = computed<ResolvedBar[]>(() => {
     barIndex: i,
     style: resolveBarStyle(b.job, b.name, i + 1, store.profile, store.selfName),
     isSelf: b.name === store.selfName || b.name === 'YOU',
+    isRank1: i === 0,
   }))
 })
 
@@ -199,6 +207,7 @@ onUnmounted(() => {
           :blur-name="g.blurNames && bar.name !== store.selfName && bar.name !== 'YOU'"
           :value-format="g.valueFormat"
           :bar-index="bar.barIndex"
+          :rank1-config="bar.isRank1 ? g.rankIndicator : undefined"
         />
       </ScrollableBarsWrapper>
     </div>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { TextureFill, TexturePagination } from '@shared/configSchema'
+import type { TextureFill, TexturePagination, GradientFill } from '@shared/configSchema'
 import { BAR_TEXTURE_PRESETS } from '@shared/texturePresets'
 import { processImageFile } from '../../lib/imageProcessor'
 import BarSlider from './BarSlider.vue'
@@ -71,6 +71,40 @@ const BLEND_MODES = [
   'normal','multiply','screen','overlay','darken','lighten',
   'color-dodge','color-burn','hard-light','soft-light','difference','exclusion',
 ]
+
+// ── Tint controls ──────────────────────────────────────────────────────────────
+const tintMode = computed<'none' | 'solid' | 'gradient'>(() => {
+  if (props.modelValue.tintGradient) return 'gradient'
+  if (props.modelValue.tintColor) return 'solid'
+  return 'none'
+})
+
+function setTintMode(mode: 'none' | 'solid' | 'gradient') {
+  if (mode === 'none') {
+    patch({ tintColor: undefined, tintGradient: undefined })
+  } else if (mode === 'solid') {
+    patch({ tintColor: props.modelValue.tintColor ?? '#ffffff', tintGradient: undefined })
+  } else {
+    const existing = props.modelValue.tintGradient
+    patch({
+      tintColor: undefined,
+      tintGradient: existing ?? { type: 'linear', angle: 90, stops: [{ position: 0, color: '#ffffff' }, { position: 1, color: '#000000' }] },
+    })
+  }
+}
+
+const tintGradient = computed<GradientFill>(() =>
+  props.modelValue.tintGradient ?? { type: 'linear', angle: 90, stops: [{ position: 0, color: '#ffffff' }, { position: 1, color: '#000000' }] }
+)
+
+function patchTintGradient(p: Partial<GradientFill>) {
+  patch({ tintGradient: { ...tintGradient.value, ...p } })
+}
+
+function setTintGradientColor(stopIndex: number, color: string) {
+  const stops = tintGradient.value.stops.map((s, i) => i === stopIndex ? { ...s, color } : s)
+  patchTintGradient({ stops })
+}
 </script>
 
 <template>
@@ -152,6 +186,56 @@ const BLEND_MODES = [
             <option v-for="m in BLEND_MODES" :key="m" :value="m">{{ m }}</option>
           </select>
         </div>
+
+        <div class="options-spacer" />
+
+        <!-- Tint controls -->
+        <div class="row">
+          <label class="ctrl-label">Tint</label>
+          <select class="ctrl-select" :value="tintMode" @change="e => setTintMode((e.target as HTMLSelectElement).value as 'none' | 'solid' | 'gradient')">
+            <option value="none">None</option>
+            <option value="solid">Solid</option>
+            <option value="gradient">Gradient</option>
+          </select>
+        </div>
+
+        <template v-if="tintMode === 'solid'">
+          <div class="row">
+            <label class="ctrl-label">Color</label>
+            <input type="color" :value="modelValue.tintColor ?? '#ffffff'" @input="e => patch({ tintColor: (e.target as HTMLInputElement).value })" />
+          </div>
+        </template>
+
+        <template v-if="tintMode === 'gradient'">
+          <div class="row">
+            <label class="ctrl-label">Type</label>
+            <select class="ctrl-select" :value="tintGradient.type" @change="e => patchTintGradient({ type: (e.target as HTMLSelectElement).value as 'linear' | 'radial' })">
+              <option value="linear">Linear</option>
+              <option value="radial">Radial</option>
+            </select>
+          </div>
+          <div v-if="tintGradient.type === 'linear'" class="row">
+            <label class="ctrl-label">Angle</label>
+            <BarSlider
+              :model-value="tintGradient.angle ?? 90"
+              :min="0"
+              :max="360"
+              :step="1"
+              unit="°"
+              @update:model-value="v => patchTintGradient({ angle: v })"
+            />
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Color 1</label>
+            <input type="color" :value="tintGradient.stops[0]?.color ?? '#ffffff'" @input="e => setTintGradientColor(0, (e.target as HTMLInputElement).value)" />
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Color 2</label>
+            <input type="color" :value="tintGradient.stops[1]?.color ?? '#000000'" @input="e => setTintGradientColor(1, (e.target as HTMLInputElement).value)" />
+          </div>
+        </template>
+
+        <div class="options-spacer" />
 
         <div class="row">
           <label class="ctrl-label">Start Offset X</label>

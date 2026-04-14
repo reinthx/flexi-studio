@@ -25,6 +25,7 @@ const bars = computed(() => {
     rank: i + 1,
     barIndex: i,
     style: resolveBarStyle(b.job, b.name, i + 1, profile.value, sn),
+    isRank1: i === 0,
   }))
 })
 
@@ -130,6 +131,7 @@ function toggleHeaderPin() {
             :value-format="g.valueFormat"
             :bar-index="bar.barIndex"
             :tab-label-config="activeTabLabelConfig"
+            :rank1-config="bar.isRank1 ? g.rankIndicator : undefined"
           />
         </ScrollableBarsWrapper>
         <div v-if="!bars.length" class="no-data">Waiting for combat data…</div>

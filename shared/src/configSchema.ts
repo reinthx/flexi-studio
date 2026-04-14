@@ -38,7 +38,8 @@ export interface TextureFill {
   repeat: 'repeat' | 'no-repeat' | 'stretch' | 'paginate'
   opacity: number    // 0–1
   blendMode: string  // CSS mix-blend-mode value
-  tintColor?: string // optional color to tint the texture (for presets)
+  tintColor?: string    // optional solid color tint (multiply blend)
+  tintGradient?: GradientFill  // optional gradient tint (multiply blend, overrides tintColor)
   pagination?: TexturePagination
 }
 
@@ -284,10 +285,46 @@ export interface StyleOverrides {
 
 // ─── Rank Indicator ───────────────────────────────────────────────────────────
 
+export interface RankGlow {
+  enabled: boolean
+  color: string
+  blur: number
+}
+
+export interface RankCrown {
+  enabled: boolean
+  icon: string  // emoji or text
+  imageUrl: string  // custom image URL (overrides icon if set)
+  size: number  // px
+  offsetX: number
+  offsetY: number
+  hAnchor: 'left' | 'right' | 'center'
+  vAnchor: 'top' | 'middle' | 'bottom'
+}
+
+export interface RankNameStyle {
+  enabled: boolean
+  gradient?: {
+    type: 'linear' | 'radial'
+    angle: number
+    stops: Array<{ color: string; position: number }>
+  }
+  glow?: {
+    enabled: boolean
+    color: string
+    blur: number
+  }
+}
+
 export interface RankIndicatorConfig {
   rank1Enabled: boolean
   rank1Style: Partial<BarStyle>
   showNumbers: boolean  // render {rank} token on all bars, not just #1
+  rank1HeightIncrease: number  // percentage increase (e.g., 4 = +4%)
+  rank1ShowCrown: boolean  // show crown icon on rank 1
+  rank1Crown: RankCrown
+  rank1Glow: RankGlow
+  rank1NameStyle: RankNameStyle
 }
 
 // ─── Header / Footer ──────────────────────────────────────────────────────────

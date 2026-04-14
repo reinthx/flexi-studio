@@ -110,13 +110,40 @@ export function resolveBarStyle(
   // Rank 1 override (highest priority)
   // Preserve shape so the rank1 fill is always clipped to the bar's edges.
   const { rankIndicator } = profile.global
+  let rank1HeightIncrease = 0
   if (rankIndicator.rank1Enabled && rank === 1) {
     const savedShape = deepClone(base.shape)
+    // If base fill is texture, save it — deepMerge will overwrite fill with the rank1 solid color
+    // and we need to restore texture + apply the color as a tint instead
+    const savedTextureFill = base.fill?.type === 'texture' ? deepClone(base.fill) : null
+
     deepMerge(base, rankIndicator.rank1Style)
     base.shape = savedShape
+
+    // Texture tinting: rank1 fill becomes a tint on the texture, not a fill-type override
+    const rank1Fill = rankIndicator.rank1Style?.fill
+    if (savedTextureFill && rank1Fill) {
+      if (rank1Fill.type === 'solid') {
+        base.fill = {
+          ...savedTextureFill,
+          texture: { ...savedTextureFill.texture, tintColor: rank1Fill.color, tintGradient: undefined },
+        }
+      } else if (rank1Fill.type === 'gradient') {
+        base.fill = {
+          ...savedTextureFill,
+          texture: { ...savedTextureFill.texture, tintGradient: rank1Fill.gradient, tintColor: undefined },
+        }
+      }
+    }
+    
+    // Apply height increase (percentage-based)
+    rank1HeightIncrease = rankIndicator.rank1HeightIncrease ?? 0
+    if (rank1HeightIncrease > 0) {
+      base.height = base.height * (1 + rank1HeightIncrease / 100)
+    }
   }
 
-  return base
+  return { ...base, rank1HeightIncrease } as BarStyle & { rank1HeightIncrease: number }
 }
 
 // ─── Deep clone / merge ───────────────────────────────────────────────────────

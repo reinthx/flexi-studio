@@ -338,7 +338,8 @@ const DEFAULT_GLOBAL = {
   windowX: 20, windowY: 80, mergePets: true,
   header: { show: true, template: '{encounter}  {duration}', font: 'Segoe UI', size: 11, color: '#cccccc', background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
   footer: { show: false, template: 'Total: {totalDPS} DPS', font: 'Segoe UI', size: 11, color: '#cccccc', background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
-  rankIndicator: { rank1Enabled: false, rank1Style: {}, showNumbers: false },
+  rankIndicator: { rank1Enabled: false, rank1Style: {}, showNumbers: false, rank1HeightIncrease: 0, rank1ShowCrown: false, rank1Crown: { enabled: false, icon: '👑', imageUrl: '', size: 14, offsetX: 2, offsetY: 0, hAnchor: 'left', vAnchor: 'middle' }, rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
+      rank1NameStyle: { enabled: false }, },
   pets: { show: false, mergeWithOwner: true, petStyle: {} },
 }
 
@@ -434,7 +435,8 @@ function cleanProfile(profile: any): any {
       windowOpacity: 1, windowBg: 'transparent', windowX: 20, windowY: 80, mergePets: true,
       header: { show: true, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
       footer: { show: false, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
-      rankIndicator: { rank1Enabled: false, showNumbers: false },
+      rankIndicator: { rank1Enabled: false, showNumbers: false, rank1HeightIncrease: 0, rank1ShowCrown: false, rank1Crown: { enabled: false, icon: '👑', imageUrl: '', size: 14, offsetX: 2, offsetY: 0, hAnchor: 'left', vAnchor: 'middle' }, rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
+      rank1NameStyle: { enabled: false }, },
       pets: { show: false, mergeWithOwner: true },
     }
     for (const [key, value] of Object.entries(globalScalarDefaults)) {

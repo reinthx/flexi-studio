@@ -18,6 +18,7 @@ const props = defineProps<{
   valueFormat?: 'raw' | 'abbreviated' | 'formatted'
   barIndex?: number
   tabLabelConfig?: BarLabel
+  rank1Config?: { rank1HeightIncrease?: number; rank1Glow?: { enabled: boolean; color: string; blur: number }; rank1ShowCrown?: boolean; rank1Crown?: { enabled: boolean; icon: string; imageUrl?: string; size: number; offsetX: number; offsetY: number; hAnchor: 'left' | 'right' | 'center'; vAnchor: 'top' | 'middle' | 'bottom' }; rank1NameStyle?: { enabled: boolean; gradient?: { type: 'linear' | 'radial'; angle: number; stops: Array<{ color: string; position: number }> }; glow?: { enabled: boolean; color: string; blur: number } } }
 }>()
 
 const {
@@ -33,7 +34,8 @@ const {
   iconContainerStyle, iconInlineStyle, iconImageStyle,
   iconOutlineStyle, iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
   iconFallback,
-} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig)
+  rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, rank1NameGlowStyle, isRank1,
+} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config)
 
 const isValid = computed(() => {
   const sc = props.styleConfig
@@ -42,23 +44,27 @@ const isValid = computed(() => {
 
 const wrapperStyle = computed(() => {
   if (!isValid.value) return { display: 'none' }
+  const baseHeight = parseFloat(String(dims.value.height)) || 28
+  const adjustedHeight = baseHeight + rank1HeightAdjustment.value
   return {
-    height: dims.value.height,
+    height: `${adjustedHeight}px`,
     width: dims.value.width,
     marginBottom: dims.value.marginBottom,
     marginRight: dims.value.marginRight,
     opacity: String(props.bar.alpha),
     position: 'relative' as const,
     overflow: 'visible' as const,
+    zIndex: rank1ZIndex.value,
+    ...(rank1GlowStyle.value ? rank1GlowStyle.value : {}),
     ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
   }
 })
 
 // ── Blur names ──────────────────────────────────────────────────────────────
 const displayName = computed(() => {
-  if (props.blurName && MOCK_NAMES.length > 0) {
-    return MOCK_NAMES[Math.floor(Math.random() * MOCK_NAMES.length)]
-  }
+  // if (props.blurName && MOCK_NAMES.length > 0) {
+  //   return MOCK_NAMES[Math.floor(Math.random() * MOCK_NAMES.length)]
+  // }
   return props.bar.name
 })
 
@@ -185,12 +191,22 @@ function fieldText(template: string): string {
       </div>
     </template>
 
+    <!-- Rank 1 crown -->
+    <img v-if="rank1ShowCrown && rank1CrownIsImage" :src="rank1CrownIcon" :style="rank1CrownStyle" alt="crown" />
+    <div v-else-if="rank1ShowCrown" :style="rank1CrownStyle">{{ rank1CrownIcon }}</div>
     <!-- Label: independently positioned text fields -->
     <div :style="labelStyle">
       <template v-for="field in processedFields" :key="field.id">
         <div :style="[field.style, blurStyle ? { maxWidth: 'none' } : {}]">
           <span v-if="labelOutlineShadow" :style="{ position:'absolute', inset:0, color:'transparent', textShadow:labelOutlineShadow, overflow:'visible', whiteSpace:'nowrap', pointerEvents:'none', ...(field.template.includes('{name}') && blurStyle ? { fontFamily: blurStyle.fontFamily, opacity: blurStyle.opacity, transform: blurStyle.transform } : {}) }">{{ fieldText(field.template) }}</span>
-          <span :style="{ overflow:'hidden', textOverflow:'ellipsis', minWidth:0, filter: textStyle, ...(field.template.includes('{name}') ? blurStyle : undefined), ...gradientTextStyle }">{{ fieldText(field.template) }}</span>
+          <span :style="{
+            color: field.style.color,
+            overflow:'hidden', textOverflow:'ellipsis', minWidth:0,
+            filter: textStyle,
+            textShadow: field.template.includes('{name}') ? rank1NameGlowStyle : undefined,
+            ...(field.template.includes('{name}') ? rank1NameGradientStyle : gradientTextStyle),
+            ...(field.template.includes('{name}') ? blurStyle : undefined)
+          }">{{ fieldText(field.template) }}</span>
         </div>
       </template>
     </div>
