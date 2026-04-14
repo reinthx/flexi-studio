@@ -128,6 +128,15 @@ export interface BarShape {
   outline: BarOutline
   shadow?: BarShadow          // background bar shadow
   fillShadow?: BarShadow      // fill bar shadow (polish effect)
+  fillInsetTop?: number       // px — push fill down from top (name-above-bar layout)
+  segmentFill?: {
+    enabled: boolean
+    segmentWidth: number      // px — width of each filled segment (default 8)
+    gap: number               // px — gap between segments (default 2)
+    angle?: number            // degrees — 90 = vertical cuts (left-to-right bar), 0 = horizontal cuts (rising bar), between = skewed (default 90)
+    startHeight?: number      // px — height of first (leftmost) segment; enables growing-segment mode
+    endHeight?: number        // px — height of last (rightmost) segment; enables growing-segment mode
+  }
 }
 
 // ─── Label ────────────────────────────────────────────────────────────────────

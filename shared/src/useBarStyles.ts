@@ -174,6 +174,45 @@ const DEFAULT_STYLE: BarStyle = {
 
 export { DEFAULT_ICON_CONFIG, DEFAULT_LABEL, DEFAULT_SHAPE, DEFAULT_STYLE }
 
+/**
+ * Generates a base64-encoded SVG mask where N bottom-anchored rectangles grow
+ * linearly in height from startH to endH (px), all within a barH-px tall viewBox.
+ * preserveAspectRatio="none" lets the SVG stretch horizontally to any bar width
+ * while keeping the heights accurate.
+ */
+function buildGrowingSegmentMask(
+  segW: number, gap: number,
+  startH: number, endH: number,
+  barH: number,
+  angle: number = 90,
+  n: number = 80,
+): { url: string; maskWidth: number } {
+  const pitch = segW + gap
+  const clamp = (h: number) => Math.max(1, Math.min(h, barH))
+  const s = clamp(startH)
+  const e = clamp(endH)
+  const rad = (angle * Math.PI) / 180
+  const cotA = angle === 90 ? 0 : Math.cos(rad) / Math.sin(rad)
+  // Extra horizontal space needed so skewed tops don't get clipped
+  const extraW = Math.ceil(Math.abs(e * cotA))
+  const totalW = n * pitch + extraW
+  const shapes = Array.from({ length: n }, (_, i) => {
+    const t = n > 1 ? i / (n - 1) : 1
+    const h = s + (e - s) * t
+    const y = (barH - h).toFixed(2)
+    const x0 = i * pitch
+    const x1 = x0 + segW
+    if (cotA === 0) {
+      return `<rect x="${x0}" y="${y}" width="${segW}" height="${h.toFixed(2)}"/>`
+    }
+    const skew = h * cotA
+    // Parallelogram: bottom-left, bottom-right, top-right, top-left
+    return `<polygon points="${x0},${barH} ${x1},${barH} ${(x1 + skew).toFixed(2)},${y} ${(x0 + skew).toFixed(2)},${y}"/>`
+  }).join('')
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalW} ${barH}" preserveAspectRatio="none"><g fill="white">${shapes}</g></svg>`
+  return { url: `url("data:image/svg+xml;base64,${btoa(svg)}")`, maskWidth: totalW }
+}
+
 export function useBarStyles(
   bar: MaybeRefOrGetter<BarData>,
   styleConfig: MaybeRefOrGetter<BarStyle>,
@@ -349,7 +388,9 @@ export function useBarStyles(
   // ── Background shadow ─────────────────────────────────────────────────────
   const bgShadowDirectionalClip = computed(() => {
     const s = sc().shape?.shadow
-    const base = { position: 'absolute' as const, inset: '0', zIndex: 0 }
+    const insetTop = sc().shape?.fillInsetTop ?? 0
+    const baseInset = insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }
+    const base = { position: 'absolute' as const, ...baseInset, zIndex: 0 }
     if (!s?.enabled) return base
     const oX = s.offsetX, oY = s.offsetY
     const t = oY > 0 ? '0px' : oY < 0 ? '-9999px' : '0px'
@@ -391,12 +432,15 @@ export function useBarStyles(
   // ── Background ────────────────────────────────────────────────────────────
   const isTextureBg = computed(() => sc().bg?.type === 'texture')
 
-  const bgStyle = computed(() => ({
-    position: 'absolute' as const,
-    inset: '0',
-    ...(isTextureBg.value ? {} : buildFillCss(sc().bg, bi(), barHeightWithGap.value)),
-    ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
-  }))
+  const bgStyle = computed(() => {
+    const insetTop = sc().shape?.fillInsetTop ?? 0
+    return {
+      position: 'absolute' as const,
+      ...(insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }),
+      ...(isTextureBg.value ? {} : buildFillCss(sc().bg, bi(), barHeightWithGap.value)),
+      ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
+    }
+  })
 
   /** Inner div for texture backgrounds — for Paginate mode, ensures tiling works across bars. */
   const bgTextureInnerStyle = computed(() => {
@@ -428,7 +472,10 @@ export function useBarStyles(
 
   // ── Fill shadow + fill ────────────────────────────────────────────────────
   const fillShadowBoundsStyle = computed(() => {
-    const base = { position: 'absolute' as const, inset: '0', zIndex: 1 }
+    const insetTop = sc().shape?.fillInsetTop ?? 0
+    const base = insetTop
+      ? { position: 'absolute' as const, top: `${insetTop}px`, left: '0', right: '0', bottom: '0', zIndex: 1 }
+      : { position: 'absolute' as const, inset: '0', zIndex: 1 }
     if (isClipped.value) {
       return { ...base, clipPath: shapeCss.value.clipPath }
     } else if (shapeCss.value.borderRadius) {
@@ -472,6 +519,29 @@ export function useBarStyles(
       ...(isClipped.value ? { clipPath: shapeCss.value.clipPath } : {}),
       ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
       ...((outlineTarget.value === 'fill' || outlineTarget.value === 'both') ? outlineCss.value : {}),
+      ...(() => {
+        const sf = sc().shape?.segmentFill
+        if (!sf?.enabled) return {}
+        const w = sf.segmentWidth ?? 8
+        const g = sf.gap ?? 2
+        const sh = sf.startHeight
+        const eh = sf.endHeight
+        if (sh && eh) {
+          const barH = sc().height ?? 28
+          const a = sf.angle ?? 90
+          const { url: maskUrl } = buildGrowingSegmentMask(w, g, sh, eh, barH, a)
+          // Stretch to 100% so all segments (startH → endH) always fill the bar
+          // regardless of bar width. Width/Gap control the visual density ratio.
+          return {
+            maskImage: maskUrl, WebkitMaskImage: maskUrl,
+            maskSize: '100% 100%', WebkitMaskSize: '100% 100%',
+            maskRepeat: 'no-repeat' as const, WebkitMaskRepeat: 'no-repeat' as const,
+          }
+        }
+        const a = sf.angle ?? 90
+        const mask = `repeating-linear-gradient(${a}deg, black 0px, black ${w}px, transparent ${w}px, transparent ${w + g}px)`
+        return { maskImage: mask, WebkitMaskImage: mask }
+      })(),
     }
   })
 
