@@ -18,7 +18,7 @@ const props = defineProps<{
   valueFormat?: 'raw' | 'abbreviated' | 'formatted'
   barIndex?: number
   tabLabelConfig?: BarLabel
-  rank1Config?: { rank1HeightIncrease?: number; rank1Glow?: { enabled: boolean; color: string; blur: number }; rank1ShowCrown?: boolean; rank1Crown?: { enabled: boolean; icon: string; imageUrl?: string; size: number; offsetX: number; offsetY: number; hAnchor: 'left' | 'right' | 'center'; vAnchor: 'top' | 'middle' | 'bottom' }; rank1NameStyle?: { enabled: boolean; gradient?: { type: 'linear' | 'radial'; angle: number; stops: Array<{ color: string; position: number }> }; glow?: { enabled: boolean; color: string; blur: number } } }
+  rank1Config?: { rank1HeightIncrease?: number; rank1Glow?: { enabled: boolean; color: string; blur: number }; rank1ShowCrown?: boolean; rank1Crown?: { enabled: boolean; icon: string; imageUrl?: string; size: number; offsetX: number; offsetY: number; rotation?: number; hAnchor: 'left' | 'right' | 'center'; vAnchor: 'top' | 'middle' | 'bottom' }; rank1NameStyle?: { enabled: boolean; gradient?: { type: 'linear' | 'radial'; angle: number; stops: Array<{ color: string; position: number }> } }; rank1IconStyle?: { enabled: boolean; glow?: { enabled: boolean; color: string; blur: number }; shadow?: { enabled: boolean; color: string; blur: number }; bgShape?: { enabled: boolean; shape: 'circle' | 'square' | 'rounded' | 'diamond'; color: string; size: number; opacity: number; offsetX: number; offsetY: number } } }
 }>()
 
 const {
@@ -34,7 +34,7 @@ const {
   iconContainerStyle, iconInlineStyle, iconImageStyle,
   iconOutlineStyle, iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
   iconFallback,
-  rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, rank1NameGlowStyle, isRank1,
+  rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, isRank1,
 } = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config)
 
 const isValid = computed(() => {
@@ -203,8 +203,13 @@ function fieldText(template: string): string {
             color: field.style.color,
             overflow:'hidden', textOverflow:'ellipsis', minWidth:0,
             filter: textStyle,
-            textShadow: field.template.includes('{name}') ? rank1NameGlowStyle : undefined,
-            ...(field.template.includes('{name}') ? rank1NameGradientStyle : gradientTextStyle),
+            ...(field.template.includes('{name}') && isRank1 ? rank1NameGradientStyle : {
+              ...gradientTextStyle,
+              background: field.gradientStyle,
+              backgroundClip: field.gradientStyle ? 'text' : undefined,
+              WebkitBackgroundClip: field.gradientStyle ? 'text' : undefined,
+              WebkitTextFillColor: field.gradientStyle ? 'transparent' : undefined,
+            }),
             ...(field.template.includes('{name}') ? blurStyle : undefined)
           }">{{ fieldText(field.template) }}</span>
         </div>

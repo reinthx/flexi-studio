@@ -1,4 +1,5 @@
 import type { BarStyle, GlobalConfig, Profile } from './configSchema'
+import { CROWN_CUTE_SRC } from './crownAssets'
 
 // ─── Role colors ──────────────────────────────────────────────────────────────
 
@@ -136,7 +137,7 @@ export const DEFAULT_GLOBAL: GlobalConfig = {
     showNumbers: false,
     rank1HeightIncrease: 0,
     rank1ShowCrown: false,
-    rank1Crown: { enabled: false, icon: '👑', imageUrl: '', size: 14, offsetX: 2, offsetY: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Crown: { enabled: false, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
     rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
     rank1NameStyle: { enabled: false },
   },
@@ -162,7 +163,7 @@ export const RANK1_THEMES = {
     },
     rank1HeightIncrease: 4,
     rank1ShowCrown: true,
-    rank1Crown: { enabled: true, icon: '👑', size: 14, offsetX: 2, offsetY: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Crown: { enabled: true, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
     rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
     rank1NameStyle: { enabled: false },
   },
@@ -174,7 +175,7 @@ export const RANK1_THEMES = {
     },
     rank1HeightIncrease: 4,
     rank1ShowCrown: false,
-    rank1Crown: { enabled: false, icon: '👑', imageUrl: '', size: 14, offsetX: 2, offsetY: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Crown: { enabled: false, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
     rank1Glow: { enabled: true, color: '#FFD700', blur: 12 },
     rank1NameStyle: { enabled: false },
   },
@@ -186,7 +187,7 @@ export const RANK1_THEMES = {
     },
     rank1HeightIncrease: 4,
     rank1ShowCrown: true,
-    rank1Crown: { enabled: true, icon: '👑', size: 14, offsetX: 2, offsetY: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Crown: { enabled: true, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
     rank1Glow: { enabled: true, color: '#E63946', blur: 8 },
   },
   neonWinner: {
@@ -207,7 +208,7 @@ export const RANK1_THEMES = {
     },
     rank1HeightIncrease: 4,
     rank1ShowCrown: true,
-    rank1Crown: { enabled: true, icon: '👑', size: 14, offsetX: 2, offsetY: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Crown: { enabled: true, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
     rank1Glow: { enabled: true, color: '#00FFFF', blur: 10 },
   },
   minimalGold: {
@@ -217,7 +218,7 @@ export const RANK1_THEMES = {
     },
     rank1HeightIncrease: 0,
     rank1ShowCrown: false,
-    rank1Crown: { enabled: false, icon: '👑', imageUrl: '', size: 14, offsetX: 2, offsetY: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Crown: { enabled: false, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
     rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
     rank1NameStyle: { enabled: false },
   },
@@ -239,7 +240,7 @@ export const RANK1_THEMES = {
     },
     rank1HeightIncrease: 4,
     rank1ShowCrown: true,
-    rank1Crown: { enabled: true, icon: '👑', size: 14, offsetX: 2, offsetY: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Crown: { enabled: true, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
     rank1Glow: { enabled: true, color: '#4FC3F7', blur: 10 },
   },
 }

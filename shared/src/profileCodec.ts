@@ -13,6 +13,7 @@
 
 import { BAR_TEXTURE_PRESETS } from './texturePresets'
 import { JOB_ICONS } from './jobIcons'
+import { CROWN_CUTE_SRC } from './crownAssets'
 
 // ── JSON Key Minification ──────────────────────────────────────────────────────────
 
@@ -101,12 +102,23 @@ for (const [abbr, src] of Object.entries(JOB_ICONS)) {
   tokenToIconSrc.set(token, src)
 }
 
+// Crown built-in assets
+const crownSrcToToken = new Map<string, string>([
+  [CROWN_CUTE_SRC, '$CRW:cute'],
+])
+const tokenToCrownSrc = new Map<string, string>([
+  ['$CRW:cute', CROWN_CUTE_SRC],
+])
+
 /** Replace known data URLs with short tokens in a JSON string. */
 function tokenize(json: string): string {
   for (const [src, token] of textureSrcToToken) {
     json = json.replaceAll(JSON.stringify(src), JSON.stringify(token))
   }
   for (const [src, token] of iconSrcToToken) {
+    json = json.replaceAll(JSON.stringify(src), JSON.stringify(token))
+  }
+  for (const [src, token] of crownSrcToToken) {
     json = json.replaceAll(JSON.stringify(src), JSON.stringify(token))
   }
   return json
@@ -118,6 +130,9 @@ function detokenize(json: string): string {
     json = json.replaceAll(JSON.stringify(token), JSON.stringify(src))
   }
   for (const [token, src] of tokenToIconSrc) {
+    json = json.replaceAll(JSON.stringify(token), JSON.stringify(src))
+  }
+  for (const [token, src] of tokenToCrownSrc) {
     json = json.replaceAll(JSON.stringify(token), JSON.stringify(src))
   }
   return json
@@ -273,7 +288,7 @@ function fromBase64url(str: string): Uint8Array {
 
 // ── Cleanup dead fields ────────────────────────────────────────────────────
 
-const DEAD_LABEL_FIELDS = ['leftTemplate', 'rightTemplate', 'leftOffsetX', 'leftOffsetY', 'rightOffsetX', 'rightOffsetY']
+const DEAD_LABEL_FIELDS = ['leftTemplate', 'rightTemplate', 'leftOffsetX', 'leftOffsetY', 'rightOffsetX', 'rightOffsetY', 'selfColor']
 
 const DEFAULT_JOB_ENABLED: Record<string, boolean> = {
   PLD: true, WAR: true, DRK: true, GNB: true,
@@ -338,7 +353,7 @@ const DEFAULT_GLOBAL = {
   windowX: 20, windowY: 80, mergePets: true,
   header: { show: true, template: '{encounter}  {duration}', font: 'Segoe UI', size: 11, color: '#cccccc', background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
   footer: { show: false, template: 'Total: {totalDPS} DPS', font: 'Segoe UI', size: 11, color: '#cccccc', background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
-  rankIndicator: { rank1Enabled: false, rank1Style: {}, showNumbers: false, rank1HeightIncrease: 0, rank1ShowCrown: false, rank1Crown: { enabled: false, icon: '👑', imageUrl: '', size: 14, offsetX: 2, offsetY: 0, hAnchor: 'left', vAnchor: 'middle' }, rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
+  rankIndicator: { rank1Enabled: false, rank1Style: {}, showNumbers: false, rank1HeightIncrease: 0, rank1ShowCrown: false, rank1Crown: { enabled: false, icon: '👑', imageUrl: '$CRW:cute', size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' }, rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
       rank1NameStyle: { enabled: false }, },
   pets: { show: false, mergeWithOwner: true, petStyle: {} },
 }
@@ -351,6 +366,30 @@ function cleanProfile(profile: any): any {
     for (const field of DEAD_LABEL_FIELDS) {
       delete cleaned.default.label[field]
     }
+  }
+
+  // Migrate label fields: colorMode 'self' → selfMode:true, strip dead selfColor
+  function migrateLabelFields(fields: any[]) {
+    for (const f of fields) {
+      delete f.selfColor
+      if (f.colorMode === 'self') {
+        f.selfMode = true
+        delete f.colorMode
+      }
+    }
+  }
+  if (Array.isArray(cleaned.default?.label?.fields)) {
+    migrateLabelFields(cleaned.default.label.fields)
+  }
+  // Also migrate tab labelConfig fields
+  if (Array.isArray(cleaned.global?.tabs)) {
+    for (const tab of cleaned.global.tabs) {
+      if (Array.isArray(tab.labelConfig?.fields)) migrateLabelFields(tab.labelConfig.fields)
+    }
+  }
+  // Also migrate rank1Style label fields if present
+  if (Array.isArray(cleaned.global?.rankIndicator?.rank1Style?.label?.fields)) {
+    migrateLabelFields(cleaned.global.rankIndicator.rank1Style.label.fields)
   }
 
   // Clean gradientColor - strip if fill.type is not gradient
@@ -435,7 +474,7 @@ function cleanProfile(profile: any): any {
       windowOpacity: 1, windowBg: 'transparent', windowX: 20, windowY: 80, mergePets: true,
       header: { show: true, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
       footer: { show: false, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
-      rankIndicator: { rank1Enabled: false, showNumbers: false, rank1HeightIncrease: 0, rank1ShowCrown: false, rank1Crown: { enabled: false, icon: '👑', imageUrl: '', size: 14, offsetX: 2, offsetY: 0, hAnchor: 'left', vAnchor: 'middle' }, rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
+      rankIndicator: { rank1Enabled: false, showNumbers: false, rank1HeightIncrease: 0, rank1ShowCrown: false, rank1Crown: { enabled: false, icon: '👑', imageUrl: '$CRW:cute', size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' }, rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
       rank1NameStyle: { enabled: false }, },
       pets: { show: false, mergeWithOwner: true },
     }
@@ -457,8 +496,24 @@ function cleanProfile(profile: any): any {
     if (cleaned.global.footer?.show === false) {
       delete cleaned.global.footer
     }
-    if (cleaned.global.rankIndicator?.rank1Enabled === false && Object.keys(cleaned.global.rankIndicator).length <= 2) {
-      delete cleaned.global.rankIndicator
+    if (cleaned.global.rankIndicator) {
+      const ri = cleaned.global.rankIndicator
+      // Strip rank1Style if empty
+      if (ri.rank1Style && Object.keys(ri.rank1Style).length === 0) delete ri.rank1Style
+      // Strip rank1NameStyle.glow (removed from schema — migrate out)
+      if (ri.rank1NameStyle?.glow !== undefined) delete ri.rank1NameStyle.glow
+      // Strip rank1NameStyle if default { enabled: false }
+      if (ri.rank1NameStyle?.enabled === false && !ri.rank1NameStyle.gradient) {
+        delete ri.rank1NameStyle
+      }
+      // Strip rank1IconStyle if disabled (default absent)
+      if (ri.rank1IconStyle?.enabled === false) delete ri.rank1IconStyle
+      // Strip whole rankIndicator if only default-off fields remain
+      if (ri.rank1Enabled === false && !ri.rank1Style && !ri.rank1NameStyle && !ri.rank1IconStyle &&
+          ri.showNumbers === false && !ri.rank1HeightIncrease &&
+          !ri.rank1ShowCrown && ri.rank1Crown?.enabled === false && ri.rank1Glow?.enabled === false) {
+        delete cleaned.global.rankIndicator
+      }
     }
     if (cleaned.global.pets?.show === false && cleaned.global.pets?.mergeWithOwner === true && Object.keys(cleaned.global.pets).length <= 2) {
       delete cleaned.global.pets
@@ -477,11 +532,11 @@ function cleanProfile(profile: any): any {
   if (cleaned.overrides?.byJob) {
     const byJobCompact: Record<string, any> = {}
     for (const [job, config] of Object.entries(cleaned.overrides.byJob)) {
-      const color = config?.fill?.color
-      const isGradient = config?.fill?.type === 'gradient'
-      if (color !== DEFAULT_JOB_COLORS[job]) {
-        const entry: any = { fill: { type: config.fill.type, color } }
-        if (isGradient && config.gradientColor) entry.gradientColor = config.gradientColor
+      const c = config as any
+      const color = c?.fill?.color
+      if (color !== DEFAULT_JOB_COLORS[job] || c?.gradientColor) {
+        const entry: any = { fill: { type: c?.fill?.type, color } }
+        if (c?.gradientColor) entry.gradientColor = c.gradientColor
         byJobCompact[job] = entry
       }
     }
@@ -490,21 +545,18 @@ function cleanProfile(profile: any): any {
   if (cleaned.overrides?.byRole) {
     const byRoleCompact: Record<string, any> = {}
     for (const [role, config] of Object.entries(cleaned.overrides.byRole)) {
-      const color = config?.fill?.color
-      const isGradient = config?.fill?.type === 'gradient'
-      if (color !== DEFAULT_ROLE_COLORS[role]) {
-        const entry: any = { fill: { type: config.fill.type, color } }
-        if (isGradient && config.gradientColor) entry.gradientColor = config.gradientColor
+      const c = config as any
+      const color = c?.fill?.color
+      if (color !== DEFAULT_ROLE_COLORS[role] || c?.gradientColor) {
+        const entry: any = { fill: { type: c?.fill?.type, color } }
+        if (c?.gradientColor) entry.gradientColor = c.gradientColor
         byRoleCompact[role] = entry
       }
     }
     cleaned.overrides.byRole = Object.keys(byRoleCompact).length > 0 ? byRoleCompact : undefined
   }
-  // overrides.self - preserve gradient
-  if (cleaned.overrides?.self) {
-    const self = cleaned.overrides.self
-    if (self.fill?.type !== 'gradient') delete self.gradientColor
-  }
+  // overrides.self - always preserve gradientColor
+  // (no deletion — gradientColor used by label gradient mode regardless of fill type)
   return cleaned
 }
 
@@ -584,7 +636,23 @@ function restoreDefaults(profile: any): any {
     if (!restored.global.windowBackground) restored.global.windowBackground = DEFAULT_GLOBAL.windowBackground
     if (!restored.global.header) restored.global.header = DEFAULT_GLOBAL.header
     if (!restored.global.footer) restored.global.footer = DEFAULT_GLOBAL.footer
-    if (!restored.global.rankIndicator) restored.global.rankIndicator = DEFAULT_GLOBAL.rankIndicator
+    if (!restored.global.rankIndicator) {
+      restored.global.rankIndicator = DEFAULT_GLOBAL.rankIndicator
+    } else {
+      // Restore sub-fields added after older presets were encoded
+      if (!restored.global.rankIndicator.rank1NameStyle) {
+        restored.global.rankIndicator.rank1NameStyle = DEFAULT_GLOBAL.rankIndicator.rank1NameStyle
+      }
+      if (!restored.global.rankIndicator.rank1Style) {
+        restored.global.rankIndicator.rank1Style = {}
+      }
+      // Restore crown fields added later
+      const rc = restored.global.rankIndicator.rank1Crown
+      if (rc) {
+        if (rc.rotation === undefined) rc.rotation = 0
+        if (!rc.imageUrl) rc.imageUrl = CROWN_CUTE_SRC
+      }
+    }
     if (!restored.global.pets) restored.global.pets = DEFAULT_GLOBAL.pets
   }
 

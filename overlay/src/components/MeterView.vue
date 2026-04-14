@@ -207,7 +207,7 @@ onUnmounted(() => {
           :blur-name="g.blurNames && bar.name !== store.selfName && bar.name !== 'YOU'"
           :value-format="g.valueFormat"
           :bar-index="bar.barIndex"
-          :rank1-config="bar.isRank1 ? g.rankIndicator : undefined"
+          :rank1-config="bar.isRank1 && g.rankIndicator?.rank1Enabled ? g.rankIndicator : undefined"
         />
       </ScrollableBarsWrapper>
     </div>

@@ -26,6 +26,7 @@ const bars = computed(() => {
     barIndex: i,
     style: resolveBarStyle(b.job, b.name, i + 1, profile.value, sn),
     isRank1: i === 0,
+    isSelf: b.name === sn || b.name === 'YOU',
   }))
 })
 
@@ -131,7 +132,8 @@ function toggleHeaderPin() {
             :value-format="g.valueFormat"
             :bar-index="bar.barIndex"
             :tab-label-config="activeTabLabelConfig"
-            :rank1-config="bar.isRank1 ? g.rankIndicator : undefined"
+            :rank1-config="bar.isRank1 && g.rankIndicator?.rank1Enabled ? g.rankIndicator : undefined"
+            :color-overrides="profile.overrides"
           />
         </ScrollableBarsWrapper>
         <div v-if="!bars.length" class="no-data">Waiting for combat data…</div>

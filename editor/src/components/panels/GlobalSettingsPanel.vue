@@ -7,6 +7,7 @@ import ColorPicker from '../controls/ColorPicker.vue'
 import TextureEditor from '../controls/TextureEditor.vue'
 import type { GradientFill, TextureFill, BarStyle } from '@shared/configSchema'
 import { RANK1_THEMES } from '@shared/presets'
+import { CROWN_CUTE_SRC as CROWN_CUTE_DEFAULT } from '@shared/crownAssets'
 import {
   getFontSources, setFontSources, loadFontFromFile,
   storeDirectoryHandle, removeDirectoryHandle, loadFontsFromDirectoryHandle,
@@ -105,16 +106,24 @@ function patchRank1Style(style: Partial<BarStyle>) {
   patch({ rankIndicator: { ...g.value.rankIndicator, rank1Style: { ...g.value.rankIndicator?.rank1Style, ...style } } })
 }
 
-function updateRank1GlowEnabled(enabled: boolean) {
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { ...g.value.rankIndicator?.rank1NameStyle, glow: { ...g.value.rankIndicator?.rank1NameStyle?.glow, enabled } } } })
+function patchCrown(fields: Record<string, any>) {
+  patch({ rankIndicator: { ...g.value.rankIndicator, rank1Crown: { ...g.value.rankIndicator?.rank1Crown, ...fields } } })
 }
 
-function updateRank1GlowColor(c: string) {
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { ...g.value.rankIndicator?.rank1NameStyle, glow: { ...g.value.rankIndicator?.rank1NameStyle?.glow, color: c } } } })
+function patchR1Icon(fields: Record<string, any>) {
+  patch({ rankIndicator: { ...g.value.rankIndicator, rank1IconStyle: { ...g.value.rankIndicator?.rank1IconStyle, ...fields } } })
 }
 
-function updateRank1GlowBlur(v: number) {
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { ...g.value.rankIndicator?.rank1NameStyle, glow: { ...g.value.rankIndicator?.rank1NameStyle?.glow, blur: v } } } })
+function onCrownImageUpload(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const src = reader.result as string
+    patchCrown({ imageUrl: src })
+  }
+  reader.readAsDataURL(file)
+  ;(e.target as HTMLInputElement).value = ''
 }
 
 function patch(p: Partial<typeof g.value>) {
@@ -680,33 +689,40 @@ function onBrowseChange(e: Event) {
             @update:model-value="v => patch({ rankIndicator: { ...g.rankIndicator, rank1HeightIncrease: v } })" />
         </div>
         <div class="row">
-          <label class="ctrl-label">Type</label>
-          <select class="ctrl-select" style="flex:1"
-            :value="(g.rankIndicator?.rank1Style?.fill as any)?.gradient ? 'gradient' : 'solid'"
-            @change="onRank1TypeChange">
-            <option value="solid">Solid</option>
-            <option value="gradient">Gradient</option>
-          </select>
+          <label class="ctrl-label" style="flex:1">Bar Fill</label>
+          <input type="checkbox" :checked="g.rankIndicator?.rank1StyleEnabled !== false"
+            @change="e => patch({ rankIndicator: { ...g.rankIndicator, rank1StyleEnabled: (e.target as HTMLInputElement).checked } })" />
         </div>
-        <div class="row">
-          <label class="ctrl-label">Color</label>
-          <ColorPicker
-            :model-value="getRank1Color()"
-            @update:model-value="onRank1ColorChange"
-          />
-          <button class="tog" style="font-size:10px;padding:0 8px" title="Reset to gold"
-            @click="patch({ rankIndicator: { ...g.rankIndicator, rank1Style: { fill: { type: 'solid', color: '#FFD700' } } } })">
-            Reset
-          </button>
-        </div>
-        <template v-if="(g.rankIndicator?.rank1Style?.fill as any)?.gradient">
+        <template v-if="g.rankIndicator?.rank1StyleEnabled !== false">
           <div class="row">
-            <label class="ctrl-label">Color 2</label>
-            <ColorPicker
-              :model-value="getRank1Color2()"
-              @update:model-value="onRank1Color2Change"
-            />
+            <label class="ctrl-label">Type</label>
+            <select class="ctrl-select" style="flex:1"
+              :value="(g.rankIndicator?.rank1Style?.fill as any)?.gradient ? 'gradient' : 'solid'"
+              @change="onRank1TypeChange">
+              <option value="solid">Solid</option>
+              <option value="gradient">Gradient</option>
+            </select>
           </div>
+          <div class="row">
+            <label class="ctrl-label">Color</label>
+            <ColorPicker
+              :model-value="getRank1Color()"
+              @update:model-value="onRank1ColorChange"
+            />
+            <button class="tog" style="font-size:10px;padding:0 8px" title="Reset to gold"
+              @click="patch({ rankIndicator: { ...g.rankIndicator, rank1Style: { fill: { type: 'solid', color: '#FFD700' } } } })">
+              Reset
+            </button>
+          </div>
+          <template v-if="(g.rankIndicator?.rank1Style?.fill as any)?.gradient">
+            <div class="row">
+              <label class="ctrl-label">Color 2</label>
+              <ColorPicker
+                :model-value="getRank1Color2()"
+                @update:model-value="onRank1Color2Change"
+              />
+            </div>
+          </template>
         </template>
         <div class="sub-label">Crown</div>
         <div class="row">
@@ -716,41 +732,68 @@ function onBrowseChange(e: Event) {
         </div>
         <template v-if="g.rankIndicator?.rank1ShowCrown">
           <div class="row">
-            <label class="ctrl-label">Icon</label>
-            <input class="ctrl-input" style="width:60px" :value="g.rankIndicator?.rank1Crown?.icon ?? '👑'"
-              @input="e => patch({ rankIndicator: { ...g.rankIndicator, rank1Crown: { enabled: g.rankIndicator?.rank1Crown?.enabled ?? false, icon: ($event.target as HTMLInputElement).value, imageUrl: g.rankIndicator?.rank1Crown?.imageUrl ?? '', size: g.rankIndicator?.rank1Crown?.size ?? 14, offsetX: g.rankIndicator?.rank1Crown?.offsetX ?? 2, offsetY: g.rankIndicator?.rank1Crown?.offsetY ?? 0, hAnchor: g.rankIndicator?.rank1Crown?.hAnchor ?? 'left', vAnchor: g.rankIndicator?.rank1Crown?.vAnchor ?? 'middle' } } })" />
+            <label class="ctrl-label">Image</label>
+            <label class="r1-crown-upload-btn">
+              Upload
+              <input type="file" accept="image/png,image/webp,image/gif,image/jpeg" style="display:none"
+                @change="onCrownImageUpload" />
+            </label>
+            <button class="r1-crown-reset-btn" title="Reset to built-in crown"
+              @click="patchCrown({ imageUrl: CROWN_CUTE_DEFAULT })">Reset</button>
+            <button class="r1-crown-reset-btn" title="Clear image, use emoji instead"
+              @click="patchCrown({ imageUrl: '' })">Emoji</button>
           </div>
-          <div class="row">
-            <label class="ctrl-label">Image URL</label>
-            <input class="ctrl-input" style="flex:1" placeholder="https://... or base64" :value="g.rankIndicator?.rank1Crown?.imageUrl ?? ''"
-              @input="e => patch({ rankIndicator: { ...g.rankIndicator, rank1Crown: { enabled: g.rankIndicator?.rank1Crown?.enabled ?? false, icon: g.rankIndicator?.rank1Crown?.icon ?? '👑', imageUrl: ($event.target as HTMLInputElement).value, size: g.rankIndicator?.rank1Crown?.size ?? 14, offsetX: g.rankIndicator?.rank1Crown?.offsetX ?? 2, offsetY: g.rankIndicator?.rank1Crown?.offsetY ?? 0, hAnchor: g.rankIndicator?.rank1Crown?.hAnchor ?? 'left', vAnchor: g.rankIndicator?.rank1Crown?.vAnchor ?? 'middle' } } })" />
+          <div class="row" v-if="g.rankIndicator?.rank1Crown?.imageUrl">
+            <label class="ctrl-label" />
+            <img :src="g.rankIndicator.rank1Crown.imageUrl" style="height:28px;object-fit:contain;border-radius:3px;background:#fff2" />
+          </div>
+          <div class="row" v-if="!g.rankIndicator?.rank1Crown?.imageUrl">
+            <label class="ctrl-label">Emoji</label>
+            <input class="ctrl-input" style="width:60px" :value="g.rankIndicator?.rank1Crown?.icon ?? '👑'"
+              @input="e => patchCrown({ icon: ($event.target as HTMLInputElement).value })" />
           </div>
           <div class="row">
             <label class="ctrl-label">Size</label>
-            <DragNumber :model-value="g.rankIndicator?.rank1Crown?.size ?? 14" :min="8" :max="32" :step="1" unit="px" :speed="1"
-              @update:model-value="v => patch({ rankIndicator: { ...g.rankIndicator, rank1Crown: { ...g.rankIndicator?.rank1Crown, size: v } } })" />
+            <DragNumber :model-value="g.rankIndicator?.rank1Crown?.size ?? 20" :min="8" :max="64" :step="1" unit="px" :speed="1"
+              @update:model-value="v => patchCrown({ size: v })" />
           </div>
           <div class="row">
             <label class="ctrl-label">Offset X</label>
-            <DragNumber :model-value="g.rankIndicator?.rank1Crown?.offsetX ?? 2" :min="-20" :max="20" :step="1" unit="px" :speed="1"
-              @update:model-value="v => patch({ rankIndicator: { ...g.rankIndicator, rank1Crown: { ...g.rankIndicator?.rank1Crown, offsetX: v } } })" />
+            <DragNumber :model-value="g.rankIndicator?.rank1Crown?.offsetX ?? 2" :min="-60" :max="60" :step="1" unit="px" :speed="1"
+              @update:model-value="v => patchCrown({ offsetX: v })" />
           </div>
           <div class="row">
             <label class="ctrl-label">Offset Y</label>
-            <DragNumber :model-value="g.rankIndicator?.rank1Crown?.offsetY ?? 0" :min="-20" :max="20" :step="1" unit="px" :speed="1"
-              @update:model-value="v => patch({ rankIndicator: { ...g.rankIndicator, rank1Crown: { ...g.rankIndicator?.rank1Crown, offsetY: v } } })" />
+            <DragNumber :model-value="g.rankIndicator?.rank1Crown?.offsetY ?? 0" :min="-60" :max="60" :step="1" unit="px" :speed="1"
+              @update:model-value="v => patchCrown({ offsetY: v })" />
           </div>
           <div class="row">
-            <label class="ctrl-label">Position</label>
+            <label class="ctrl-label">Rotation</label>
+            <BarSlider :model-value="g.rankIndicator?.rank1Crown?.rotation ?? 0" :min="-180" :max="180" :step="1" unit="°"
+              @update:model-value="v => patchCrown({ rotation: v })" />
+            <DragNumber :model-value="g.rankIndicator?.rank1Crown?.rotation ?? 0" :min="-180" :max="180" :step="1" unit="°" :speed="1"
+              @update:model-value="v => patchCrown({ rotation: v })" />
+          </div>
+          <div class="row">
+            <label class="ctrl-label">H Anchor</label>
             <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1Crown?.hAnchor ?? 'left'"
-              @change="e => patch({ rankIndicator: { ...g.rankIndicator, rank1Crown: { ...g.rankIndicator?.rank1Crown, hAnchor: ($event.target as HTMLSelectElement).value as any } } })">
+              @change="e => patchCrown({ hAnchor: ($event.target as HTMLSelectElement).value as any })">
               <option value="left">Left</option>
               <option value="center">Center</option>
               <option value="right">Right</option>
             </select>
           </div>
+          <div class="row">
+            <label class="ctrl-label">V Anchor</label>
+            <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1Crown?.vAnchor ?? 'middle'"
+              @change="e => patchCrown({ vAnchor: ($event.target as HTMLSelectElement).value as any })">
+              <option value="top">Top</option>
+              <option value="middle">Middle</option>
+              <option value="bottom">Bottom</option>
+            </select>
+          </div>
         </template>
-        <div class="sub-label">Glow</div>
+        <div class="sub-label">Bar Glow</div>
         <div class="row">
           <label class="ctrl-label" style="flex:1">Enable glow</label>
           <input type="checkbox" :checked="g.rankIndicator?.rank1Glow?.enabled ?? false"
@@ -784,12 +827,10 @@ function onBrowseChange(e: Event) {
                 ...ns,
                 enabled,
                 gradient: ns?.gradient ?? { type: 'linear' as const, angle: 90, stops: [{ color: '#FFD700', position: 0 }, { color: '#FFA500', position: 1 }] },
-                glow: ns?.glow ?? { enabled: false, color: '#FFD700', blur: 8 },
               } } })
             }" />
         </div>
         <template v-if="g.rankIndicator?.rank1NameStyle?.enabled">
-          <div class="sub-sub-label">Gradient</div>
           <div class="row">
             <label class="ctrl-label">Type</label>
             <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1NameStyle?.gradient?.type ?? 'linear'"
@@ -817,25 +858,86 @@ function onBrowseChange(e: Event) {
               @update:model-value="updateRank1GradientColor2"
             />
           </div>
+        </template>
+        <div class="sub-label">Icon</div>
+        <div class="row">
+          <label class="ctrl-label" style="flex:1">Override icon style</label>
+          <input type="checkbox" :checked="g.rankIndicator?.rank1IconStyle?.enabled ?? false"
+            @change="e => {
+              const enabled = (e.target as HTMLInputElement).checked
+              patch({ rankIndicator: { ...g.rankIndicator, rank1IconStyle: { ...g.rankIndicator?.rank1IconStyle, enabled } } })
+            }" />
+        </div>
+        <template v-if="g.rankIndicator?.rank1IconStyle?.enabled">
           <div class="sub-sub-label">Glow</div>
           <div class="row">
-            <label class="ctrl-label" style="flex:1">Enable glow</label>
-            <input type="checkbox" :checked="g.rankIndicator?.rank1NameStyle?.glow?.enabled ?? false"
-              @change="e => updateRank1GlowEnabled(($event.target as HTMLInputElement).checked)" />
+            <label class="ctrl-label" style="flex:1">Enable</label>
+            <input type="checkbox" :checked="g.rankIndicator?.rank1IconStyle?.glow?.enabled ?? false"
+              @change="e => patchR1Icon({ glow: { ...g.rankIndicator?.rank1IconStyle?.glow, enabled: (e.target as HTMLInputElement).checked, color: g.rankIndicator?.rank1IconStyle?.glow?.color ?? '#FFD700', blur: g.rankIndicator?.rank1IconStyle?.glow?.blur ?? 8 } })" />
           </div>
-          <template v-if="g.rankIndicator?.rank1NameStyle?.glow?.enabled">
+          <template v-if="g.rankIndicator?.rank1IconStyle?.glow?.enabled">
             <div class="row">
-              <label class="ctrl-label">Glow Color</label>
-              <ColorPicker
-                :model-value="g.rankIndicator?.rank1NameStyle?.glow?.color ?? '#FFD700'"
-                @update:model-value="updateRank1GlowColor"
-              />
+              <label class="ctrl-label">Color</label>
+              <ColorPicker :model-value="g.rankIndicator?.rank1IconStyle?.glow?.color ?? '#FFD700'"
+                @update:model-value="c => patchR1Icon({ glow: { ...g.rankIndicator?.rank1IconStyle?.glow, color: c } })" />
             </div>
             <div class="row">
               <label class="ctrl-label">Blur</label>
-              <BarSlider :model-value="g.rankIndicator?.rank1NameStyle?.glow?.blur ?? 8" :min="0" :max="30" :step="1" unit="px"
-                @update:model-value="updateRank1GlowBlur"
-              />
+              <BarSlider :model-value="g.rankIndicator?.rank1IconStyle?.glow?.blur ?? 8" :min="0" :max="30" :step="1" unit="px"
+                @update:model-value="v => patchR1Icon({ glow: { ...g.rankIndicator?.rank1IconStyle?.glow, blur: v } })" />
+              <DragNumber :model-value="g.rankIndicator?.rank1IconStyle?.glow?.blur ?? 8" :min="0" :max="30" :speed="1" unit="px"
+                @update:model-value="v => patchR1Icon({ glow: { ...g.rankIndicator?.rank1IconStyle?.glow, blur: v } })" />
+            </div>
+          </template>
+          <div class="sub-sub-label">Shadow</div>
+          <div class="row">
+            <label class="ctrl-label" style="flex:1">Enable</label>
+            <input type="checkbox" :checked="g.rankIndicator?.rank1IconStyle?.shadow?.enabled ?? false"
+              @change="e => patchR1Icon({ shadow: { ...g.rankIndicator?.rank1IconStyle?.shadow, enabled: (e.target as HTMLInputElement).checked, color: g.rankIndicator?.rank1IconStyle?.shadow?.color ?? '#FFD700', blur: g.rankIndicator?.rank1IconStyle?.shadow?.blur ?? 8 } })" />
+          </div>
+          <template v-if="g.rankIndicator?.rank1IconStyle?.shadow?.enabled">
+            <div class="row">
+              <label class="ctrl-label">Color</label>
+              <ColorPicker :model-value="g.rankIndicator?.rank1IconStyle?.shadow?.color ?? '#FFD700'"
+                @update:model-value="c => patchR1Icon({ shadow: { ...g.rankIndicator?.rank1IconStyle?.shadow, color: c } })" />
+            </div>
+            <div class="row">
+              <label class="ctrl-label">Blur</label>
+              <DragNumber :model-value="g.rankIndicator?.rank1IconStyle?.shadow?.blur ?? 8" :min="1" :max="30" :speed="0.5" unit="px"
+                @update:model-value="v => patchR1Icon({ shadow: { ...g.rankIndicator?.rank1IconStyle?.shadow, blur: v } })" />
+            </div>
+          </template>
+          <div class="sub-sub-label">Background</div>
+          <div class="row">
+            <label class="ctrl-label" style="flex:1">Enable</label>
+            <input type="checkbox" :checked="g.rankIndicator?.rank1IconStyle?.bgShape?.enabled ?? false"
+              @change="e => patchR1Icon({ bgShape: { enabled: (e.target as HTMLInputElement).checked, shape: g.rankIndicator?.rank1IconStyle?.bgShape?.shape ?? 'circle', color: g.rankIndicator?.rank1IconStyle?.bgShape?.color ?? '#000000', size: g.rankIndicator?.rank1IconStyle?.bgShape?.size ?? 28, opacity: g.rankIndicator?.rank1IconStyle?.bgShape?.opacity ?? 0.5, offsetX: g.rankIndicator?.rank1IconStyle?.bgShape?.offsetX ?? 0, offsetY: g.rankIndicator?.rank1IconStyle?.bgShape?.offsetY ?? 0 } })" />
+          </div>
+          <template v-if="g.rankIndicator?.rank1IconStyle?.bgShape?.enabled">
+            <div class="row">
+              <label class="ctrl-label">Shape</label>
+              <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1IconStyle?.bgShape?.shape ?? 'circle'"
+                @change="e => patchR1Icon({ bgShape: { ...g.rankIndicator?.rank1IconStyle?.bgShape, shape: ($event.target as HTMLSelectElement).value as any } })">
+                <option value="circle">Circle</option>
+                <option value="square">Square</option>
+                <option value="rounded">Rounded</option>
+                <option value="diamond">Diamond</option>
+              </select>
+            </div>
+            <div class="row">
+              <label class="ctrl-label">Color</label>
+              <ColorPicker :model-value="g.rankIndicator?.rank1IconStyle?.bgShape?.color ?? '#000000'"
+                @update:model-value="c => patchR1Icon({ bgShape: { ...g.rankIndicator?.rank1IconStyle?.bgShape, color: c } })" />
+            </div>
+            <div class="row">
+              <label class="ctrl-label">Size</label>
+              <DragNumber :model-value="g.rankIndicator?.rank1IconStyle?.bgShape?.size ?? 28" :min="12" :max="64" :speed="1" unit="px"
+                @update:model-value="v => patchR1Icon({ bgShape: { ...g.rankIndicator?.rank1IconStyle?.bgShape, size: v } })" />
+            </div>
+            <div class="row">
+              <label class="ctrl-label">Opacity</label>
+              <BarSlider :model-value="(g.rankIndicator?.rank1IconStyle?.bgShape?.opacity ?? 0.5) * 100" :min="0" :max="100" :step="1" unit="%"
+                @update:model-value="v => patchR1Icon({ bgShape: { ...g.rankIndicator?.rank1IconStyle?.bgShape, opacity: v / 100 } })" />
             </div>
           </template>
         </template>
@@ -1100,4 +1202,16 @@ function onBrowseChange(e: Event) {
   align-self: flex-start;
 }
 .add-source:hover { background: var(--bg-hover); color: var(--text); }
+
+.r1-crown-upload-btn {
+  background: var(--bg-control); border: 1px solid var(--border); border-radius: 3px;
+  color: var(--text-muted); font-size: 11px; padding: 2px 8px; cursor: pointer;
+  display: inline-flex; align-items: center;
+}
+.r1-crown-upload-btn:hover { background: var(--bg-hover); color: var(--text); }
+.r1-crown-reset-btn {
+  background: none; border: 1px solid var(--border); border-radius: 3px;
+  color: var(--text-muted); font-size: 10px; padding: 2px 6px; cursor: pointer;
+}
+.r1-crown-reset-btn:hover { border-color: var(--accent); color: var(--text); }
 </style>

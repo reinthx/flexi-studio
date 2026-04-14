@@ -126,7 +126,7 @@ export function resolveBarStyle(
   // Preserve shape so the rank1 fill is always clipped to the bar's edges.
   const { rankIndicator } = profile.global
   let rank1HeightIncrease = 0
-  if (rankIndicator.rank1Enabled && rank === 1) {
+  if (rankIndicator.rank1Enabled && (rankIndicator.rank1StyleEnabled !== false) && rank === 1) {
     const savedShape = deepClone(base.shape)
     // If base fill is texture, save it — deepMerge will overwrite fill with the rank1 solid color
     // and we need to restore texture + apply the color as a tint instead

@@ -192,7 +192,7 @@ function onSelfToggle(e: Event) {
           <ColorPicker :model-value="getRoleColor(role)" @update:model-value="c => setRoleColor(role, c)" />
           <button class="restore-btn" title="Restore default" @click="restoreDefaultRole(role)">↺</button>
         </div>
-        <template v-if="isGradient && getRoleEnabled(role)">
+        <template v-if="getRoleEnabled(role)">
           <div class="color-row grad-row">
             <span class="grad-label">Color 2</span>
             <ColorPicker :model-value="getRoleGradColor(role)" @update:model-value="c => setRoleGradColor(role, c)" />
@@ -232,7 +232,7 @@ function onSelfToggle(e: Event) {
                 <button class="restore-btn" title="Restore default" @click="restoreDefaultJob(job)">↺</button>
               </template>
             </div>
-            <template v-if="isGradient && getJobEnabled(job)">
+            <template v-if="getJobEnabled(job)">
               <div class="color-row grad-row">
                 <span class="grad-label">Color 2</span>
                 <ColorPicker :model-value="getJobGradColor(job)" @update:model-value="c => setJobGradColor(job, c)" />
@@ -257,7 +257,7 @@ function onSelfToggle(e: Event) {
         <ColorPicker :model-value="getSelfColor()" @update:model-value="setSelfColor" />
         <button class="restore-btn" title="Restore default" @click="restoreDefaultSelf()">↺</button>
       </div>
-      <template v-if="isGradient && overrides.selfEnabled">
+      <template v-if="overrides.selfEnabled">
         <div class="color-row grad-row">
           <span class="grad-label">Color 2</span>
           <ColorPicker :model-value="getSelfGradColor()" @update:model-value="setSelfGradColor" />

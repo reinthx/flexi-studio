@@ -5,7 +5,7 @@
  * icon, outline) so both bar components stay in sync without copy-paste.
  */
 import { computed, toValue, type MaybeRefOrGetter } from 'vue'
-import type { BarStyle, LabelField, Orientation, GradientFill } from './configSchema'
+import type { BarStyle, LabelField, Orientation, GradientFill, Role, Profile } from './configSchema'
 import { buildFillCss, buildShapeCss, buildOutlineCss, buildDropShadowFilter } from './cssBuilder'
 import { getJobIconSrc, getJobInfo } from './jobMap'
 import { resolveBarDimensions } from './barDimensions'
@@ -67,6 +67,12 @@ const FIELD_ROLE_COLORS: Record<string, string> = {
   tank: '#4a90d9', healer: '#52b788', melee: '#e63946',
   ranged: '#f4a261', caster: '#9b5de5', unknown: '#888888',
 }
+
+function getRoleFromJob(job: string): string {
+  const { role } = getJobInfo(job)
+  return role
+}
+
 
 const DEFAULT_ICON_CONFIG = {
   sizeOverride: 0,
@@ -174,12 +180,14 @@ export function useBarStyles(
   orientation: MaybeRefOrGetter<Orientation>,
   barIndex: MaybeRefOrGetter<number> = () => 0,
   tabLabelConfig: MaybeRefOrGetter<BarLabel | undefined> = () => undefined,
-  rank1Config?: MaybeRefOrGetter<{ rank1HeightIncrease?: number; rank1Glow?: { enabled: boolean; color: string; blur: number }; rank1ShowCrown?: boolean; rank1Crown?: { enabled: boolean; icon: string; size: number; offsetX: number; offsetY: number; hAnchor: 'left' | 'right' | 'center'; vAnchor: 'top' | 'middle' | 'bottom' } }>,
+  rank1Config?: MaybeRefOrGetter<{ rank1HeightIncrease?: number; rank1Glow?: { enabled: boolean; color: string; blur: number }; rank1ShowCrown?: boolean; rank1Crown?: { enabled: boolean; icon: string; imageUrl?: string; size: number; offsetX: number; offsetY: number; rotation?: number; hAnchor: 'left' | 'right' | 'center'; vAnchor: 'top' | 'middle' | 'bottom' }; rank1NameStyle?: { enabled: boolean; gradient?: { type: 'linear' | 'radial'; angle: number; stops: Array<{ color: string; position: number }> } }; rank1IconStyle?: { enabled: boolean; glow?: { enabled: boolean; color: string; blur: number }; shadow?: { enabled: boolean; color: string; blur: number }; bgShape?: { enabled: boolean; shape: 'circle' | 'square' | 'rounded' | 'diamond'; color: string; size: number; opacity: number; offsetX: number; offsetY: number } } } | undefined>,
+  colorOverrides?: MaybeRefOrGetter<Profile['overrides'] | undefined>,
 ) {
   const sc = () => toValue(styleConfig) ?? DEFAULT_STYLE
   const b = () => toValue(bar)
   const ori = () => toValue(orientation)
   const tabLabel = () => toValue(tabLabelConfig)
+  const getColorOverrides = () => toValue(colorOverrides)
 
   // ── Shape ─────────────────────────────────────────────────────────────────
   const shapeCss = computed(() => buildShapeCss(sc().shape ?? DEFAULT_SHAPE))
@@ -243,9 +251,10 @@ export function useBarStyles(
     const crown = r1c()?.rank1Crown
     if (!crown?.enabled) return undefined
 
-    const size = crown.size ?? 14
+    const size = crown.size ?? 20
     const offsetX = crown.offsetX ?? 2
     const offsetY = crown.offsetY ?? 0
+    const rotation = crown.rotation ?? 0
     const hAnchor = crown.hAnchor ?? 'left'
     const vAnchor = crown.vAnchor ?? 'middle'
     const isImg = !!crown.imageUrl
@@ -253,14 +262,14 @@ export function useBarStyles(
     // Calculate horizontal position
     let left: string | undefined
     let right: string | undefined
-    let transform = ''
+    let transforms: string[] = []
     if (hAnchor === 'left') {
       left = `${offsetX}px`
     } else if (hAnchor === 'right') {
       right = `${offsetX}px`
     } else {
       left = '50%'
-      transform = 'translateX(-50%)'
+      transforms.push(`translateX(calc(-50% + ${offsetX}px))`)
     }
 
     // Vertical positioning
@@ -272,8 +281,10 @@ export function useBarStyles(
       bottom = `${Math.abs(offsetY)}px`
     } else {
       top = '50%'
-      transform += (transform ? ' ' : '') + 'translateY(-50%)'
+      transforms.push(`translateY(calc(-50% + ${offsetY}px))`)
     }
+
+    if (rotation) transforms.push(`rotate(${rotation}deg)`)
 
     const baseStyle = {
       position: 'absolute' as const,
@@ -281,7 +292,7 @@ export function useBarStyles(
       right,
       top,
       bottom,
-      transform: transform.trim() || undefined,
+      transform: transforms.length ? transforms.join(' ') : undefined,
       zIndex: 20,
     }
 
@@ -322,16 +333,7 @@ export function useBarStyles(
     }
   })
 
-  // Rank 1 name glow style — returned as text-shadow string (not filter)
-  const rank1NameGlowStyle = computed(() => {
-    if (!isRank1.value) return undefined
-    const ns = r1c()?.rank1NameStyle
-    if (!ns?.enabled || !ns?.glow?.enabled) return undefined
-    const g = ns.glow
-    const b = g.blur ?? 8
-    const c = g.color ?? '#FFD700'
-    return `0 0 ${b}px ${c}, 0 0 ${b * 2}px ${c}`
-  })
+  // rank1NameGlowStyle removed — glow moved to rank1IconStyle
 
   const outlineTarget = computed(() => sc().shape?.outline?.target ?? 'both')
   const outlineCss = computed(() => buildOutlineCss(sc().shape?.outline ?? DEFAULT_SHAPE.outline))
@@ -536,23 +538,73 @@ export function useBarStyles(
     const enabled = raw.filter(f => f.enabled)
     const outlineWidth = l.outline?.enabled ? (l.outline?.width ?? 0) : 0
     const labelColor = l.color ?? '#ffffff'
+    const overrides = getColorOverrides()
+    const job = b().job
+    const role = getRoleFromJob(job)
+    const isSelf = b().isSelf ?? false
+    
     return enabled.map((f, index) => {
       const style = calcFieldStyle(f, padding, outlineWidth)
+      let fieldGradientStyle: string | undefined
 
       // Apply per-field color override based on colorMode
       if (f.colorMode === 'custom' && f.color) {
         style.color = f.color
+        if (f.gradient?.stops?.length) {
+          const stops = f.gradient.stops.map(s => `${s.color} ${(s.position * 100).toFixed(1)}%`).join(', ')
+          const gradType = f.gradient.type === 'linear' ? `${f.gradient.angle ?? 90}deg` : 'circle'
+          fieldGradientStyle = f.gradient.type === 'linear'
+            ? `linear-gradient(${gradType}, ${stops})`
+            : `radial-gradient(${gradType}, ${stops})`
+        }
       } else if (f.colorMode === 'job') {
-        const c = JOB_COLORS[b().job.toUpperCase()]
-        if (c) style.color = c
+        const jobKey = job.toUpperCase() as keyof NonNullable<typeof overrides>['byJob']
+        const jobOverride = overrides?.byJob?.[jobKey]
+        const jobEnabled = overrides?.byJobEnabled?.[jobKey] ?? true
+        const c = (jobEnabled && (jobOverride as any)?.fill?.color)
+          ? (jobOverride as any).fill.color
+          : (JOB_COLORS[job.toUpperCase()] ?? '#888888')
+        style.color = c
+        if (f.gradient !== undefined) {
+          const color2 = f.gradient.stops?.[1]?.color ?? '#000000'
+          const angle = f.gradient.angle ?? 90
+          fieldGradientStyle = `linear-gradient(${angle}deg, ${c} 0%, ${color2} 100%)`
+        }
       } else if (f.colorMode === 'role') {
-        const { role } = getJobInfo(b().job)
-        style.color = FIELD_ROLE_COLORS[role] ?? '#888888'
-      } else if (f.colorMode === 'self' && b().isSelf && f.selfColor) {
-        style.color = f.selfColor
+        const roleKey = role as Role
+        const roleOverride = overrides?.byRole?.[roleKey]
+        const roleEnabled = overrides?.byRoleEnabled?.[roleKey] ?? true
+        const c = (roleEnabled && (roleOverride as any)?.fill?.color)
+          ? (roleOverride as any).fill.color
+          : (FIELD_ROLE_COLORS[role] ?? '#888888')
+        style.color = c
+        if (f.gradient !== undefined) {
+          const color2 = f.gradient.stops?.[1]?.color ?? '#000000'
+          const angle = f.gradient.angle ?? 90
+          fieldGradientStyle = `linear-gradient(${angle}deg, ${c} 0%, ${color2} 100%)`
+        }
       } else {
         // Default to label's main color
         style.color = labelColor
+      }
+
+      // selfMode: post-process overlay — combinable with any colorMode
+      // When selfMode is true and bar is self, override color with Self style override color
+      if (f.selfMode && isSelf) {
+        const selfC = (overrides?.selfEnabled && (overrides?.self as any)?.fill?.color)
+          ? (overrides?.self as any).fill.color
+          : undefined
+        if (selfC) {
+          style.color = selfC
+          if (f.selfGradient !== undefined) {
+            const color2 = (f.selfGradient as any).stops?.[1]?.color ?? '#000000'
+            const angle = (f.selfGradient as any).angle ?? 90
+            fieldGradientStyle = `linear-gradient(${angle}deg, ${selfC} 0%, ${color2} 100%)`
+          } else {
+            // selfMode without selfGradient clears any gradient set by colorMode
+            fieldGradientStyle = undefined
+          }
+        }
       }
 
       return {
@@ -561,6 +613,7 @@ export function useBarStyles(
         hAnchor: f.hAnchor,
         isFirstField: index === 0,
         style,
+        gradientStyle: fieldGradientStyle,
       }
     })
   })
@@ -682,6 +735,16 @@ export function useBarStyles(
         }
       }
     }
+    // Rank1 icon glow — merged as additional drop-shadow filters
+    const r1icon = isRank1.value ? r1c()?.rank1IconStyle : undefined
+    if (r1icon?.enabled && r1icon.glow?.enabled) {
+      const g = r1icon.glow
+      filters.push(`drop-shadow(0 0 ${g.blur ?? 8}px ${g.color ?? '#FFD700'})`)
+    }
+    // Rank1 icon shadow
+    if (r1icon?.enabled && r1icon.shadow?.enabled && (r1icon.shadow.blur ?? 0) > 0) {
+      filters.push(`drop-shadow(0 0 ${r1icon.shadow.blur}px ${r1icon.shadow.color ?? '#FFD700'})`)
+    }
     return {
       transform: rot ? `rotate(${rot}deg)` : undefined,
       filter: filters.length ? filters.join(' ') : undefined,
@@ -711,7 +774,9 @@ export function useBarStyles(
   })
 
   const iconBgStyle = computed(() => {
-    const bg = iconConfig.value.bgShape
+    // Rank1 bgShape override takes priority
+    const r1icon = isRank1.value ? r1c()?.rank1IconStyle : undefined
+    const bg = (r1icon?.enabled && r1icon.bgShape?.enabled) ? r1icon.bgShape : iconConfig.value.bgShape
     if (!bg?.enabled) return {}
     const size = bg.size ?? 24
     const isDiamond = bg.shape === 'diamond'
@@ -738,14 +803,15 @@ export function useBarStyles(
       background: bg.color,
       opacity: String(bg.opacity),
       transform: (ox || oy) && !isDiamond
-        ? `translate(${ox}px, ${oy}px)` 
+        ? `translate(${ox}px, ${oy}px)`
         : undefined,
       ...shape,
     }
   })
 
   const iconBgDiamondStyle = computed(() => {
-    const bg = iconConfig.value.bgShape
+    const r1icon = isRank1.value ? r1c()?.rank1IconStyle : undefined
+    const bg = (r1icon?.enabled && r1icon.bgShape?.enabled) ? r1icon.bgShape : iconConfig.value.bgShape
     if (!bg?.enabled || bg.shape !== 'diamond') return {}
     const size = bg.size ?? 24
     const ox = bg.offsetX ?? 0
@@ -790,6 +856,6 @@ export function useBarStyles(
     iconOutlineStyle, iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
     iconFallback,
     // Rank 1
-    rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, rank1NameGlowStyle, isRank1,
+    rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, isRank1,
   }
 }
