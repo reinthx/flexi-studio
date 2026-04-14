@@ -5,7 +5,7 @@ import BarSlider from '../controls/BarSlider.vue'
 import DragNumber from '../controls/DragNumber.vue'
 import ColorPicker from '../controls/ColorPicker.vue'
 import TextureEditor from '../controls/TextureEditor.vue'
-import type { GradientFill, TextureFill } from '@shared/configSchema'
+import type { GradientFill, TextureFill, BarStyle } from '@shared/configSchema'
 import { RANK1_THEMES } from '@shared/presets'
 import {
   getFontSources, setFontSources, loadFontFromFile,
@@ -60,6 +60,49 @@ function updateRank1GradientColor2(c: string) {
   const stops = g.value.rankIndicator?.rank1NameStyle?.gradient?.stops
   const color1 = stops?.[0]?.color ?? '#FFD700'
   patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { ...g.value.rankIndicator?.rank1NameStyle, gradient: { ...g.value.rankIndicator?.rank1NameStyle?.gradient, stops: [{ color: color1, position: 0 }, { color: c, position: 1 }] } } } })
+}
+
+function getRank1Color(): string {
+  const fill = g.value.rankIndicator?.rank1Style?.fill as any
+  if (fill?.gradient) return fill.gradient.stops?.[0]?.color ?? '#FFD700'
+  return fill?.color ?? '#FFD700'
+}
+
+function getRank1Color2(): string {
+  const fill = g.value.rankIndicator?.rank1Style?.fill as any
+  return fill?.gradient?.stops?.[1]?.color ?? '#B8860B'
+}
+
+function onRank1TypeChange(e: Event) {
+  const isGrad = (e.target as HTMLSelectElement).value === 'gradient'
+  const newFill = isGrad
+    ? { type: 'gradient' as const, gradient: { type: 'linear' as const, angle: 90, stops: [{ position: 0, color: '#FFD700' }, { position: 1, color: '#B8860B' }] } }
+    : { type: 'solid' as const, color: '#FFD700' }
+  patchRank1Style({ fill: newFill })
+}
+
+function onRank1ColorChange(c: string) {
+  const fill = g.value.rankIndicator?.rank1Style?.fill as any
+  if (fill?.gradient) {
+    const newStops = [...fill.gradient.stops]
+    newStops[0] = { ...newStops[0], color: c }
+    patchRank1Style({ fill: { type: 'gradient', gradient: { ...fill.gradient, stops: newStops } } })
+  } else {
+    patchRank1Style({ fill: { type: 'solid', color: c } })
+  }
+}
+
+function onRank1Color2Change(c: string) {
+  const fill = g.value.rankIndicator?.rank1Style?.fill as any
+  if (fill?.gradient) {
+    const newStops = [...fill.gradient.stops]
+    newStops[1] = { ...newStops[1], color: c }
+    patchRank1Style({ fill: { type: 'gradient', gradient: { ...fill.gradient, stops: newStops } } })
+  }
+}
+
+function patchRank1Style(style: Partial<BarStyle>) {
+  patch({ rankIndicator: { ...g.value.rankIndicator, rank1Style: { ...g.value.rankIndicator?.rank1Style, ...style } } })
 }
 
 function updateRank1GlowEnabled(enabled: boolean) {
@@ -637,16 +680,34 @@ function onBrowseChange(e: Event) {
             @update:model-value="v => patch({ rankIndicator: { ...g.rankIndicator, rank1HeightIncrease: v } })" />
         </div>
         <div class="row">
+          <label class="ctrl-label">Type</label>
+          <select class="ctrl-select" style="flex:1"
+            :value="(g.rankIndicator?.rank1Style?.fill as any)?.gradient ? 'gradient' : 'solid'"
+            @change="onRank1TypeChange">
+            <option value="solid">Solid</option>
+            <option value="gradient">Gradient</option>
+          </select>
+        </div>
+        <div class="row">
           <label class="ctrl-label">Color</label>
           <ColorPicker
-            :model-value="(g.rankIndicator?.rank1Style?.fill as any)?.color ?? '#FFD700'"
-            @update:model-value="c => patch({ rankIndicator: { ...g.rankIndicator, rank1Style: { ...g.rankIndicator?.rank1Style, fill: { type: 'solid', color: c } } } })"
+            :model-value="getRank1Color()"
+            @update:model-value="onRank1ColorChange"
           />
           <button class="tog" style="font-size:10px;padding:0 8px" title="Reset to gold"
             @click="patch({ rankIndicator: { ...g.rankIndicator, rank1Style: { fill: { type: 'solid', color: '#FFD700' } } } })">
             Reset
           </button>
         </div>
+        <template v-if="(g.rankIndicator?.rank1Style?.fill as any)?.gradient">
+          <div class="row">
+            <label class="ctrl-label">Color 2</label>
+            <ColorPicker
+              :model-value="getRank1Color2()"
+              @update:model-value="onRank1Color2Change"
+            />
+          </div>
+        </template>
         <div class="sub-label">Crown</div>
         <div class="row">
           <label class="ctrl-label" style="flex:1">Show crown</label>

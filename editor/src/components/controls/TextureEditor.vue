@@ -206,35 +206,6 @@ function setTintGradientColor(stopIndex: number, color: string) {
           </div>
         </template>
 
-        <template v-if="tintMode === 'gradient'">
-          <div class="row">
-            <label class="ctrl-label">Type</label>
-            <select class="ctrl-select" :value="tintGradient.type" @change="e => patchTintGradient({ type: (e.target as HTMLSelectElement).value as 'linear' | 'radial' })">
-              <option value="linear">Linear</option>
-              <option value="radial">Radial</option>
-            </select>
-          </div>
-          <div v-if="tintGradient.type === 'linear'" class="row">
-            <label class="ctrl-label">Angle</label>
-            <BarSlider
-              :model-value="tintGradient.angle ?? 90"
-              :min="0"
-              :max="360"
-              :step="1"
-              unit="°"
-              @update:model-value="v => patchTintGradient({ angle: v })"
-            />
-          </div>
-          <div class="row">
-            <label class="ctrl-label">Color 1</label>
-            <input type="color" :value="tintGradient.stops[0]?.color ?? '#ffffff'" @input="e => setTintGradientColor(0, (e.target as HTMLInputElement).value)" />
-          </div>
-          <div class="row">
-            <label class="ctrl-label">Color 2</label>
-            <input type="color" :value="tintGradient.stops[1]?.color ?? '#000000'" @input="e => setTintGradientColor(1, (e.target as HTMLInputElement).value)" />
-          </div>
-        </template>
-
         <div class="options-spacer" />
 
         <div class="row">
@@ -290,11 +261,12 @@ function setTintGradientColor(stopIndex: number, color: string) {
 .file-btn.small { font-size: 11px; }
 .file-btn:hover { background: var(--bg-hover); }
 .error-msg { font-size: 11px; color: #e63946; }
-.row { display: flex; align-items: center; gap: 6px; }
-.ctrl-label { font-size: 11px; color: var(--text-muted); min-width: 60px; flex-shrink: 0; }
+.row { display: flex; align-items: center; gap: var(--control-gap-sm); }
+.ctrl-label { font-size: 12px; color: var(--text-muted); min-width: var(--label-width); flex-shrink: 0; text-align: right; }
 .ctrl-select {
-  background: var(--bg-control); border: 1px solid var(--border); border-radius: 3px;
-  color: var(--text); font: 11px inherit; padding: 2px 4px; outline: none; flex: 1;
+  background: var(--bg-control); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font: 12px inherit; padding: 0 8px; outline: none;
+  height: var(--control-height); flex: 1;
 }
 .small-btn {
   background: var(--bg-control); border: 1px solid var(--border); border-radius: 3px;
@@ -329,6 +301,11 @@ function setTintGradientColor(stopIndex: number, color: string) {
 .options-spacer {
   height: 8px;
 }
+
+.checkbox-row { display: flex; align-items: center; gap: 6px; }
+.cb { width: 14px; height: 14px; cursor: pointer; flex-shrink: 0; }
+.cb-label { font-size: 12px; color: var(--text); cursor: pointer; }
+.cb-hint { font-size: 10px; color: var(--text-muted); }
 
 input[type="checkbox"] {
   width: 14px;

@@ -9,7 +9,12 @@ const config = useConfigStore()
 const def = computed(() => config.profile.default)
 const overrides = computed(() => config.profile.overrides)
 
-const isGradient = computed(() => def.value.fill?.type === 'gradient')
+const isGradient = computed(() => {
+  const fill = def.value.fill
+  if (fill?.type === 'gradient') return true
+  if (fill?.type === 'texture' && fill.texture?.tintGradient) return true
+  return false
+})
 
 const collapsed = ref({ self: true, roles: true, jobs: true })
 
@@ -171,11 +176,13 @@ function onSelfToggle(e: Event) {
             @change="e => setRoleEnabled(role, (e.target as HTMLInputElement).checked)" />
           <label class="ctrl-label">{{ ROLE_LABELS[role] }}</label>
           <ColorPicker :model-value="getRoleColor(role)" @update:model-value="c => setRoleColor(role, c)" />
-          <template v-if="isGradient && getRoleEnabled(role)">
-            <span class="grad-arrow">→</span>
-            <ColorPicker :model-value="getRoleGradColor(role)" @update:model-value="c => setRoleGradColor(role, c)" />
-          </template>
         </div>
+        <template v-if="isGradient && getRoleEnabled(role)">
+          <div class="color-row grad-row">
+            <span class="grad-label">Color 2</span>
+            <ColorPicker :model-value="getRoleGradColor(role)" @update:model-value="c => setRoleGradColor(role, c)" />
+          </div>
+        </template>
       </template>
     </div>
 
@@ -199,20 +206,24 @@ function onSelfToggle(e: Event) {
 
         <!-- Job rows within group -->
         <div v-if="jobGroupOpen[group.role]" class="job-rows">
-          <div v-for="job in group.jobs" :key="job" class="color-row job-row">
-            <input type="checkbox" class="job-checkbox"
-              :checked="getJobEnabled(job)"
-              @change="e => setJobEnabled(job, (e.target as HTMLInputElement).checked)" />
-            <label class="ctrl-label">{{ job }}</label>
-            <template v-if="getJobEnabled(job)">
-              <ColorPicker :model-value="getJobColor(job)" @update:model-value="c => setJobColor(job, c)" />
-              <template v-if="isGradient">
-                <span class="grad-arrow">→</span>
-                <ColorPicker :model-value="getJobGradColor(job)" @update:model-value="c => setJobGradColor(job, c)" />
+          <template v-for="job in group.jobs" :key="job">
+            <div class="color-row job-row">
+              <input type="checkbox" class="job-checkbox"
+                :checked="getJobEnabled(job)"
+                @change="e => setJobEnabled(job, (e.target as HTMLInputElement).checked)" />
+              <label class="ctrl-label">{{ job }}</label>
+              <template v-if="getJobEnabled(job)">
+                <ColorPicker :model-value="getJobColor(job)" @update:model-value="c => setJobColor(job, c)" />
+                <button class="restore-btn" title="Restore default" @click="restoreDefaultJob(job)">↺</button>
               </template>
-              <button class="restore-btn" title="Restore default" @click="restoreDefaultJob(job)">↺</button>
+            </div>
+            <template v-if="isGradient && getJobEnabled(job)">
+              <div class="color-row grad-row">
+                <span class="grad-label">Color 2</span>
+                <ColorPicker :model-value="getJobGradColor(job)" @update:model-value="c => setJobGradColor(job, c)" />
+              </div>
             </template>
-          </div>
+          </template>
         </div>
       </div>
     </div>
@@ -229,11 +240,13 @@ function onSelfToggle(e: Event) {
           @change="onSelfToggle" />
         <label class="ctrl-label">Self Bar</label>
         <ColorPicker :model-value="getSelfColor()" @update:model-value="setSelfColor" />
-        <template v-if="isGradient && overrides.selfEnabled">
-          <span class="grad-arrow">→</span>
-          <ColorPicker :model-value="getSelfGradColor()" @update:model-value="setSelfGradColor" />
-        </template>
       </div>
+      <template v-if="isGradient && overrides.selfEnabled">
+        <div class="color-row grad-row">
+          <span class="grad-label">Color 2</span>
+          <ColorPicker :model-value="getSelfGradColor()" @update:model-value="setSelfGradColor" />
+        </div>
+      </template>
     </div>
 
   </div>
@@ -270,7 +283,8 @@ function onSelfToggle(e: Event) {
 /* Color rows */
 .color-row { display: flex; align-items: center; gap: var(--control-gap-sm); min-width: 0; flex-wrap: nowrap; }
 .ctrl-label { font-size: 12px; color: var(--text-muted); min-width: 32px; flex-shrink: 0; text-align: right; }
-.grad-arrow { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+.grad-row { padding-left: 0; margin-left: 20px; }
+.grad-label { font-size: 11px; color: var(--text-muted); min-width: 32px; }
 
 .role-checkbox { width: 14px; height: 14px; cursor: pointer; flex-shrink: 0; }
 .job-checkbox  { width: 14px; height: 14px; cursor: pointer; flex-shrink: 0; }

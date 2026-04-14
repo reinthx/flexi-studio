@@ -35,6 +35,21 @@ function applyFillColor(baseFill: BarFill, overrideColor: string, gradientEndCol
       }
 
     case 'texture':
+      if (baseFill.texture?.tintGradient) {
+        return {
+          ...baseFill,
+          texture: {
+            ...baseFill.texture,
+            tintGradient: {
+              ...baseFill.texture.tintGradient,
+              stops: [
+                { position: 0, color: overrideColor },
+                { position: 1, color: gradientEndColor },
+              ],
+            },
+          },
+        }
+      }
       return { ...baseFill, texture: { ...baseFill.texture, tintColor: overrideColor } }
   }
 }
