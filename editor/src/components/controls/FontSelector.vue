@@ -11,6 +11,8 @@ import {
   getUserCustomFontNames,
   loadGoogleFont,
   loadCustomFont,
+  getFontFavorites,
+  toggleFontFavorite,
 } from '@shared/googleFonts'
 
 const props = defineProps<{ modelValue: string }>()
@@ -39,14 +41,26 @@ const BUILT_IN_CUSTOM = getCustomFontsList().map(f => f.name)
 const systemFonts = ref<string[]>([])
 // User-configured runtime fonts — refreshed each time the dropdown opens
 const userCustomFonts = ref<string[]>(getUserCustomFontNames())
+const favorites = ref<string[]>(getFontFavorites())
 const loaded = ref(false)
 const searchQuery = ref('')
 const isOpen = ref(false)
 
-// Refresh user fonts from localStorage whenever dropdown opens
+// Refresh user fonts and favorites from localStorage whenever dropdown opens
+// Also preload all Google + custom fonts so previews render before selection
 watch(isOpen, (open) => {
-  if (open) userCustomFonts.value = getUserCustomFontNames()
+  if (open) {
+    userCustomFonts.value = getUserCustomFontNames()
+    favorites.value = getFontFavorites()
+    GOOGLE_FONTS.forEach(font => loadGoogleFont(font))
+    allCustomFonts.value.forEach(font => loadCustomFont(font))
+  }
 })
+
+function onToggleFavorite(e: MouseEvent, font: string): void {
+  e.stopPropagation()
+  favorites.value = toggleFontFavorite(font)
+}
 
 onMounted(async () => {
   try {
@@ -90,6 +104,13 @@ const customFontsFiltered = computed(() => {
   return allCustomFonts.value.filter(f => f.toLowerCase().includes(q))
 })
 
+const favoritesFiltered = computed(() => {
+  const q = searchQuery.value.toLowerCase()
+  if (!q) return favorites.value
+  return favorites.value.filter(f => f.toLowerCase().includes(q))
+})
+
+const showFavoritesSection = computed(() => favoritesFiltered.value.length > 0)
 const showGoogleSection = computed(() => googleFontsFiltered.value.length > 0)
 const showCustomSection = computed(() => customFontsFiltered.value.length > 0)
 
@@ -132,45 +153,50 @@ function onBlur(e: FocusEvent): void {
       />
       <div v-if="!loaded" class="loading">Loading fonts…</div>
       <div v-else class="list">
+        <!-- Favorites section -->
+        <div v-if="showFavoritesSection" class="section-header">★ Favorites</div>
+        <div
+          v-for="font in favoritesFiltered"
+          :key="'fav-' + font"
+          class="font-row"
+          :class="{ selected: font === modelValue }"
+        >
+          <button type="button" class="font-item" :style="{ fontFamily: font }" @click="select(font)">{{ font }}</button>
+          <button type="button" class="star-btn active" title="Remove from favorites" @click="e => onToggleFavorite(e, font)">★</button>
+        </div>
         <!-- Custom fonts section (build-time + user-configured) -->
         <div v-if="showCustomSection" class="section-header">Custom Fonts</div>
-        <button
+        <div
           v-for="font in customFontsFiltered"
           :key="font"
-          type="button"
-          class="font-item custom"
+          class="font-row"
           :class="{ selected: font === modelValue }"
-          :style="{ fontFamily: font }"
-          @click="select(font)"
         >
-          {{ font }}
-        </button>
+          <button type="button" class="font-item custom" :style="{ fontFamily: font }" @click="select(font)">{{ font }}</button>
+          <button type="button" class="star-btn" :class="{ active: favorites.includes(font) }" title="Favorite" @click="e => onToggleFavorite(e, font)">★</button>
+        </div>
         <!-- Google Fonts section -->
         <div v-if="showGoogleSection" class="section-header">Web Fonts (Google)</div>
-        <button
+        <div
           v-for="font in googleFontsFiltered"
           :key="font"
-          type="button"
-          class="font-item google"
+          class="font-row"
           :class="{ selected: font === modelValue }"
-          :style="{ fontFamily: font }"
-          @click="select(font)"
         >
-          {{ font }}
-        </button>
+          <button type="button" class="font-item google" :style="{ fontFamily: font }" @click="select(font)">{{ font }}</button>
+          <button type="button" class="star-btn" :class="{ active: favorites.includes(font) }" title="Favorite" @click="e => onToggleFavorite(e, font)">★</button>
+        </div>
         <!-- System fonts section -->
         <div class="section-header">System Fonts</div>
-        <button
+        <div
           v-for="font in allFonts"
           :key="font"
-          type="button"
-          class="font-item"
+          class="font-row"
           :class="{ selected: font === modelValue }"
-          :style="{ fontFamily: font }"
-          @click="select(font)"
         >
-          {{ font }}
-        </button>
+          <button type="button" class="font-item" :style="{ fontFamily: font }" @click="select(font)">{{ font }}</button>
+          <button type="button" class="star-btn" :class="{ active: favorites.includes(font) }" title="Favorite" @click="e => onToggleFavorite(e, font)">★</button>
+        </div>
         <div v-if="allFonts.length === 0" class="no-results">No fonts match</div>
       </div>
     </div>
@@ -203,15 +229,26 @@ function onBlur(e: FocusEvent): void {
   font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--text-muted); padding: 8px 12px 4px; background: var(--bg-hover);
 }
+.font-row {
+  display: flex; align-items: center;
+}
+.font-row.selected > .font-item { background: var(--accent); color: #fff; }
+.font-row:hover > .star-btn { opacity: 1; }
 .font-item {
-  display: block; width: 100%; text-align: left;
+  flex: 1; min-width: 0; text-align: left;
   background: none; border: none; color: var(--text);
   padding: 6px 12px; cursor: pointer; font-size: 12px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.font-item:hover   { background: var(--bg-hover); }
-.font-item.selected { background: var(--accent); color: #fff; }
+.font-item:hover { background: var(--bg-hover); }
 .font-item.google { border-left: 2px solid var(--accent); padding-left: 10px; }
 .font-item.custom { border-left: 2px solid #e63946; padding-left: 10px; }
+.star-btn {
+  flex-shrink: 0; background: none; border: none; cursor: pointer;
+  padding: 0 8px; font-size: 12px; color: var(--text-muted);
+  opacity: 0; transition: opacity 0.1s;
+}
+.star-btn.active { color: #FFD700; opacity: 1; }
+.star-btn:hover { color: #FFD700; opacity: 1; }
 .loading, .no-results { padding: var(--control-gap-md); font-size: 11px; color: var(--text-muted); }
 </style>
