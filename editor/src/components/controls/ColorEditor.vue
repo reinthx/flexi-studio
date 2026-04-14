@@ -119,6 +119,13 @@ function setSelfGradColor(color: string) {
   })
 }
 
+function restoreDefaultSelf() {
+  const defaultColor = '#4a90d9'
+  config.patchOverrides({
+    self: { fill: { type: 'solid', color: defaultColor } }
+  })
+}
+
 function getRoleEnabled(role: Role): boolean {
   return overrides.value.byRoleEnabled?.[role] ?? true
 }
@@ -154,6 +161,13 @@ function restoreDefaultJob(job: Job) {
   })
 }
 
+function restoreDefaultRole(role: Role) {
+  const defaultColor = ROLE_COLORS[role]
+  config.patchOverrides({
+    byRole: { ...overrides.value.byRole, [role]: { fill: { type: 'solid', color: defaultColor } } }
+  })
+}
+
 function onSelfToggle(e: Event) {
   const checked = (e.target as HTMLInputElement).checked
   config.patchOverrides({ selfEnabled: checked })
@@ -176,6 +190,7 @@ function onSelfToggle(e: Event) {
             @change="e => setRoleEnabled(role, (e.target as HTMLInputElement).checked)" />
           <label class="ctrl-label">{{ ROLE_LABELS[role] }}</label>
           <ColorPicker :model-value="getRoleColor(role)" @update:model-value="c => setRoleColor(role, c)" />
+          <button class="restore-btn" title="Restore default" @click="restoreDefaultRole(role)">↺</button>
         </div>
         <template v-if="isGradient && getRoleEnabled(role)">
           <div class="color-row grad-row">
@@ -240,6 +255,7 @@ function onSelfToggle(e: Event) {
           @change="onSelfToggle" />
         <label class="ctrl-label">Self Bar</label>
         <ColorPicker :model-value="getSelfColor()" @update:model-value="setSelfColor" />
+        <button class="restore-btn" title="Restore default" @click="restoreDefaultSelf()">↺</button>
       </div>
       <template v-if="isGradient && overrides.selfEnabled">
         <div class="color-row grad-row">
