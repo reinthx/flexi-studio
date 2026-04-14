@@ -18,6 +18,8 @@ const props = defineProps<{
   barIndex?: number
   valueFormat?: 'raw' | 'abbreviated' | 'formatted'
   tabLabelConfig?: BarLabel
+  rank1Config?: { rank1HeightIncrease?: number; rank1Glow?: { enabled: boolean; color: string; blur: number }; rank1ShowCrown?: boolean; rank1Crown?: { enabled: boolean; icon: string; imageUrl?: string; size: number; offsetX: number; offsetY: number; rotation?: number; hAnchor: 'left' | 'right' | 'center'; vAnchor: 'top' | 'middle' | 'bottom' }; rank1NameStyle?: { enabled: boolean; gradient?: { type: 'linear' | 'radial'; angle: number; stops: Array<{ color: string; position: number }> } }; rank1IconStyle?: { enabled: boolean; glow?: { enabled: boolean; color: string; blur: number }; outline?: { enabled: boolean; color: string; width: number }; bgShape?: { enabled: boolean; shape: 'circle' | 'square' | 'rounded' | 'diamond'; color: string; size: number; opacity: number; offsetX: number; offsetY: number } } }
+  colorOverrides?: { byRole: Record<string, any>; byJob: Record<string, any>; byRoleEnabled?: Record<string, boolean>; byJobEnabled?: Record<string, boolean>; self?: { fill?: { color?: string } }; selfEnabled?: boolean }
 }>()
 
 const {
@@ -33,22 +35,29 @@ const {
   iconContainerStyle, iconInlineStyle, iconImageStyle,
   iconOutlineStyle, iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
   iconFallback,
-} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig)
+  rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, isRank1,
+} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, () => props.colorOverrides)
 
 // ── Wrapper (editor-specific: flex sizing, outline on wrapper) ──────────────
-const wrapperStyle = computed(() => ({
-  height: dims.value.height,
-  width: dims.value.width,
-  marginBottom: dims.value.marginBottom,
-  marginRight: dims.value.marginRight,
-  flex: dims.value.flex ?? '0 0 auto',
-  opacity: String(props.bar.alpha),
-  position: 'relative' as const,
-  overflow: 'visible' as const,
-  flexShrink: 0,
-  ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
-  ...((outlineTarget.value === 'bg' || outlineTarget.value === 'both') ? outlineCss.value : {}),
-}))
+const wrapperStyle = computed(() => {
+  const baseHeight = parseFloat(String(dims.value.height)) || 28
+  const adjustedHeight = baseHeight + rank1HeightAdjustment.value
+  return {
+    height: `${adjustedHeight}px`,
+    width: dims.value.width,
+    marginBottom: dims.value.marginBottom,
+    marginRight: dims.value.marginRight,
+    flex: dims.value.flex ?? '0 0 auto',
+    opacity: String(props.bar.alpha),
+    position: 'relative' as const,
+    overflow: 'visible' as const,
+    flexShrink: 0,
+    zIndex: rank1ZIndex.value,
+    ...(rank1GlowStyle.value ? rank1GlowStyle.value : {}),
+    ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
+    ...((outlineTarget.value === 'bg' || outlineTarget.value === 'both') ? outlineCss.value : {}),
+  }
+})
 
 // ── Icon source (supports custom icons in editor) ───────────────────────────
 const iconSrc = computed(() => {
@@ -170,12 +179,26 @@ const tokens = computed(() => ({
       </div>
     </template>
 
-    <!-- Label: independently positioned text fields -->
+    <!-- Rank 1 crown -->
+    <img v-if="rank1ShowCrown && rank1CrownIsImage" :src="rank1CrownIcon" :style="rank1CrownStyle" alt="crown" />
+    <div v-else-if="rank1ShowCrown" :style="rank1CrownStyle">{{ rank1CrownIcon }}</div>
     <div :style="labelStyle">
       <template v-for="field in processedFields" :key="field.id">
         <div :style="field.style">
           <span v-if="labelOutlineShadow" :style="{ position:'absolute', inset:0, color:'transparent', textShadow:labelOutlineShadow, overflow:'visible', whiteSpace:'nowrap', pointerEvents:'none' }">{{ renderTemplate(field.template, tokens) }}</span>
-          <span :style="{ overflow:'hidden', textOverflow:'ellipsis', minWidth:0, filter:textStyle, ...gradientTextStyle }">
+          <span :style="{
+            overflow:'hidden',
+            textOverflow:'ellipsis',
+            minWidth:0,
+            filter:textStyle,
+            ...(field.template.includes('{name}') && isRank1 ? rank1NameGradientStyle : {
+              ...gradientTextStyle,
+              background: field.gradientStyle,
+              backgroundClip: field.gradientStyle ? 'text' : undefined,
+              WebkitBackgroundClip: field.gradientStyle ? 'text' : undefined,
+              WebkitTextFillColor: field.gradientStyle ? 'transparent' : undefined,
+            }),
+          }">
             {{ renderTemplate(field.template, tokens) }}
           </span>
         </div>

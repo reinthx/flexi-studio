@@ -1,4 +1,5 @@
 import type { BarStyle, GlobalConfig, Profile } from './configSchema'
+import { CROWN_CUTE_SRC } from './crownAssets'
 
 // ─── Role colors ──────────────────────────────────────────────────────────────
 
@@ -134,6 +135,11 @@ export const DEFAULT_GLOBAL: GlobalConfig = {
     rank1Enabled: false,
     rank1Style: {},
     showNumbers: false,
+    rank1HeightIncrease: 0,
+    rank1ShowCrown: false,
+    rank1Crown: { enabled: false, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
+    rank1NameStyle: { enabled: false },
   },
   pets: {
     show: false,
@@ -144,6 +150,99 @@ export const DEFAULT_GLOBAL: GlobalConfig = {
   tabs: [],
   activeTab: 'dps',
   tabsPinned: true,
+}
+
+// ─── Rank #1 Themes ───────────────────────────────────────────────────────────────
+
+export const RANK1_THEMES = {
+  goldCrown: {
+    label: 'Gold Crown',
+    rank1Style: {
+      fill: { type: 'solid', color: '#FFD700' },
+      bg: { type: 'solid', color: '#1a1a2e' },
+    },
+    rank1HeightIncrease: 4,
+    rank1ShowCrown: true,
+    rank1Crown: { enabled: true, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
+    rank1NameStyle: { enabled: false },
+  },
+  glowingGold: {
+    label: 'Glowing Gold',
+    rank1Style: {
+      fill: { type: 'solid', color: '#FFD700' },
+      bg: { type: 'solid', color: '#1a1a2e' },
+    },
+    rank1HeightIncrease: 4,
+    rank1ShowCrown: false,
+    rank1Crown: { enabled: false, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Glow: { enabled: true, color: '#FFD700', blur: 12 },
+    rank1NameStyle: { enabled: false },
+  },
+  rubyWinner: {
+    label: 'Ruby Winner',
+    rank1Style: {
+      fill: { type: 'solid', color: '#E63946' },
+      bg: { type: 'solid', color: '#1a1a2e' },
+    },
+    rank1HeightIncrease: 4,
+    rank1ShowCrown: true,
+    rank1Crown: { enabled: true, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Glow: { enabled: true, color: '#E63946', blur: 8 },
+  },
+  neonWinner: {
+    label: 'Neon Winner',
+    rank1Style: {
+      fill: {
+        type: 'gradient',
+        gradient: {
+          type: 'linear',
+          angle: 90,
+          stops: [
+            { position: 0, color: '#00FFFF' },
+            { position: 1, color: '#00FF00' },
+          ],
+        },
+      },
+      bg: { type: 'solid', color: '#0a0a1a' },
+    },
+    rank1HeightIncrease: 4,
+    rank1ShowCrown: true,
+    rank1Crown: { enabled: true, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Glow: { enabled: true, color: '#00FFFF', blur: 10 },
+  },
+  minimalGold: {
+    label: 'Minimal Gold',
+    rank1Style: {
+      fill: { type: 'solid', color: '#FFD700' },
+    },
+    rank1HeightIncrease: 0,
+    rank1ShowCrown: false,
+    rank1Crown: { enabled: false, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
+    rank1NameStyle: { enabled: false },
+  },
+  iceChampion: {
+    label: 'Ice Champion',
+    rank1Style: {
+      fill: {
+        type: 'gradient',
+        gradient: {
+          type: 'linear',
+          angle: 90,
+          stops: [
+            { position: 0, color: '#E0F7FA' },
+            { position: 1, color: '#4FC3F7' },
+          ],
+        },
+      },
+      bg: { type: 'solid', color: '#0a1a2a' },
+    },
+    rank1HeightIncrease: 4,
+    rank1ShowCrown: true,
+    rank1Crown: { enabled: true, icon: '👑', imageUrl: CROWN_CUTE_SRC, size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' },
+    rank1Glow: { enabled: true, color: '#4FC3F7', blur: 10 },
+  },
 }
 
 // ─── Default profile — role colors preset ─────────────────────────────────────

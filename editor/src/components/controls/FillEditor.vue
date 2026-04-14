@@ -48,7 +48,10 @@ function setApplyRoleColor(v: boolean) { emit('update:modelValue', { ...props.mo
 function getBaseColor(): string {
   if (props.modelValue.type === 'solid') return props.modelValue.color
   if (props.modelValue.type === 'gradient' && props.modelValue.gradient?.stops?.[0]) return props.modelValue.gradient.stops[0].color
-  if (props.modelValue.type === 'texture' && props.modelValue.texture?.tintColor) return props.modelValue.texture.tintColor
+  if (props.modelValue.type === 'texture' && props.modelValue.texture) {
+    if (props.modelValue.texture.tintGradient?.stops?.[0]) return props.modelValue.texture.tintGradient.stops[0].color
+    if (props.modelValue.texture.tintColor) return props.modelValue.texture.tintColor
+  }
   return '#4a90d9'
 }
 
@@ -60,11 +63,57 @@ function setBaseColor(color: string) {
     newStops[0] = { ...newStops[0], color }
     emit('update:modelValue', { ...props.modelValue, gradient: { ...props.modelValue.gradient, stops: newStops } })
   } else if (props.modelValue.type === 'texture' && props.modelValue.texture) {
-    emit('update:modelValue', { ...props.modelValue, texture: { ...props.modelValue.texture, tintColor: color } })
+    const tex = props.modelValue.texture
+    if (tex.tintGradient) {
+      const newStops = [...tex.tintGradient.stops]
+      newStops[0] = { ...newStops[0], color }
+      emit('update:modelValue', { ...props.modelValue, texture: { ...tex, tintGradient: { ...tex.tintGradient, stops: newStops } } })
+    } else {
+      emit('update:modelValue', { ...props.modelValue, texture: { ...tex, tintColor: color } })
+    }
   }
 }
 
 const showColorsLink = computed(() => !override.value && !applyJobColor.value && !applyRoleColor.value)
+
+const tintMode = computed<'none' | 'solid' | 'gradient'>(() => {
+  if (props.modelValue.type !== 'texture') return 'none'
+  const tex = props.modelValue.texture
+  if (tex?.tintGradient) return 'gradient'
+  if (tex?.tintColor) return 'solid'
+  return 'none'
+})
+
+function setTintMode(mode: 'none' | 'solid' | 'gradient') {
+  if (props.modelValue.type !== 'texture') return
+  if (mode === 'none') {
+    onTexture({ ...props.modelValue.texture, tintColor: undefined, tintGradient: undefined })
+  } else if (mode === 'solid') {
+    onTexture({ ...props.modelValue.texture, tintColor: props.modelValue.texture.tintColor ?? '#ffffff', tintGradient: undefined })
+  } else {
+    const existing = props.modelValue.texture.tintGradient
+    onTexture({
+      ...props.modelValue.texture,
+      tintColor: undefined,
+      tintGradient: existing ?? { type: 'linear', angle: 90, stops: [{ position: 0, color: '#ffffff' }, { position: 1, color: '#000000' }] },
+    })
+  }
+}
+
+const tintGradient = computed<GradientFill>(() =>
+  props.modelValue.texture?.tintGradient ?? { type: 'linear', angle: 90, stops: [{ position: 0, color: '#ffffff' }, { position: 1, color: '#000000' }] }
+)
+
+function patchTintGradient(p: Partial<GradientFill>) {
+  if (!props.modelValue.texture) return
+  onTexture({ ...props.modelValue.texture, tintGradient: { ...tintGradient.value, ...p } })
+}
+
+function setTintGradientColor(stopIndex: number, color: string) {
+  if (!props.modelValue.texture) return
+  const stops = tintGradient.value.stops.map((s, i) => i === stopIndex ? { ...s, color } : s)
+  patchTintGradient({ stops })
+}
 </script>
 
 <template>
@@ -115,6 +164,56 @@ const showColorsLink = computed(() => !override.value && !applyJobColor.value &&
         </a>
         <span v-if="showColorsLink && !openColorsPanel" class="solid-info">Bar color is set per role/job in Colors panel</span>
       </div>
+
+      <!-- Gradient tint controls (texture tab only) -->
+      <template v-if="activeTab === 'texture'">
+        <div class="row">
+          <label class="ctrl-label">Tint</label>
+          <select class="ctrl-select" :value="tintMode" @change="e => setTintMode((e.target as HTMLSelectElement).value as 'none' | 'solid' | 'gradient')">
+            <option value="none">None</option>
+            <option value="solid">Solid</option>
+            <option value="gradient">Gradient</option>
+          </select>
+        </div>
+
+        <template v-if="tintMode === 'solid'">
+          <div class="row">
+            <label class="ctrl-label">Color</label>
+            <ColorPicker :model-value="props.modelValue.texture?.tintColor ?? '#ffffff'" @update:model-value="c => onTexture({ ...props.modelValue.texture!, tintColor: c })" />
+          </div>
+        </template>
+
+        <template v-if="tintMode === 'gradient'">
+          <div class="row">
+            <label class="ctrl-label">Type</label>
+            <select class="ctrl-select" :value="tintGradient.type" @change="e => patchTintGradient({ type: (e.target as HTMLSelectElement).value as 'linear' | 'radial' })">
+              <option value="linear">Linear</option>
+              <option value="radial">Radial</option>
+            </select>
+          </div>
+          <div v-if="tintGradient.type === 'linear'" class="row">
+            <label class="ctrl-label">Angle</label>
+            <BarSlider
+              :model-value="tintGradient.angle ?? 90"
+              :min="0"
+              :max="360"
+              :step="1"
+              unit="°"
+              @update:model-value="v => patchTintGradient({ angle: v })"
+            />
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Color 2</label>
+            <ColorPicker :model-value="tintGradient.stops[1]?.color ?? '#000000'" @update:model-value="c => setTintGradientColor(1, c)" />
+          </div>
+          <div class="gradient-info-wrap">
+            <a v-if="!override && openColorsPanel" class="colors-link" @click="openColorsPanel">
+              Go to Colors to set gradient colors &rarr;
+            </a>
+            <span v-else-if="!override" class="solid-info">Gradient color is set per role/job in Colors panel</span>
+          </div>
+        </template>
+      </template>
 
       <template v-if="activeTab === 'gradient'">
         <GradientEditor
@@ -174,6 +273,7 @@ const showColorsLink = computed(() => !override.value && !applyJobColor.value &&
 .cb-label { font-size: 12px; color: var(--text); cursor: pointer; }
 .cb-hint { font-size: 10px; color: var(--text-muted); }
 .solid-info-wrap { margin-top: 6px; }
+.gradient-info-wrap { margin-top: 6px; }
 .solid-info { font-size: 11px; color: var(--text-muted); font-style: italic; }
 .colors-link {
   font-size: 11px; color: var(--accent); cursor: pointer;

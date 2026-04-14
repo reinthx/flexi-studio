@@ -88,13 +88,29 @@ export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithG
         opacity: String(texture.opacity),
         mixBlendMode: texture.blendMode,
       }
-      if (texture.tintColor) {
+      if (texture.tintGradient) {
+        const tg = texture.tintGradient
+        const tgStops = tg.stops.map(s => `${s.color} ${(s.position * 100).toFixed(1)}%`).join(', ')
+        const tgCss = tg.type === 'linear'
+          ? `linear-gradient(${tg.angle ?? 90}deg, ${tgStops})`
+          : `radial-gradient(circle, ${tgStops})`
+        result.backgroundImage = `${tgCss}, url('${texture.src}')`
+        result.backgroundSize = `100% 100%, ${size}`
+        result.backgroundRepeat = `no-repeat, ${repeat}`
+        result.backgroundPosition = `0 0, 0 0`
+        result.backgroundBlendMode = 'multiply, normal'
+      } else if (texture.tintColor) {
         result.backgroundColor = texture.tintColor
         result.backgroundBlendMode = 'multiply'
       }
       if (texture.pagination?.enabled) {
         const paginationCss = buildTexturePaginationCss(texture, barIndex, barHeightWithGap)
-        Object.assign(result, paginationCss)
+        if (texture.tintGradient) {
+          result.backgroundPosition = `0 0, ${paginationCss.backgroundPosition}`
+          result.backgroundSize = `100% 100%, ${paginationCss.backgroundSize}`
+        } else {
+          Object.assign(result, paginationCss)
+        }
       }
       return result
     }

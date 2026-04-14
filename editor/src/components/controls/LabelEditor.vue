@@ -6,7 +6,6 @@ import ColorPicker from './ColorPicker.vue'
 import FontSelector from './FontSelector.vue'
 import DragNumber from './DragNumber.vue'
 import BarSlider from './BarSlider.vue'
-import GradientEditor from './GradientEditor.vue'
 
 // Style override modal state
 const styleModalFieldId = ref<string | null>(null)
@@ -294,7 +293,7 @@ function insertToken(fieldId: string, token: string) {
             <!-- Style Override button -->
             <button class="field-style-btn" type="button" @click.stop="openStyleModal(field.id)">
               Style Override
-              <span v-if="field.font || field.fontSize || field.colorMode || field.maxWidth" class="style-dot" />
+              <span v-if="field.font || field.fontSize || field.colorMode || field.selfMode || field.maxWidth" class="style-dot" />
             </button>
           </div>
         </div>
@@ -453,25 +452,133 @@ function insertToken(fieldId: string, token: string) {
           <div class="sm-row col">
             <label class="sm-label">Color</label>
             <div class="sm-color-modes">
-              <button v-for="mode in [{id:undefined,label:'None'},{id:'custom',label:'Custom'},{id:'job',label:'Job'},{id:'role',label:'Role'},{id:'self',label:'Self'}]"
+              <button v-for="mode in [{id:undefined,label:'None'},{id:'custom',label:'Custom'},{id:'job',label:'Job'},{id:'role',label:'Role'}]"
                 :key="String(mode.id)"
                 class="sm-mode-btn" :class="{ active: getStyleModalField()!.colorMode === mode.id }"
                 type="button"
-                @click="patchModalField({ colorMode: mode.id as LabelField['colorMode'] })">
+                @click="patchModalField({ colorMode: mode.id as LabelField['colorMode'], gradient: undefined })">
                 {{ mode.label }}
               </button>
+              <span class="sm-mode-sep" />
+              <button
+                class="sm-mode-btn sm-mode-self" :class="{ active: getStyleModalField()!.selfMode }"
+                type="button"
+                title="Also override with Self color when this is your bar (AND/OR with Color mode above)"
+                @click="patchModalField({ selfMode: getStyleModalField()!.selfMode ? undefined : true, selfGradient: undefined })">
+                Self
+              </button>
             </div>
+
+            <!-- Custom: Color 1 -->
             <div v-if="getStyleModalField()!.colorMode === 'custom'" class="sm-row" style="margin-top:6px">
               <label class="sm-label">Value</label>
               <ColorPicker :model-value="getStyleModalField()!.color ?? modelValue.color" label="Color"
-                @update:model-value="c => patchModalField({ color: c })" />
+                @update:model-value="c => {
+                  const grad = getStyleModalField()!.gradient
+                  if (grad) {
+                    patchModalField({ color: c, gradient: { ...grad, stops: [{ ...grad.stops[0], color: c }, ...grad.stops.slice(1)] } })
+                  } else {
+                    patchModalField({ color: c })
+                  }
+                }" />
             </div>
-            <div v-if="getStyleModalField()!.colorMode === 'self'" class="sm-row" style="margin-top:6px">
-              <label class="sm-label">Self Color</label>
-              <ColorPicker :model-value="getStyleModalField()!.selfColor ?? '#FFD700'" label="Color"
-                @update:model-value="c => patchModalField({ selfColor: c })" />
-              <span class="sm-hint-inline">applied only to your own bar</span>
+            <!-- Custom: Gradient -->
+            <div v-if="getStyleModalField()!.colorMode === 'custom'" class="sm-row" style="margin-top:6px">
+              <label class="sm-label">
+                <input type="checkbox" :checked="!!getStyleModalField()!.gradient"
+                  @change="e => {
+                    const isGrad = (e.target as HTMLInputElement).checked
+                    if (isGrad) {
+                      patchModalField({ gradient: { type: 'linear', angle: 90, stops: [{ position: 0, color: getStyleModalField()!.color ?? '#ffffff' }, { position: 1, color: '#000000' }] } })
+                    } else {
+                      patchModalField({ gradient: undefined })
+                    }
+                  }" />
+                Gradient
+              </label>
             </div>
+            <template v-if="getStyleModalField()!.colorMode === 'custom' && getStyleModalField()!.gradient">
+              <div class="sm-row">
+                <label class="sm-label">Angle</label>
+                <DragNumber :model-value="getStyleModalField()!.gradient?.angle ?? 90" :min="0" :max="360" unit="°" :speed="1"
+                  @update:model-value="v => patchModalField({ gradient: { ...getStyleModalField()!.gradient!, angle: v } })" />
+              </div>
+              <div class="sm-row">
+                <label class="sm-label">Color 2</label>
+                <ColorPicker :model-value="getStyleModalField()!.gradient?.stops?.[1]?.color ?? '#000000'"
+                  @update:model-value="c => patchModalField({ gradient: { ...getStyleModalField()!.gradient!, stops: [{ position: 0, color: getStyleModalField()!.color ?? '#ffffff' }, { position: 1, color: c }] } })" />
+              </div>
+            </template>
+
+            <!-- Job: Gradient toggle + Angle + Color 2 -->
+            <template v-if="getStyleModalField()!.colorMode === 'job'">
+              <div class="sm-row" style="margin-top:6px">
+                <label class="sm-label">
+                  <input type="checkbox" :checked="!!getStyleModalField()!.gradient"
+                    @change="e => patchModalField({ gradient: (e.target as HTMLInputElement).checked ? { type: 'linear', angle: 90, stops: [{ position: 0, color: '' }, { position: 1, color: '#000000' }] } : undefined })" />
+                  Gradient
+                </label>
+              </div>
+              <template v-if="getStyleModalField()!.gradient">
+                <div class="sm-row" style="margin-top:4px">
+                  <label class="sm-label">Angle</label>
+                  <DragNumber :model-value="getStyleModalField()!.gradient?.angle ?? 90" :min="0" :max="360" unit="°" :speed="1"
+                    @update:model-value="v => patchModalField({ gradient: { ...getStyleModalField()!.gradient!, angle: v } })" />
+                </div>
+                <div class="sm-row" style="margin-top:4px">
+                  <label class="sm-label">Color 2</label>
+                  <ColorPicker :model-value="getStyleModalField()!.gradient?.stops?.[1]?.color ?? '#000000'"
+                    @update:model-value="c => patchModalField({ gradient: { ...getStyleModalField()!.gradient!, stops: [{ position: 0, color: '' }, { position: 1, color: c }] } })" />
+                </div>
+              </template>
+            </template>
+
+            <!-- Role: Gradient toggle + Angle + Color 2 -->
+            <template v-if="getStyleModalField()!.colorMode === 'role'">
+              <div class="sm-row" style="margin-top:6px">
+                <label class="sm-label">
+                  <input type="checkbox" :checked="!!getStyleModalField()!.gradient"
+                    @change="e => patchModalField({ gradient: (e.target as HTMLInputElement).checked ? { type: 'linear', angle: 90, stops: [{ position: 0, color: '' }, { position: 1, color: '#000000' }] } : undefined })" />
+                  Gradient
+                </label>
+              </div>
+              <template v-if="getStyleModalField()!.gradient">
+                <div class="sm-row" style="margin-top:4px">
+                  <label class="sm-label">Angle</label>
+                  <DragNumber :model-value="getStyleModalField()!.gradient?.angle ?? 90" :min="0" :max="360" unit="°" :speed="1"
+                    @update:model-value="v => patchModalField({ gradient: { ...getStyleModalField()!.gradient!, angle: v } })" />
+                </div>
+                <div class="sm-row" style="margin-top:4px">
+                  <label class="sm-label">Color 2</label>
+                  <ColorPicker :model-value="getStyleModalField()!.gradient?.stops?.[1]?.color ?? '#000000'"
+                    @update:model-value="c => patchModalField({ gradient: { ...getStyleModalField()!.gradient!, stops: [{ position: 0, color: '' }, { position: 1, color: c }] } })" />
+                </div>
+              </template>
+            </template>
+
+            <!-- Self gradient controls — shown below a divider when selfMode active -->
+            <template v-if="getStyleModalField()!.selfMode">
+              <hr class="sm-self-divider" />
+              <div class="sm-row" style="margin-top:2px">
+                <label class="sm-label">
+                  <input type="checkbox" :checked="!!getStyleModalField()!.selfGradient"
+                    @change="e => patchModalField({ selfGradient: (e.target as HTMLInputElement).checked ? { type: 'linear', angle: 90, stops: [{ position: 0, color: '' }, { position: 1, color: '#000000' }] } : undefined })" />
+                  Self Gradient
+                </label>
+              </div>
+              <template v-if="getStyleModalField()!.selfGradient">
+                <div class="sm-row" style="margin-top:4px">
+                  <label class="sm-label">Angle</label>
+                  <DragNumber :model-value="(getStyleModalField()!.selfGradient as any)?.angle ?? 90" :min="0" :max="360" unit="°" :speed="1"
+                    @update:model-value="v => patchModalField({ selfGradient: { ...(getStyleModalField()!.selfGradient as any), angle: v } })" />
+                </div>
+                <div class="sm-row" style="margin-top:4px">
+                  <label class="sm-label">Color 2</label>
+                  <ColorPicker :model-value="(getStyleModalField()!.selfGradient as any)?.stops?.[1]?.color ?? '#000000'"
+                    @update:model-value="c => patchModalField({ selfGradient: { ...(getStyleModalField()!.selfGradient as any), stops: [{ position: 0, color: '' }, { position: 1, color: c }] } })" />
+                </div>
+              </template>
+            </template>
           </div>
 
           <!-- Max Width -->
@@ -666,4 +773,11 @@ function insertToken(fieldId: string, token: string) {
 }
 .sm-mode-btn:hover { border-color: var(--accent); color: var(--text); }
 .sm-mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.sm-mode-sep {
+  width: 1px; background: var(--border); align-self: stretch; margin: 2px 3px; flex-shrink: 0;
+}
+.sm-mode-self.active { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+.sm-self-divider {
+  border: none; border-top: 1px solid var(--border); margin: 6px 0 2px; width: 100%;
+}
 </style>

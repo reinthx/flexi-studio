@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { TextureFill, TexturePagination } from '@shared/configSchema'
+import type { TextureFill, TexturePagination, GradientFill } from '@shared/configSchema'
 import { BAR_TEXTURE_PRESETS } from '@shared/texturePresets'
 import { processImageFile } from '../../lib/imageProcessor'
 import BarSlider from './BarSlider.vue'
@@ -71,6 +71,40 @@ const BLEND_MODES = [
   'normal','multiply','screen','overlay','darken','lighten',
   'color-dodge','color-burn','hard-light','soft-light','difference','exclusion',
 ]
+
+// ── Tint controls ──────────────────────────────────────────────────────────────
+const tintMode = computed<'none' | 'solid' | 'gradient'>(() => {
+  if (props.modelValue.tintGradient) return 'gradient'
+  if (props.modelValue.tintColor) return 'solid'
+  return 'none'
+})
+
+function setTintMode(mode: 'none' | 'solid' | 'gradient') {
+  if (mode === 'none') {
+    patch({ tintColor: undefined, tintGradient: undefined })
+  } else if (mode === 'solid') {
+    patch({ tintColor: props.modelValue.tintColor ?? '#ffffff', tintGradient: undefined })
+  } else {
+    const existing = props.modelValue.tintGradient
+    patch({
+      tintColor: undefined,
+      tintGradient: existing ?? { type: 'linear', angle: 90, stops: [{ position: 0, color: '#ffffff' }, { position: 1, color: '#000000' }] },
+    })
+  }
+}
+
+const tintGradient = computed<GradientFill>(() =>
+  props.modelValue.tintGradient ?? { type: 'linear', angle: 90, stops: [{ position: 0, color: '#ffffff' }, { position: 1, color: '#000000' }] }
+)
+
+function patchTintGradient(p: Partial<GradientFill>) {
+  patch({ tintGradient: { ...tintGradient.value, ...p } })
+}
+
+function setTintGradientColor(stopIndex: number, color: string) {
+  const stops = tintGradient.value.stops.map((s, i) => i === stopIndex ? { ...s, color } : s)
+  patchTintGradient({ stops })
+}
 </script>
 
 <template>
@@ -153,6 +187,27 @@ const BLEND_MODES = [
           </select>
         </div>
 
+        <div class="options-spacer" />
+
+        <!-- Tint controls -->
+        <div class="row">
+          <label class="ctrl-label">Tint</label>
+          <select class="ctrl-select" :value="tintMode" @change="e => setTintMode((e.target as HTMLSelectElement).value as 'none' | 'solid' | 'gradient')">
+            <option value="none">None</option>
+            <option value="solid">Solid</option>
+            <option value="gradient">Gradient</option>
+          </select>
+        </div>
+
+        <template v-if="tintMode === 'solid'">
+          <div class="row">
+            <label class="ctrl-label">Color</label>
+            <input type="color" :value="modelValue.tintColor ?? '#ffffff'" @input="e => patch({ tintColor: (e.target as HTMLInputElement).value })" />
+          </div>
+        </template>
+
+        <div class="options-spacer" />
+
         <div class="row">
           <label class="ctrl-label">Start Offset X</label>
           <BarSlider
@@ -206,11 +261,12 @@ const BLEND_MODES = [
 .file-btn.small { font-size: 11px; }
 .file-btn:hover { background: var(--bg-hover); }
 .error-msg { font-size: 11px; color: #e63946; }
-.row { display: flex; align-items: center; gap: 6px; }
-.ctrl-label { font-size: 11px; color: var(--text-muted); min-width: 60px; flex-shrink: 0; }
+.row { display: flex; align-items: center; gap: var(--control-gap-sm); }
+.ctrl-label { font-size: 12px; color: var(--text-muted); min-width: var(--label-width); flex-shrink: 0; text-align: right; }
 .ctrl-select {
-  background: var(--bg-control); border: 1px solid var(--border); border-radius: 3px;
-  color: var(--text); font: 11px inherit; padding: 2px 4px; outline: none; flex: 1;
+  background: var(--bg-control); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font: 12px inherit; padding: 0 8px; outline: none;
+  height: var(--control-height); flex: 1;
 }
 .small-btn {
   background: var(--bg-control); border: 1px solid var(--border); border-radius: 3px;
@@ -245,6 +301,11 @@ const BLEND_MODES = [
 .options-spacer {
   height: 8px;
 }
+
+.checkbox-row { display: flex; align-items: center; gap: 6px; }
+.cb { width: 14px; height: 14px; cursor: pointer; flex-shrink: 0; }
+.cb-label { font-size: 12px; color: var(--text); cursor: pointer; }
+.cb-hint { font-size: 10px; color: var(--text-muted); }
 
 input[type="checkbox"] {
   width: 14px;

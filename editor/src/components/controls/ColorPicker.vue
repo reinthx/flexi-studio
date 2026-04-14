@@ -25,6 +25,7 @@ function parseColor(val: string): { hex: string; alpha: number } {
 
 const hex   = ref('#ffffff')
 const alpha = ref(1)
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 // Initialize from prop before first render to avoid "rgba()" reaching native input[type=color]
 const _init = (() => { const p = parseColor(props.modelValue ?? '#ffffff'); hex.value = p.hex; alpha.value = p.alpha })()
@@ -37,6 +38,21 @@ function syncFromProp() {
 watch(() => props.modelValue, syncFromProp)
 
 function emitCurrent() {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => {
+    if (alpha.value >= 1) {
+      emit('update:modelValue', hex.value)
+    } else {
+      const r = parseInt(hex.value.slice(1,3),16)
+      const g = parseInt(hex.value.slice(3,5),16)
+      const b = parseInt(hex.value.slice(5,7),16)
+      emit('update:modelValue', `rgba(${r},${g},${b},${alpha.value.toFixed(2)})`)
+    }
+  }, 50)
+}
+
+function emitImmediate() {
+  if (debounceTimer) clearTimeout(debounceTimer)
   if (alpha.value >= 1) {
     emit('update:modelValue', hex.value)
   } else {
@@ -66,7 +82,9 @@ const hexInput = computed({
         type="color"
         class="cp-swatch"
         :value="hex"
-        @input="e => { hex = (e.target as HTMLInputElement).value; emitCurrent() }"
+        @input="e => { hex = (e.target as HTMLInputElement).value }"
+        @mouseup="emitCurrent"
+        @change="emitCurrent"
         @pointerdown.stop
       />
       <!-- Hex text input -->

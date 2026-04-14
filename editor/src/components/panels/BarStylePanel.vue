@@ -102,6 +102,64 @@ const sizeBadge = computed(() => {
       </div>
       <div v-if="open.fill" class="section-body">
         <FillEditor :model-value="def.fill" @update:model-value="setFill" />
+        <div class="sub-divider">Position</div>
+        <div class="row">
+          <label class="ctrl-label">Offset Y</label>
+          <BarSlider :model-value="def.shape.fillInsetTop ?? 0" :min="0" :max="60" :step="1" unit="px"
+            track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
+            @update:model-value="v => config.patchDefault({ shape: { ...def.shape, fillInsetTop: v || undefined } })" />
+          <DragNumber :model-value="def.shape.fillInsetTop ?? 0" :min="0" :max="60" :step="1" unit="px" :speed="1"
+            @update:model-value="v => config.patchDefault({ shape: { ...def.shape, fillInsetTop: v || undefined } })" />
+        </div>
+        <div class="sub-divider">Segments</div>
+        <div class="row">
+          <label class="ctrl-label">Enabled</label>
+          <input type="checkbox" :checked="def.shape.segmentFill?.enabled ?? false"
+            @change="e => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { segmentWidth: 8, gap: 2, angle: 90 }), enabled: (e.target as HTMLInputElement).checked } } })" />
+        </div>
+        <template v-if="def.shape.segmentFill?.enabled">
+          <div class="row">
+            <label class="ctrl-label">Width</label>
+            <BarSlider :model-value="def.shape.segmentFill?.segmentWidth ?? 8" :min="2" :max="40" :step="1" unit="px"
+              track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
+              @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, gap: 2, angle: 90 }), segmentWidth: v } } })" />
+            <DragNumber :model-value="def.shape.segmentFill?.segmentWidth ?? 8" :min="2" :max="40" :step="1" unit="px" :speed="1"
+              @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, gap: 2, angle: 90 }), segmentWidth: v } } })" />
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Gap</label>
+            <BarSlider :model-value="def.shape.segmentFill?.gap ?? 2" :min="1" :max="20" :step="1" unit="px"
+              track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
+              @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, segmentWidth: 8, angle: 90 }), gap: v } } })" />
+            <DragNumber :model-value="def.shape.segmentFill?.gap ?? 2" :min="1" :max="20" :step="1" unit="px" :speed="1"
+              @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, segmentWidth: 8, angle: 90 }), gap: v } } })" />
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Angle</label>
+            <BarSlider :model-value="def.shape.segmentFill?.angle ?? 90" :min="0" :max="180" :step="1" unit="°"
+              track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
+              @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, segmentWidth: 8, gap: 2 }), angle: v } } })" />
+            <DragNumber :model-value="def.shape.segmentFill?.angle ?? 90" :min="0" :max="180" :step="1" unit="°" :speed="1"
+              @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, segmentWidth: 8, gap: 2 }), angle: v } } })" />
+          </div>
+          <p class="hint">Set Start + End Height for growing segments. Overrides Angle when both &gt; 0.</p>
+          <div class="row">
+            <label class="ctrl-label">Start H</label>
+            <BarSlider :model-value="def.shape.segmentFill?.startHeight ?? 0" :min="0" :max="def.height" :step="1" unit="px"
+              track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
+              @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, segmentWidth: 8, gap: 2 }), startHeight: v || undefined } } })" />
+            <DragNumber :model-value="def.shape.segmentFill?.startHeight ?? 0" :min="0" :max="def.height" :step="1" unit="px" :speed="1"
+              @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, segmentWidth: 8, gap: 2 }), startHeight: v || undefined } } })" />
+          </div>
+          <div class="row">
+            <label class="ctrl-label">End H</label>
+            <BarSlider :model-value="def.shape.segmentFill?.endHeight ?? 0" :min="0" :max="def.height" :step="1" unit="px"
+              track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
+              @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, segmentWidth: 8, gap: 2 }), endHeight: v || undefined } } })" />
+            <DragNumber :model-value="def.shape.segmentFill?.endHeight ?? 0" :min="0" :max="def.height" :step="1" unit="px" :speed="1"
+              @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, segmentWidth: 8, gap: 2 }), endHeight: v || undefined } } })" />
+          </div>
+        </template>
         <div class="sub-divider">Shadow</div>
         <ShadowEditor :model-value="fillShadow" @update:model-value="setFillShadow" />
       </div>

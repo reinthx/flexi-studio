@@ -38,7 +38,8 @@ export interface TextureFill {
   repeat: 'repeat' | 'no-repeat' | 'stretch' | 'paginate'
   opacity: number    // 0–1
   blendMode: string  // CSS mix-blend-mode value
-  tintColor?: string // optional color to tint the texture (for presets)
+  tintColor?: string    // optional solid color tint (multiply blend)
+  tintGradient?: GradientFill  // optional gradient tint (multiply blend, overrides tintColor)
   pagination?: TexturePagination
 }
 
@@ -127,6 +128,15 @@ export interface BarShape {
   outline: BarOutline
   shadow?: BarShadow          // background bar shadow
   fillShadow?: BarShadow      // fill bar shadow (polish effect)
+  fillInsetTop?: number       // px — push fill down from top (name-above-bar layout)
+  segmentFill?: {
+    enabled: boolean
+    segmentWidth: number      // px — width of each filled segment (default 8)
+    gap: number               // px — gap between segments (default 2)
+    angle?: number            // degrees — 90 = vertical cuts (left-to-right bar), 0 = horizontal cuts (rising bar), between = skewed (default 90)
+    startHeight?: number      // px — height of first (leftmost) segment; enables growing-segment mode
+    endHeight?: number        // px — height of last (rightmost) segment; enables growing-segment mode
+  }
 }
 
 // ─── Label ────────────────────────────────────────────────────────────────────
@@ -199,9 +209,11 @@ export interface LabelField {
   // Per-field style overrides (optional — falls back to BarLabel globals when absent)
   font?: string                           // override global label font
   fontSize?: number                       // px — override global label size (0 = use global)
-  colorMode?: 'custom' | 'job' | 'role' | 'self'  // color override mode (absent = no override)
+  colorMode?: 'custom' | 'job' | 'role'   // color override mode (absent = no override)
   color?: string                          // used when colorMode === 'custom'
-  selfColor?: string                      // color applied only when bar.isSelf === true (colorMode === 'self')
+  gradient?: { type: 'linear' | 'radial'; angle?: number; stops: Array<{ color: string; position: number }> }  // custom: full stops; job/role: stops[1].color = Color 2 (Color 1 from StyleOverrides dynamically)
+  selfMode?: boolean                      // when true, override color with Self override color when bar.isSelf === true (combinable with colorMode)
+  selfGradient?: { type: 'linear' | 'radial'; angle?: number; stops: Array<{ color: string; position: number }> }  // self gradient: stops[1].color = Color 2; Color 1 from StyleOverrides.self dynamically
   maxWidth?: number                       // px — cap field width (0 = auto, uses 100% - padding*2)
 }
 
@@ -284,10 +296,67 @@ export interface StyleOverrides {
 
 // ─── Rank Indicator ───────────────────────────────────────────────────────────
 
+export interface RankGlow {
+  enabled: boolean
+  color: string
+  blur: number
+}
+
+export interface RankCrown {
+  enabled: boolean
+  icon: string      // emoji or text fallback
+  imageUrl: string  // base64 data URL or https URL (overrides icon when set)
+  size: number      // px
+  offsetX: number
+  offsetY: number
+  rotation: number  // degrees (0 = upright, positive = clockwise)
+  hAnchor: 'left' | 'right' | 'center'
+  vAnchor: 'top' | 'middle' | 'bottom'
+}
+
+export interface RankNameStyle {
+  enabled: boolean
+  gradient?: {
+    type: 'linear' | 'radial'
+    angle: number
+    stops: Array<{ color: string; position: number }>
+  }
+}
+
+export interface Rank1IconStyle {
+  enabled: boolean
+  glow?: {
+    enabled: boolean
+    color: string
+    blur: number
+  }
+  shadow?: {
+    enabled: boolean
+    color: string
+    blur: number   // px — applied as drop-shadow glow
+  }
+  bgShape?: {
+    enabled: boolean
+    shape: 'circle' | 'square' | 'rounded' | 'diamond'
+    color: string
+    size: number    // px
+    opacity: number // 0–1
+    offsetX: number
+    offsetY: number
+  }
+}
+
 export interface RankIndicatorConfig {
   rank1Enabled: boolean
+  rank1StyleEnabled?: boolean  // when false, skip bar fill override (default true)
   rank1Style: Partial<BarStyle>
   showNumbers: boolean  // render {rank} token on all bars, not just #1
+  rank1HeightIncrease: number  // percentage increase (e.g., 4 = +4%)
+  rank1ShowCrown: boolean  // show crown icon on rank 1
+  rank1Crown: RankCrown
+  rank1Glow: RankGlow
+  rank1NameStyle?: RankNameStyle
+  rank1IconStyle?: Rank1IconStyle  // icon overrides for rank 1 bar
 }
 
 // ─── Header / Footer ──────────────────────────────────────────────────────────

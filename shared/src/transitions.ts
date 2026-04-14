@@ -26,6 +26,8 @@ export interface BarFrame {
   maxHit: string
   /** 0–1 for enter/exit fade */
   alpha: number
+  /** Rank in the list (1 = top) */
+  rank?: number
 }
 
 export interface Frame {

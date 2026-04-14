@@ -56,6 +56,23 @@ export interface FontSource {
 
 const FONT_SOURCES_KEY = 'act-flexi-font-sources'
 const LEGACY_URL_KEY = 'act-flexi-custom-font-url'
+const FONT_FAVORITES_KEY = 'act-flexi-font-favorites'
+
+export function getFontFavorites(): string[] {
+  try {
+    const raw = localStorage.getItem(FONT_FAVORITES_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
+}
+
+export function toggleFontFavorite(font: string): string[] {
+  const favs = getFontFavorites()
+  const idx = favs.indexOf(font)
+  if (idx >= 0) favs.splice(idx, 1)
+  else favs.push(font)
+  try { localStorage.setItem(FONT_FAVORITES_KEY, JSON.stringify(favs)) } catch {}
+  return favs
+}
 
 function makeId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
