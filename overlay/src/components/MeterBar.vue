@@ -9,6 +9,8 @@ import { MOCK_NAMES } from '@shared/overlayBridge'
 import { formatValue } from '@shared/formatValue'
 import type { FormatType } from '@shared/formatValue'
 
+const emit = defineEmits<{ click: [] }>()
+
 const props = defineProps<{
   bar: BarData
   styleConfig: BarStyle
@@ -128,7 +130,7 @@ function fieldText(template: string): string {
 </script>
 
 <template>
-  <div v-if="isValid" :style="wrapperStyle">
+  <div v-if="isValid" :style="wrapperStyle" @click="emit('click')" style="cursor:pointer">
     <!-- Shadow (z:0) — directional clip prevents opposite-direction bleed -->
     <div :style="bgShadowDirectionalClip">
       <div :style="bgShadowStyle">

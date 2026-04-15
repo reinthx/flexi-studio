@@ -14,10 +14,21 @@ const liveData = useLiveDataStore()
 const config   = useConfigStore()
 const presets  = usePresetsStore()
 
-const isOverlayMode = computed(() => {
+type Route = 'overlay' | 'editor' | 'breakdown'
+
+function resolveRoute(): Route {
   const hash = window.location.hash.slice(1).toLowerCase() || '/'
-  return hash !== '/editor' && hash !== 'editor'
-})
+  if (hash === '/editor' || hash === 'editor') return 'editor'
+  if (hash === '/breakdown' || hash === 'breakdown') return 'breakdown'
+  return 'overlay'
+}
+
+const currentRoute = ref<Route>(resolveRoute())
+
+// Keep overlay mode alias for all existing v-if/v-else references
+const isOverlayMode = computed(() => currentRoute.value === 'overlay')
+
+const BreakdownPopout = defineAsyncComponent(() => import('../../overlay/src/components/AbilityBreakdownPopout.vue'))
 
 const OverlayMeter = defineAsyncComponent(() => import('../../overlay/src/components/MeterView.vue'))
 
@@ -37,7 +48,7 @@ function applyLive() {
 }
 
 onMounted(async () => {
-  if (isOverlayMode.value) return
+  if (currentRoute.value !== 'editor') return
   liveData.setProfileGetter(() => config.profile)
   liveData.start()
   const hasData = await config.load()
@@ -49,7 +60,7 @@ onMounted(async () => {
   restoreDirectoryFonts().catch(() => {})
 })
 onUnmounted(() => {
-  if (!isOverlayMode.value) liveData.stop()
+  if (currentRoute.value === 'editor') liveData.stop()
 })
 
 // ── Right sidebar sections ────────────────────────────────────────────────────
@@ -91,6 +102,9 @@ const globalBadge = computed(() => {
   <div v-if="isOverlayMode" class="overlay-mode">
     <OverlayMeter />
   </div>
+
+  <!-- Breakdown Popout -->
+  <BreakdownPopout v-else-if="currentRoute === 'breakdown'" />
 
   <!-- Editor Mode -->
   <div v-else class="editor-root">

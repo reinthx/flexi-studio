@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useLiveDataStore } from '../stores/liveData'
 import MeterBar from './MeterBar.vue'
 import MeterHeader from './MeterHeader.vue'
@@ -7,7 +7,7 @@ import type { BarStyle, TabConfig } from '@shared/configSchema'
 import { resolveBarStyle } from '@shared/styleResolver'
 import { buildFillCss } from '@shared/cssBuilder'
 import { loadCustomFont } from '@shared/googleFonts'
-import { ref, nextTick } from 'vue'
+import { nextTick } from 'vue'
 import ScrollableBarsWrapper from '@shared/components/ScrollableBarsWrapper.vue'
 
 const store = useLiveDataStore()
@@ -77,6 +77,17 @@ function togglePin() {
 function toggleMergePets() {
   const newVal = !g.value.mergePets
   store.setMergePets(newVal)
+}
+
+const selectedCombatant = ref<string | null>(null)
+function openAbilityBreakdown(name: string) {
+  localStorage.setItem('flexi-breakdown-init', name)
+  const url = new URL(window.location.href)
+  url.hash = '/breakdown'
+  window.open(url.toString(), 'flexi-breakdown', 'width=520,height=560,resizable=yes')
+  // Send encounter-aware data (respects viewingPull) with combatant pre-selected
+  store.broadcastForCombatant(name)
+  selectedCombatant.value = null
 }
 
 const bgStyle = computed(() => {
@@ -208,6 +219,7 @@ onUnmounted(() => {
           :value-format="g.valueFormat"
           :bar-index="bar.barIndex"
           :rank1-config="bar.isRank1 && g.rankIndicator?.rank1Enabled ? g.rankIndicator : undefined"
+          @click="openAbilityBreakdown(bar.name)"
         />
       </ScrollableBarsWrapper>
     </div>

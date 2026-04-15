@@ -469,6 +469,46 @@ export interface EncounterSnapshot {
   [key: string]: string
 }
 
+// Per-ability aggregated stats for one combatant, built from LogLine events (types 21/22).
+// Keyed by abilityId within a CombatantAbilityData map.
+export interface AbilityStats {
+  abilityId: string
+  abilityName: string
+  totalDamage: number
+  hits: number
+  maxHit: number
+  minHit: number
+}
+
+// [combatantName][abilityId] → AbilityStats
+export type CombatantAbilityData = Record<string, AbilityStats>
+
+// DPS timeline: combatantName → damage totals per 3-second bucket (index = bucket #)
+// DPS for bucket i = timeline[name][i] / TIMELINE_BUCKET_SEC
+export type DpsTimeline = Record<string, number[]>
+export const TIMELINE_BUCKET_SEC = 3
+
+export interface HpSample {
+  t: number  // ms since pull start
+  hp: number // 0–1 fraction
+}
+
+export interface HitRecord {
+  t: number           // ms since pull start
+  type: 'dmg' | 'heal'
+  abilityName: string
+  sourceName: string
+  amount: number
+}
+
+export interface DeathRecord {
+  targetName: string
+  targetId: string
+  timestamp: number  // ms since pull start
+  hpSamples: HpSample[]
+  lastHits?: HitRecord[]  // damage/heals on this target in the 30s before death
+}
+
 export interface PullRecord {
   id: string
   timestamp: number
@@ -477,6 +517,14 @@ export interface PullRecord {
   duration: string
   combatants: CombatantSnapshot[]
   encounter: EncounterSnapshot
+  // Populated from LogLine parsing. Optional: absent on records loaded from older sessions.
+  abilityData?: Record<string, CombatantAbilityData>
+  dpsTimeline?: DpsTimeline    // damage dealt per combatant over time
+  hpsTimeline?: DpsTimeline    // heals dealt per combatant over time
+  dtakenTimeline?: DpsTimeline // damage received per combatant over time
+  damageTakenData?: Record<string, CombatantAbilityData>  // target name → per-ability received damage
+  deaths?: DeathRecord[]
+  combatantIds?: Record<string, string>  // combatant name → FFXIV object ID
 }
 
 // ─── Raw OverlayPlugin event shapes ───────────────────────────────────────────
@@ -486,6 +534,16 @@ export interface CombatDataEvent {
   isActive: 'true' | 'false'
   Encounter: Record<string, string>
   Combatant: Record<string, Record<string, string>>
+}
+
+// Fired by OverlayPlugin (modern mode only) for every network log line from FFXIV.
+// rawLine is the full pipe-delimited string; line is the pre-split array.
+// Relevant types for ability tracking: 21 (Ability), 22 (AOEAbility), 24 (DoT/HoT),
+// 25 (Death), 26 (GainsEffect), 30 (LosesEffect).
+export interface LogLineEvent {
+  type: 'LogLine'
+  rawLine: string
+  line: string[]
 }
 
 export interface ChangePrimaryPlayerEvent {

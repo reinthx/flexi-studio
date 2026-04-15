@@ -13,6 +13,7 @@ import type {
   ChangeZoneEvent,
   PartyChangedEvent,
   BroadcastMessageEvent,
+  LogLineEvent,
 } from './configSchema'
 
 export type OverlayEventMap = {
@@ -21,6 +22,8 @@ export type OverlayEventMap = {
   ChangeZone: ChangeZoneEvent
   PartyChanged: PartyChangedEvent
   BroadcastMessage: BroadcastMessageEvent
+  // Modern OverlayPlugin only — not available in legacy CEF mode
+  LogLine: LogLineEvent
 }
 
 type EventName = keyof OverlayEventMap

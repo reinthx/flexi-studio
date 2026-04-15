@@ -6,9 +6,10 @@ import App from './App.vue'
 import { getCustomFontsList, loadCustomFont, getGoogleFontsList, loadGoogleFont } from '@shared/googleFonts'
 import '@shared/animations.css'
 
-function getRoute(): 'overlay' | 'editor' {
+function getRoute(): 'overlay' | 'editor' | 'breakdown' {
   const hash = window.location.hash.slice(1).toLowerCase() || '/'
   if (hash === '/editor' || hash === 'editor') return 'editor'
+  if (hash === '/breakdown' || hash === 'breakdown') return 'breakdown'
   return 'overlay'
 }
 
@@ -16,7 +17,7 @@ async function init(): Promise<void> {
   await loadCommonJs()
 
   const route = getRoute()
-  if (route === 'overlay') {
+  if (route === 'overlay' || route === 'breakdown') {
     document.body.classList.add('is-overlay-mode')
     // Load custom fonts for overlay mode
     const customFonts = getCustomFontsList()
