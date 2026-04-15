@@ -1,5 +1,6 @@
-<script setup lang="ts">
-import { computed } from 'vue'
+﻿<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { useElementSize } from '@vueuse/core'
 import type { BarStyle, Orientation, BarLabel } from '@shared/configSchema'
 import { useBarStyles } from '@shared/useBarStyles'
 import type { BarData } from '@shared/useBarStyles'
@@ -22,6 +23,9 @@ const props = defineProps<{
   colorOverrides?: { byRole: Record<string, any>; byJob: Record<string, any>; byRoleEnabled?: Record<string, boolean>; byJobEnabled?: Record<string, boolean>; self?: { fill?: { color?: string } }; selfEnabled?: boolean }
 }>()
 
+const barEl = ref<HTMLElement | null>(null)
+const { width: barWidth } = useElementSize(barEl)
+
 const {
   shapeCss, isClipped, dims,
   outlineTarget, outlineCss,
@@ -36,9 +40,9 @@ const {
   iconOutlineStyle, iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
   iconFallback,
   rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, isRank1,
-} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, () => props.colorOverrides)
+} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, () => props.colorOverrides, () => barWidth.value)
 
-// ── Wrapper (editor-specific: flex sizing, outline on wrapper) ──────────────
+// â”€â”€ Wrapper (editor-specific: flex sizing, outline on wrapper) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const wrapperStyle = computed(() => {
   const baseHeight = parseFloat(String(dims.value.height)) || 28
   const adjustedHeight = baseHeight + rank1HeightAdjustment.value
@@ -59,7 +63,7 @@ const wrapperStyle = computed(() => {
   }
 })
 
-// ── Icon source (supports custom icons in editor) ───────────────────────────
+// â”€â”€ Icon source (supports custom icons in editor) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const iconSrc = computed(() => {
   const custom = props.bar.job && (props.styleConfig as any)._customIcons?.[props.bar.job]
   return custom || getJobIconSrc(props.bar.job)
@@ -115,9 +119,9 @@ const tokens = computed(() => ({
 </script>
 
 <template>
-  <!-- Outer: size/opacity/overflow — no clip-path so label is never cut -->
-  <div :style="wrapperStyle">
-    <!-- Shadow (z:0) — directional clip prevents opposite-direction bleed -->
+  <!-- Outer: size/opacity/overflow â€” no clip-path so label is never cut -->
+  <div ref="barEl" :style="wrapperStyle">
+    <!-- Shadow (z:0) â€” directional clip prevents opposite-direction bleed -->
     <div :style="bgShadowDirectionalClip">
       <div :style="bgShadowStyle">
         <div v-if="isClipped" :style="bgShadowSourceStyle" />
@@ -164,7 +168,7 @@ const tokens = computed(() => ({
       </div>
     </template>
 
-    <!-- Icon inline — standalone absolutely positioned (not separateRow) -->
+    <!-- Icon inline â€” standalone absolutely positioned (not separateRow) -->
     <template v-if="showIcon && !separateRow">
       <div :style="iconInlineStyle">
         <template v-if="iconConfig.bgShape.enabled">

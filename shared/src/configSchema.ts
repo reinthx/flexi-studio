@@ -215,6 +215,9 @@ export interface LabelField {
   selfMode?: boolean                      // when true, override color with Self override color when bar.isSelf === true (combinable with colorMode)
   selfGradient?: { type: 'linear' | 'radial'; angle?: number; stops: Array<{ color: string; position: number }> }  // self gradient: stops[1].color = Color 2; Color 1 from StyleOverrides.self dynamically
   maxWidth?: number                       // px — cap field width (0 = auto, uses 100% - padding*2)
+  autoRotation?: boolean                  // when true, auto-rotate field to keep it on top of the bar (only for horizontal bars with vertical offset, and when rotation is not manually set)
+  autoRotationRatio?: number           // width ratio for auto-rotation calc (default 100)
+  rotation?: number                    // degrees (0 = no rotation, 0-360)
 }
 
 export interface BarLabel {

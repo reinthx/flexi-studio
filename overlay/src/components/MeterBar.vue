@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed } from 'vue'
 import type { BarStyle, Orientation, BarLabel } from '@shared/configSchema'
 import { useBarStyles } from '@shared/useBarStyles'
@@ -37,7 +37,7 @@ const {
   iconOutlineStyle, iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
   iconFallback,
   rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, isRank1,
-} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config)
+} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, undefined, () => props.barWidth)
 
 const isValid = computed(() => {
   const sc = props.styleConfig
@@ -62,7 +62,7 @@ const wrapperStyle = computed(() => {
   }
 })
 
-// ── Blur names ──────────────────────────────────────────────────────────────
+// â”€â”€ Blur names â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const displayName = computed(() => {
   // if (props.blurName && MOCK_NAMES.length > 0) {
   //   return MOCK_NAMES[Math.floor(Math.random() * MOCK_NAMES.length)]
@@ -77,7 +77,7 @@ const blurStyle = computed(() => {
   return undefined
 })
 
-// ── Tokens / labels ─────────────────────────────────────────────────────────
+// â”€â”€ Tokens / labels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Parses "SkillName 23740" or just "23740" - splits into name + formatted value
 const maxHitName = computed(() => {
   const raw = props.bar.maxHit ?? ''
@@ -131,7 +131,7 @@ function fieldText(template: string): string {
 
 <template>
   <div v-if="isValid" :style="wrapperStyle" @click="emit('click')" style="cursor:pointer">
-    <!-- Shadow (z:0) — directional clip prevents opposite-direction bleed -->
+    <!-- Shadow (z:0) â€” directional clip prevents opposite-direction bleed -->
     <div :style="bgShadowDirectionalClip">
       <div :style="bgShadowStyle">
         <div v-if="isClipped" :style="bgShadowSourceStyle" />
@@ -178,7 +178,7 @@ function fieldText(template: string): string {
       </div>
     </template>
 
-    <!-- Icon inline — standalone absolutely positioned (not separateRow) -->
+    <!-- Icon inline â€” standalone absolutely positioned (not separateRow) -->
     <template v-if="showIcon && !iconConfig.separateRow">
       <div :style="iconInlineStyle">
         <template v-if="iconConfig.bgShape.enabled">

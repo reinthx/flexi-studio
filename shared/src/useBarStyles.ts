@@ -4,12 +4,13 @@
  * Extracts all the duplicated computed-style logic (shape, shadow, fill, label,
  * icon, outline) so both bar components stay in sync without copy-paste.
  */
-import { computed, toValue, type MaybeRefOrGetter } from 'vue'
+import { computed, useTemplateRef, onMounted, toValue, type MaybeRefOrGetter, watch } from 'vue'
 import type { BarStyle, LabelField, Orientation, GradientFill, Role, Profile } from './configSchema'
 import { buildFillCss, buildShapeCss, buildOutlineCss, buildDropShadowFilter } from './cssBuilder'
 import { getJobIconSrc, getJobInfo } from './jobMap'
 import { resolveBarDimensions } from './barDimensions'
 import { JOB_COLORS } from './presets'
+import { useElementSize, useWindowSize } from '@vueuse/core'
 
 /** Sample a color from a gradient at position t (0–1) by lerping between stops. */
 function sampleGradientColor(g: GradientFill, t: number): string {
@@ -34,6 +35,7 @@ function lerpColor(a: string, b: string, t: number): string {
   const bl = Math.round(pa[2] + (pb[2] - pa[2]) * t)
   return `rgb(${r},${g},${bl})`
 }
+
 
 function parseHex(c: string): [number, number, number] {
   const hex = c.replace('#', '')
@@ -104,7 +106,7 @@ const DEFAULT_LABEL = {
 }
 
 /** Compute the CSS position style for a single absolutely-positioned label field. */
-function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number): Record<string, string | number> {
+function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number, styleConfig: BarStyle, barWidth: number): Record<string, string | number> {
   const ox = field.offsetX ?? 0
   const oy = field.offsetY ?? 0
   const extraPad = outlineWidth
@@ -145,7 +147,29 @@ function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number
     yTransform = `translateY(calc(-50% + ${oy}px))`
   }
 
-  const transform = [xTransform, yTransform].filter(Boolean).join(' ')
+  const transformParts = [xTransform, yTransform].filter(Boolean)
+  
+  // Determine rotation: calculate angle from startHeight/endHeight
+  let finalRotation = 0
+  if (field.rotation) {
+    finalRotation = field.rotation
+  } else if (field.autoRotation && styleConfig?.shape?.segmentFill?.enabled) {
+    const sf = styleConfig.shape.segmentFill
+    const sh = sf.startHeight ?? 0
+    const eh = sf.endHeight ?? 0
+    if (sh && eh && sh !== eh) {
+      const ratio = barWidth > 0 ? barWidth : 1
+      const deltaH = Math.abs(eh - sh)
+      finalRotation = 360 - (Math.atan(deltaH / ratio) * (180 / Math.PI))
+    }
+  }
+  
+  if (finalRotation) {
+    transformParts.push(`rotate(${finalRotation}deg)`)
+    style.overflow = 'hidden'
+  }
+  
+  const transform = transformParts.join(' ')
   if (transform) style.transform = transform
 
   return style
@@ -174,43 +198,59 @@ const DEFAULT_STYLE: BarStyle = {
 
 export { DEFAULT_ICON_CONFIG, DEFAULT_LABEL, DEFAULT_SHAPE, DEFAULT_STYLE }
 
+
 /**
- * Generates a base64-encoded SVG mask where N bottom-anchored rectangles grow
- * linearly in height from startH to endH (px), all within a barH-px tall viewBox.
- * preserveAspectRatio="none" lets the SVG stretch horizontally to any bar width
- * while keeping the heights accurate.
+ * Generates a triangle shape mask using Start H and End H.
+ * Creates a single right-angled triangle: left edge at startH, right edge at endH.
  */
-function buildGrowingSegmentMask(
+function buildTriangleMask(
+  segW: number, gap: number,
+  startH: number, endH: number,
+  barH: number,
+): { url: string } {
+  const s = Math.max(2, startH)
+  const e = Math.max(2, endH)
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 ${barH}" preserveAspectRatio="none"><polygon points="0,${barH} 100,${barH} 100,${barH - e} 0,${barH - s}"/></svg>`
+  return { url: `url("data:image/svg+xml;base64,${btoa(svg)}")` }
+}
+
+
+/**
+ * Generates segment overlay for triangle bar.
+ */
+function buildSegmentsMask(
   segW: number, gap: number,
   startH: number, endH: number,
   barH: number,
   angle: number = 90,
-  n: number = 80,
-): { url: string; maskWidth: number } {
+  maxSegments: number = 40,
+): { url: string; totalWidth: number } {
   const pitch = segW + gap
-  const clamp = (h: number) => Math.max(1, Math.min(h, barH))
+  const clamp = (h: number) => Math.max(2, Math.min(h, barH - 2))
   const s = clamp(startH)
   const e = clamp(endH)
   const rad = (angle * Math.PI) / 180
   const cotA = angle === 90 ? 0 : Math.cos(rad) / Math.sin(rad)
-  // Extra horizontal space needed so skewed tops don't get clipped
   const extraW = Math.ceil(Math.abs(e * cotA))
+
+  const n = maxSegments
   const totalW = n * pitch + extraW
+
   const shapes = Array.from({ length: n }, (_, i) => {
     const t = n > 1 ? i / (n - 1) : 1
     const h = s + (e - s) * t
-    const y = (barH - h).toFixed(2)
+    const y = barH - h
     const x0 = i * pitch
     const x1 = x0 + segW
     if (cotA === 0) {
-      return `<rect x="${x0}" y="${y}" width="${segW}" height="${h.toFixed(2)}"/>`
+      return `<rect x="${x0}" y="${y}" width="${segW}" height="${h}"/>`
     }
     const skew = h * cotA
-    // Parallelogram: bottom-left, bottom-right, top-right, top-left
-    return `<polygon points="${x0},${barH} ${x1},${barH} ${(x1 + skew).toFixed(2)},${y} ${(x0 + skew).toFixed(2)},${y}"/>`
+    return `<polygon points="${x0},${barH} ${x1},${barH} ${x1 + skew},${y} ${x0 + skew},${y}"/>`
   }).join('')
+
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalW} ${barH}" preserveAspectRatio="none"><g fill="white">${shapes}</g></svg>`
-  return { url: `url("data:image/svg+xml;base64,${btoa(svg)}")`, maskWidth: totalW }
+  return { url: `url("data:image/svg+xml;base64,${btoa(svg)}")`, totalWidth: totalW }
 }
 
 export function useBarStyles(
@@ -221,12 +261,19 @@ export function useBarStyles(
   tabLabelConfig: MaybeRefOrGetter<BarLabel | undefined> = () => undefined,
   rank1Config?: MaybeRefOrGetter<{ rank1HeightIncrease?: number; rank1Glow?: { enabled: boolean; color: string; blur: number }; rank1ShowCrown?: boolean; rank1Crown?: { enabled: boolean; icon: string; imageUrl?: string; size: number; offsetX: number; offsetY: number; rotation?: number; hAnchor: 'left' | 'right' | 'center'; vAnchor: 'top' | 'middle' | 'bottom' }; rank1NameStyle?: { enabled: boolean; gradient?: { type: 'linear' | 'radial'; angle: number; stops: Array<{ color: string; position: number }> } }; rank1IconStyle?: { enabled: boolean; glow?: { enabled: boolean; color: string; blur: number }; shadow?: { enabled: boolean; color: string; blur: number }; bgShape?: { enabled: boolean; shape: 'circle' | 'square' | 'rounded' | 'diamond'; color: string; size: number; opacity: number; offsetX: number; offsetY: number } } } | undefined>,
   colorOverrides?: MaybeRefOrGetter<Profile['overrides'] | undefined>,
+  barWidth?: MaybeRefOrGetter<number>,
 ) {
   const sc = () => toValue(styleConfig) ?? DEFAULT_STYLE
   const b = () => toValue(bar)
   const ori = () => toValue(orientation)
   const tabLabel = () => toValue(tabLabelConfig)
   const getColorOverrides = () => toValue(colorOverrides)
+  const { width: windowWidth } = useWindowSize()
+  const getBarWidth = () => {
+    const w = toValue(barWidth)
+    if (w !== undefined && w > 0) return w
+    return windowWidth.value || 0
+  }
 
   // ── Shape ─────────────────────────────────────────────────────────────────
   const shapeCss = computed(() => buildShapeCss(sc().shape ?? DEFAULT_SHAPE))
@@ -529,13 +576,15 @@ export function useBarStyles(
         if (sh && eh) {
           const barH = sc().height ?? 28
           const a = sf.angle ?? 90
-          const { url: maskUrl } = buildGrowingSegmentMask(w, g, sh, eh, barH, a)
-          // Stretch to 100% so all segments (startH → endH) always fill the bar
-          // regardless of bar width. Width/Gap control the visual density ratio.
+          const { url: maskUrl } = buildTriangleMask(w, g, sh, eh, barH)
+          const s = sh
+          const e = eh
+          const ePct = ((e * frac) / barH) * 100
+          const triClip = `polygon(0% 100%, 100% 100%, 100% ${100 - ePct}%)`
+          const segMask = `repeating-linear-gradient(to right, black 0px, black ${w}px, transparent ${w}px, transparent ${w + g}px)`
           return {
-            maskImage: maskUrl, WebkitMaskImage: maskUrl,
-            maskSize: '100% 100%', WebkitMaskSize: '100% 100%',
-            maskRepeat: 'no-repeat' as const, WebkitMaskRepeat: 'no-repeat' as const,
+            clipPath: triClip, WebkitClipPath: triClip,
+            maskImage: segMask, WebkitMaskImage: segMask,
           }
         }
         const a = sf.angle ?? 90
@@ -614,7 +663,8 @@ export function useBarStyles(
     const isSelf = b().isSelf ?? false
     
     return enabled.map((f, index) => {
-      const style = calcFieldStyle(f, padding, outlineWidth)
+      const bw = getBarWidth()
+      const style = calcFieldStyle(f, padding, outlineWidth, sc(), bw)
       let fieldGradientStyle: string | undefined
 
       // Apply per-field color override based on colorMode

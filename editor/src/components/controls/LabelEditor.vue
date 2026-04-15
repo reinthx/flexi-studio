@@ -440,12 +440,31 @@ function insertToken(fieldId: string, token: string) {
             <span class="sm-hint">Empty = inherit global font</span>
           </div>
 
-          <!-- Size -->
+          <!-- Size + Rotation -->
           <div class="sm-row">
             <label class="sm-label">Size</label>
             <DragNumber :model-value="getStyleModalField()!.fontSize ?? 0" :min="0" :max="72" unit="px" :speed="1"
               @update:model-value="v => patchModalField({ fontSize: v > 0 ? v : undefined })" />
             <span class="sm-hint-inline">0 = global</span>
+          </div>
+          <div class="sm-row">
+            <label class="sm-label" style="margin-left:12px">Rotation</label>
+            <DragNumber :model-value="getStyleModalField()!.rotation ?? 0" :min="0" :max="360" unit="°" :speed="1"
+              @update:model-value="v => patchModalField({ rotation: v > 0 ? v : undefined })" />
+            <span class="sm-hint-inline">0 = none</span>
+          </div>
+          <div class="sm-row">
+            <label class="sm-label">
+              <input type="checkbox" :checked="!!getStyleModalField()!.autoRotation"
+                @change="e => patchModalField({ autoRotation: (e.target as HTMLInputElement).checked ? true : undefined })" />
+              Match Bar Angle
+            </label>
+          </div>
+          <div v-if="getStyleModalField()!.autoRotation" class="sm-row">
+            <label class="sm-label">Width Ratio</label>
+            <DragNumber :model-value="getStyleModalField()!.autoRotationRatio ?? 0" :min="10" :max="500" :step="10" unit="" :speed="5"
+              @update:model-value="v => patchModalField({ autoRotationRatio: v > 0 ? v : undefined })" />
+            <span class="sm-hint-inline">0 = auto</span>
           </div>
 
           <!-- Color mode -->
@@ -731,7 +750,7 @@ function insertToken(fieldId: string, token: string) {
 .style-modal {
   position: fixed; z-index: 9999;
   width: 320px;
-  height: 370px;
+  height: 390px;
   background: var(--bg-panel); border: 1px solid var(--border);
   border-radius: 6px; box-shadow: 0 8px 32px rgba(0,0,0,0.6);
   display: flex; flex-direction: column; overflow: hidden;
