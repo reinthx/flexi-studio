@@ -166,6 +166,7 @@ function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number
   
   if (finalRotation) {
     transformParts.push(`rotate(${finalRotation}deg)`)
+    style.transformOrigin = '0% 100%'
     style.overflow = 'hidden'
   }
   
