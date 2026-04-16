@@ -200,12 +200,20 @@ function fieldText(template: string): string {
     <div :style="labelStyle">
       <template v-for="field in processedFields" :key="field.id">
         <div :style="[field.style, blurStyle ? { maxWidth: 'none' } : {}]">
-          <span v-if="labelOutlineShadow" :style="{ position:'absolute', inset:0, color:'transparent', textShadow:labelOutlineShadow, overflow:'visible', whiteSpace:'nowrap', pointerEvents:'none', ...(field.template.includes('{name}') && blurStyle ? { fontFamily: blurStyle.fontFamily, opacity: blurStyle.opacity, transform: blurStyle.transform } : {}) }">{{ fieldText(field.template) }}</span>
+          <span v-if="labelOutlineShadow" :style="{
+            position:'absolute', inset:0,
+            color:'transparent',
+            textShadow: labelOutlineShadow,
+            overflow:'visible', whiteSpace:'nowrap',
+            pointerEvents:'none',
+            ...(field.template.includes('{name}') ? blurStyle : undefined)
+          }">{{ fieldText(field.template) }}</span>
           <span :style="{
-            color: field.style.color,
-            overflow:'hidden', textOverflow:'ellipsis', minWidth:0,
+            minWidth: 0,
+            overflow:'hidden', textOverflow:'ellipsis',
+            whiteSpace:'nowrap',
             filter: textStyle,
-            ...(field.template.includes('{name}') && isRank1 ? rank1NameGradientStyle : {
+            ...(field.template.includes('{name}') && isRank1 ? { ...gradientTextStyle, ...rank1NameGradientStyle } : {
               ...gradientTextStyle,
               background: field.gradientStyle,
               backgroundClip: field.gradientStyle ? 'text' : undefined,

@@ -52,15 +52,15 @@ function updateTexture(t: TextureFill) {
 }
 
 function updateRank1GradientColor1(c: string) {
-  const stops = g.value.rankIndicator?.rank1NameStyle?.gradient?.stops
-  const color2 = stops?.[1]?.color ?? '#FFA500'
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { ...g.value.rankIndicator?.rank1NameStyle, gradient: { ...g.value.rankIndicator?.rank1NameStyle?.gradient, stops: [{ color: c, position: 0 }, { color: color2, position: 1 }] } } } })
+  const grad = g.value.rankIndicator?.rank1NameStyle?.gradient
+  const color2 = grad?.stops?.[1]?.color ?? '#FFA500'
+  patchRank1NameGradient({ stops: [{ color: c, position: 0 }, { color: color2, position: 1 }] })
 }
 
 function updateRank1GradientColor2(c: string) {
-  const stops = g.value.rankIndicator?.rank1NameStyle?.gradient?.stops
-  const color1 = stops?.[0]?.color ?? '#FFD700'
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { ...g.value.rankIndicator?.rank1NameStyle, gradient: { ...g.value.rankIndicator?.rank1NameStyle?.gradient, stops: [{ color: color1, position: 0 }, { color: c, position: 1 }] } } } })
+  const grad = g.value.rankIndicator?.rank1NameStyle?.gradient
+  const color1 = grad?.stops?.[0]?.color ?? '#FFD700'
+  patchRank1NameGradient({ stops: [{ color: color1, position: 0 }, { color: c, position: 1 }] })
 }
 
 function getRank1Color(): string {
@@ -102,8 +102,10 @@ function onRank1Color2Change(c: string) {
   }
 }
 
-function patchRank1Style(style: Partial<BarStyle>) {
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1Style: { ...g.value.rankIndicator?.rank1Style, ...style } } })
+function patchRank1NameGradient(p: Partial<{ type: string; angle: number; stops: any[] }>) {
+  const ns = g.value.rankIndicator?.rank1NameStyle
+  const grad = ns?.gradient
+  patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { ...ns, gradient: { type: p.type ?? grad?.type ?? 'linear', angle: p.angle ?? grad?.angle ?? 90, stops: p.stops ?? grad?.stops ?? [] } } } })
 }
 
 function patchCrown(fields: Record<string, any>) {
@@ -834,7 +836,7 @@ function onBrowseChange(e: Event) {
           <div class="row">
             <label class="ctrl-label">Type</label>
             <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1NameStyle?.gradient?.type ?? 'linear'"
-              @change="e => patch({ rankIndicator: { ...g.rankIndicator, rank1NameStyle: { ...g.rankIndicator?.rank1NameStyle, gradient: { ...g.rankIndicator?.rank1NameStyle?.gradient, type: ($event.target as HTMLSelectElement).value } } } })">
+              @change="e => patchRank1NameGradient({ type: (e.target as HTMLSelectElement).value })">
               <option value="linear">Linear</option>
               <option value="radial">Radial</option>
             </select>
@@ -842,7 +844,7 @@ function onBrowseChange(e: Event) {
           <div class="row">
             <label class="ctrl-label">Angle</label>
             <BarSlider :model-value="g.rankIndicator?.rank1NameStyle?.gradient?.angle ?? 90" :min="0" :max="360" :step="5" unit="°"
-              @update:model-value="v => patch({ rankIndicator: { ...g.rankIndicator, rank1NameStyle: { ...g.rankIndicator?.rank1NameStyle, gradient: { ...g.rankIndicator?.rank1NameStyle?.gradient, angle: v } } } })" />
+              @update:model-value="v => patchRank1NameGradient({ angle: v })" />
           </div>
           <div class="row">
             <label class="ctrl-label">Color 1</label>

@@ -116,6 +116,7 @@ function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number
   const style: Record<string, string | number> = {
     position: 'absolute',
     maxWidth: maxW,
+    minWidth: 0,
     overflow: 'visible',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -413,7 +414,7 @@ export function useBarStyles(
       ? `linear-gradient(${angle}deg, ${stops})`
       : `radial-gradient(circle, ${stops})`
     return {
-      backgroundImage: bg,
+      background: bg,
       backgroundClip: 'text',
       WebkitBackgroundClip: 'text',
       WebkitTextFillColor: 'transparent',
@@ -482,11 +483,28 @@ export function useBarStyles(
 
   const bgStyle = computed(() => {
     const insetTop = sc().shape?.fillInsetTop ?? 0
+    const sf = sc().shape?.segmentFill
+    const segMask = sf?.enabled ? (() => {
+      const w = sf.segmentWidth ?? 8
+      const g = sf.gap ?? 2
+      const a = sf.angle ?? 90
+      return { maskImage: `repeating-linear-gradient(${a}deg, black 0px, black ${w}px, transparent ${w}px, transparent ${w + g}px)`, WebkitMaskImage: `repeating-linear-gradient(${a}deg, black 0px, black ${w}px, transparent ${w}px, transparent ${w + g}px)` }
+    })() : {}
+    const triClip = (() => {
+      if (!sf?.enabled || !sf.startHeight || !sf.endHeight) return {}
+      const barH = sc().height ?? 28
+      const sPct = (sf.startHeight / barH) * 100
+      const ePct = (sf.endHeight / barH) * 100
+      const polygon = `polygon(0% 100%, 100% 100%, 100% ${100 - ePct}%, 0% ${100 - sPct}%)`
+      return { clipPath: polygon, WebkitClipPath: polygon }
+    })()
     return {
       position: 'absolute' as const,
       ...(insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }),
       ...(isTextureBg.value ? {} : buildFillCss(sc().bg, bi(), barHeightWithGap.value)),
       ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
+      ...segMask,
+      ...triClip,
     }
   })
 

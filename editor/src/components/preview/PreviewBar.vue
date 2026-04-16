@@ -189,13 +189,20 @@ const tokens = computed(() => ({
     <div :style="labelStyle">
       <template v-for="field in processedFields" :key="field.id">
         <div :style="field.style">
-          <span v-if="labelOutlineShadow" :style="{ position:'absolute', inset:0, color:'transparent', textShadow:labelOutlineShadow, overflow:'visible', whiteSpace:'nowrap', pointerEvents:'none' }">{{ renderTemplate(field.template, tokens) }}</span>
+          <span v-if="labelOutlineShadow" :style="{
+            position:'absolute', inset:0,
+            color:'transparent',
+            textShadow: labelOutlineShadow,
+            overflow:'visible', whiteSpace:'nowrap',
+            pointerEvents:'none',
+          }">{{ renderTemplate(field.template, tokens) }}</span>
           <span :style="{
+            minWidth: 0,
             overflow:'hidden',
             textOverflow:'ellipsis',
-            minWidth:0,
-            filter:textStyle,
-            ...(field.template.includes('{name}') && isRank1 ? rank1NameGradientStyle : {
+            whiteSpace:'nowrap',
+            filter: textStyle,
+            ...(field.template.includes('{name}') && isRank1 ? { ...gradientTextStyle, ...rank1NameGradientStyle } : {
               ...gradientTextStyle,
               background: field.gradientStyle,
               backgroundClip: field.gradientStyle ? 'text' : undefined,
