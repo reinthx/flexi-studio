@@ -38,6 +38,7 @@ import type {
   HpSample,
   HitRecord,
   DeathRecord,
+  CastEvent,
 } from '@shared'
 import { TIMELINE_BUCKET_SEC } from '@shared'
 import { formatValue } from '@shared'
@@ -51,6 +52,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
   const selfName = ref('')
   const zone = ref('')
   const partyNames = ref<Set<string>>(new Set())
+  const partyData = ref<{ id: number; name: string; inParty: boolean }[]>([])
   const frame = shallowRef<Frame | null>(null)
   const sessionPulls = ref<PullRecord[]>([])
   const viewingPull = ref<number | null>(null)  // null = live
@@ -74,6 +76,13 @@ export const useLiveDataStore = defineStore('liveData', () => {
   const hpSampleBuffer = new Map<string, HpSample[]>()
   // Rolling hit/heal event buffer per target (max 800 entries; snapshotted on death).
   const hitEventBuffer = new Map<string, HitRecord[]>()
+  // Rolling cast event buffer per combatant (includes pets, excludes player's chocobo).
+  const currentCastData = ref<Record<string, CastEvent[]>>({})
+
+  // Track resurrection events: player name -> resurrection timestamp (ms since pull start)
+  const resurrectTimes = ref<Record<string, number>>({})
+  // Track pending deaths awaiting resurrection (keyed by targetName for quick lookup)
+  const pendingDeathUpdates = new Map<string, number>()  // targetName -> death index in currentDeaths
 
   let pullStartTime = 0
 
@@ -110,17 +119,21 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const damageTakenData = pullIndex === null ? deepClone(currentDtakenData.value)       : deepClone(pull?.damageTakenData  ?? {})
     const deaths         = pullIndex === null ? deepClone(currentDeaths.value)            : deepClone(pull?.deaths           ?? [])
     const combatantIds   = pullIndex === null ? deepClone(currentCombatantIds.value)      : deepClone(pull?.combatantIds     ?? {})
+    const castData       = pullIndex === null ? deepClone(currentCastData.value)         : deepClone(pull?.castData         ?? {})
     const encounterDurationSec = pullIndex === null
       ? parseDurationToSec(frame.value?.encounterDuration ?? '')
       : parseInt(pull?.encounter?.['DURATION'] ?? '0', 10)
+    const timestamp = Date.now()
     breakdownChannel?.postMessage({
       type: 'encounterData',
+      timestamp,
       abilityData,
       dpsTimeline, hpsTimeline, dtakenTimeline,
-      damageTakenData, deaths, combatantIds,
+      damageTakenData, deaths, combatantIds, castData,
       selfName: selfName.value,
       blurNames: profile.value.global.blurNames ?? false,
       partyNames: Array.from(partyNames.value),
+      partyData: partyData.value.map(p => ({ id: p.id, name: p.name, inParty: p.inParty })),
       encounterDurationSec,
       pullIndex,
       selectedCombatant,
@@ -199,10 +212,24 @@ export const useLiveDataStore = defineStore('liveData', () => {
       mergeWithOwner: g.mergePets ?? true,
     })
 
-    // Use combatantFilter if set, otherwise fall back to legacy partyOnly/selfOnly
+    // Use combatantFilter if set, otherwise fall back to legacy selfOnly/partyOnly
     const filter = g.combatantFilter ?? (g.selfOnly ? 'self' : g.partyOnly ? 'party' : 'all')
 
     let filtered = combatants
+
+    // Helper to identify enemies/NPCs using FFXIV object IDs (if available)
+    const isEnemyOrNpc = (name: string): boolean => {
+      const id = currentCombatantIds.value[name]
+      if (!id) return false
+      // Enemy IDs start with 40, NPCs don't start with 10 (players) or 40
+      if (id.startsWith('40')) return true
+      if (!id.startsWith('10') && !id.startsWith('40') && !id.startsWith('00')) return true
+      return false
+    }
+
+    // Remove enemies and NPCs from meters (always filter them out)
+    filtered = filtered.filter(c => !isEnemyOrNpc(c.name))
+
     if (filter === 'self') {
       filtered = filtered.filter(c => c.name === selfName.value || c.name === 'YOU')
     } else if (filter === 'party' && partyNames.value.size > 0) {
@@ -309,6 +336,39 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (damage < stats.minHit) stats.minHit = damage
 
     recordTimelineBucket(currentTimeline.value, effectiveName, damage)
+  }
+
+  // Check if combatant is the player's own chocobo (should exclude from casts)
+  function isOwnChocobo(name: string): boolean {
+    if (!name) return false
+    // Chocobo named "Chocobo" or "Chocobo <PlayerName>"
+    if (name === 'Chocobo') return true
+    const playerName = selfName.value
+    if (playerName && name.startsWith('Chocobo ') && name.includes(playerName)) return true
+    return false
+  }
+
+  // Record cast event for ability usage tracking
+  function recordCastEvent(
+    sourceName: string,
+    abilityId: string,
+    abilityName: string,
+    targetName: string,
+    castType: 'instant' | 'cast' | 'tick',
+  ): void {
+    if (!sourceName || isOwnChocobo(sourceName)) return
+    const offsetMs = pullStartTime > 0 ? Date.now() - pullStartTime : 0
+    if (!currentCastData.value[sourceName]) {
+      currentCastData.value[sourceName] = []
+    }
+    currentCastData.value[sourceName].push({
+      t: offsetMs,
+      abilityId,
+      abilityName,
+      source: sourceName,
+      target: targetName || '',
+      type: castType,
+    })
   }
 
   // Write damage/heal amount into the correct TIMELINE_BUCKET_SEC-second slot.
@@ -418,6 +478,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const damage = decodeLogDamage(damageHex)
         if (damage === 0 || !effectiveName || !abilityId) return
         recordAbilityHit(effectiveName, abilityId, abilityName, damage)
+        recordCastEvent(effectiveName, abilityId, abilityName, targetName, 'instant')
         if (targetName) {
           recordDamageTaken(targetName, abilityId, abilityName, damage)
           recordTimelineBucket(currentDtakenTimeline.value, targetName, damage)
@@ -429,6 +490,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const heal = decodeLogDamage(damageHex)
         if (heal === 0 || !effectiveName) return
         recordTimelineBucket(currentHealTimeline.value, effectiveName, heal)
+        recordCastEvent(effectiveName, abilityId, abilityName, targetName, 'instant')
         if (targetName) recordHitEvent(targetName, 'heal', abilityName, effectiveName, heal)
         scheduleBroadcast()
       }
@@ -458,6 +520,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const damage = decodeLogDamage(damageHex)
         if (damage === 0) return
         recordAbilityHit(sourceName, `dot:${effectId}`, `DoT (${effectId})`, damage)
+        recordCastEvent(sourceName, `dot:${effectId}`, `DoT (${effectId})`, targetName, 'tick')
         if (targetName) {
           recordDamageTaken(targetName, `dot:${effectId}`, `DoT (${effectId})`, damage)
           recordTimelineBucket(currentDtakenTimeline.value, targetName, damage)
@@ -469,6 +532,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const heal = decodeLogDamage(damageHex)
         if (heal === 0) return
         recordTimelineBucket(currentHealTimeline.value, sourceName, heal)
+        recordCastEvent(sourceName, `dot:${effectId}`, `HoT (${effectId})`, targetName, 'tick')
         if (targetName) recordHitEvent(targetName, 'heal', `HoT (${effectId})`, sourceName, heal)
         scheduleBroadcast()
       }
@@ -482,17 +546,47 @@ export const useLiveDataStore = defineStore('liveData', () => {
       // Only track player deaths (FFXIV player IDs start with byte 10)
       if (!targetId.startsWith('10')) return
       const t = pullStartTime > 0 ? Date.now() - pullStartTime : 0
-      const cutoff = t - 30000
+      const cutoff = t - 35000  // 35 seconds before death to capture more
       const samples  = hpSampleBuffer.get(targetName) ?? []
       const hitsBuf  = hitEventBuffer.get(targetName)  ?? []
+      // Include the death event as the final hit
+      const deathHit = { t, type: 'dmg' as const, abilityName: 'Death', sourceName: '---', amount: 0 }
+      const allHits = [...hitsBuf.filter(h => h.t >= cutoff), deathHit]
+      const deathIndex = currentDeaths.value.length
       currentDeaths.value.push({
         targetName,
         targetId,
         timestamp: t,
         hpSamples: samples.filter(s => s.t >= cutoff),
-        lastHits:  hitsBuf.filter(h => h.t >= cutoff),
+        lastHits: allHits,
       })
+      // Track this death for later resurrection update
+      pendingDeathUpdates.set(targetName, deathIndex)
       scheduleBroadcast()
+    } else if (lineType === '26') {
+      // NetworkGainsEffect - check for resurrection
+      // parts: [0]=type [1]=ts [2]=effectId [3]=effectName [4]=sourceId [5]=sourceName [6]=targetId [7]=targetName
+      const effectId = parts[2]
+      const effectName = parts[3]
+      const targetId = parts[6]
+      const targetName = parts[7]
+      if (!targetId || !targetName) return
+      // Only track player resurrections
+      if (!targetId.startsWith('10')) return
+      // Check if this is a resurrection effect (Raise, Angel Whisper, etc.)
+      const raiseEffects = ['Raise', 'Angel Whisper', 'Resurrection', 'Swiftcast', 'Life Ascension', 'Reraise III']
+      const isRaise = raiseEffects.some(e => effectName && effectName.toLowerCase().includes(e.toLowerCase()))
+      if (isRaise) {
+        const rTime = pullStartTime > 0 ? Date.now() - pullStartTime : 0
+        resurrectTimes.value[targetName] = rTime
+        // Update the death record if we have a pending one
+        const deathIdx = pendingDeathUpdates.get(targetName)
+        if (deathIdx !== undefined && currentDeaths.value[deathIdx]) {
+          currentDeaths.value[deathIdx].resurrectTime = rTime
+        }
+        pendingDeathUpdates.delete(targetName)
+        scheduleBroadcast()
+      }
     }
   }
 
@@ -506,6 +600,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
     currentDeaths.value = []
     hpSampleBuffer.clear()
     hitEventBuffer.clear()
+    currentCastData.value = {}
+    resurrectTimes.value = {}
+    pendingDeathUpdates.clear()
     pullStartTime = Date.now()
     broadcastEncounterData()
   }
@@ -544,6 +641,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       damageTakenData:  deepClone(currentDtakenData.value),
       deaths:           deepClone(currentDeaths.value),
       combatantIds:     deepClone(currentCombatantIds.value),
+      castData:         deepClone(currentCastData.value),
     }
 
     // Avoid duplicate stashes for same pull
@@ -573,6 +671,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   function onPartyChanged(event: PartyChangedEvent): void {
     partyNames.value = new Set(event.party.map(p => p.name))
+    partyData.value = event.party.map(p => ({ id: p.id, name: p.name, inParty: p.inParty }))
   }
 
   function onBroadcastMessage(event: BroadcastMessageEvent): void {
@@ -662,19 +761,23 @@ export const useLiveDataStore = defineStore('liveData', () => {
           const hpsTimeline     = idx === null ? deepClone(currentHealTimeline.value)       : deepClone(pull?.hpsTimeline      ?? {})
           const dtakenTimeline  = idx === null ? deepClone(currentDtakenTimeline.value)     : deepClone(pull?.dtakenTimeline   ?? {})
           const damageTakenData = idx === null ? deepClone(currentDtakenData.value)         : deepClone(pull?.damageTakenData  ?? {})
-          const deaths          = idx === null ? deepClone(currentDeaths.value)             : deepClone(pull?.deaths           ?? [])
+          const deaths          = idx === null ? deepClone(currentDeaths.value)             : deepClone(pull?.deaths           ?? {})
           const combatantIds    = idx === null ? deepClone(currentCombatantIds.value)       : deepClone(pull?.combatantIds     ?? {})
+          const castData        = idx === null ? deepClone(currentCastData.value)           : deepClone(pull?.castData         ?? {})
           const encounterDurationSec = idx === null
             ? parseDurationToSec(frame.value?.encounterDuration ?? '')
             : parseInt(pull?.encounter?.['DURATION'] ?? '0', 10)
+          const timestamp = Date.now()
           breakdownChannel?.postMessage({
             type: 'encounterData',
+            timestamp,
             abilityData,
             dpsTimeline, hpsTimeline, dtakenTimeline,
-            damageTakenData, deaths, combatantIds,
+            damageTakenData, deaths, combatantIds, castData,
             selfName: selfName.value,
             blurNames: profile.value.global.blurNames ?? false,
             partyNames: Array.from(partyNames.value),
+            partyData: partyData.value.map(p => ({ id: p.id, name: p.name, inParty: p.inParty })),
             encounterDurationSec,
             pullIndex: idx,
             pullList: buildPullList(),
@@ -769,6 +872,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         engine.push(lastLiveFrame)
       }
       document.documentElement.style.opacity = String(profile.value.global.opacity)
+      scheduleBroadcast()
       return
     }
 

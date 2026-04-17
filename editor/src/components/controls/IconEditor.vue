@@ -23,7 +23,13 @@ function patchShadow(p: Partial<IconConfig['shadow']>) {
 }
 
 function patchBgShape(p: Partial<IconConfig['bgShape']>) {
-  patch({ bgShape: { ...bgShape.value, ...p } })
+  const newBg = { ...bgShape.value, ...p }
+  // Clear outline when bgShape is disabled
+  if (p.enabled === false || (!newBg.enabled && props.modelValue.outline?.enabled)) {
+    patch({ bgShape: newBg, outline: { ...props.modelValue.outline, enabled: false } })
+  } else {
+    patch({ bgShape: newBg })
+  }
 }
 
 const BG_SHAPES: { id: IconConfig['bgShape']['shape']; label: string }[] = [
@@ -213,17 +219,18 @@ const open = reactive({ bgShape: false, shadow: false, outline: false, classOutl
       </div>
     </div>
 
-    <!-- Icon Outline -->
+    <!-- Icon Background Outline -->
     <div class="block">
       <div class="collapsible-header" @click="open.outline = !open.outline">
-        <label class="check-label" @click.stop>
+        <label class="check-label" :class="{ disabled: !bgShape.enabled }" @click.stop>
           <input type="checkbox" :checked="modelValue.outline?.enabled"
+            :disabled="!bgShape.enabled"
             @change="e => patch({ outline: { enabled: (e.target as HTMLInputElement).checked, color: modelValue.outline?.color ?? '#ffffff', width: modelValue.outline?.width ?? 1 } })" />
-          Icon Outline
+          Icon Background Outline
         </label>
         <span class="chevron" :class="{ open: open.outline }">›</span>
       </div>
-      <div v-if="open.outline && modelValue.outline?.enabled" class="collapsible-body">
+      <div v-if="open.outline && modelValue.outline?.enabled && bgShape.enabled" class="collapsible-body">
         <div class="row">
           <label class="ctrl-label">Color</label>
           <ColorPicker :model-value="modelValue.outline?.color ?? '#000000'" label="Color"
@@ -234,6 +241,9 @@ const open = reactive({ bgShape: false, shadow: false, outline: false, classOutl
           <DragNumber :model-value="modelValue.outline?.width ?? 1" :min="0" :max="8" :step="1" unit="px" :speed="1"
             @update:model-value="v => patch({ outline: { ...(modelValue.outline ?? {}), width: v } })" />
         </div>
+      </div>
+      <div v-if="!bgShape.enabled && open.outline" class="hint">
+        Requires Icon Background to be enabled
       </div>
     </div>
 
@@ -307,6 +317,7 @@ const open = reactive({ bgShape: false, shadow: false, outline: false, classOutl
 .check-row { display: flex; align-items: center; gap: 16px; padding: 8px 12px; }
 .check-label { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; cursor: pointer; flex-shrink: 0; }
 .check-label:hover { color: var(--text); }
+.check-label.disabled { color: var(--text-muted); opacity: 0.5; cursor: not-allowed; }
 .check-label input[type="checkbox"] { accent-color: var(--accent); }
 
 /* Collapsible headers (enable checkbox + expand arrow) */

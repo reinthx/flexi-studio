@@ -80,7 +80,6 @@ export const DEFAULT_GLOBAL: GlobalConfig = {
   sortBy: 'encdps',
   maxCombatants: 72,
   showHeader: true,
-  autoScale: false,
   transitionDuration: 800,
   holdDuration: 12000,
   orientation: 'vertical',
@@ -108,8 +107,6 @@ export const DEFAULT_GLOBAL: GlobalConfig = {
   },
   windowBg: 'transparent',
   windowBackground: { type:'solid', color: 'transparent' },
-  windowX: 20,
-  windowY: 80,
   mergePets: true,
   header: {
     show: true,

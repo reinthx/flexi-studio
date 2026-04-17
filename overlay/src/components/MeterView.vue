@@ -84,7 +84,7 @@ function openAbilityBreakdown(name: string) {
   localStorage.setItem('flexi-breakdown-init', name)
   const url = new URL(window.location.href)
   url.hash = '/breakdown'
-  window.open(url.toString(), 'flexi-breakdown', 'width=520,height=560,resizable=yes')
+  window.open(url.toString(), 'flexi-breakdown', 'width=1300,height=840,resizable=yes')
   // Send encounter-aware data (respects viewingPull) with combatant pre-selected
   store.broadcastForCombatant(name)
   selectedCombatant.value = null

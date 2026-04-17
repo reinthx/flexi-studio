@@ -5,7 +5,7 @@ const ANIMATION_SPEED_MAP: Record<number, string> = {
   6: '3s', 7: '2.5s', 8: '2s', 9: '1.5s', 10: '1s'
 }
 
-export const GRADIENT_ANIMATION_KEYFRAMES = `
+const GRADIENT_ANIMATION_KEYFRAMES = `
 @keyframes gradientAngleSpin {
   from { --gradient-angle: 0deg; }
   to { --gradient-angle: 360deg; }
@@ -28,6 +28,25 @@ export const GRADIENT_ANIMATION_KEYFRAMES = `
   100% { background-position: 200% 0; }
 }
 `
+
+let keyframesInjected = false
+
+export function injectGradientAnimations(): void {
+  if (keyframesInjected) return
+  keyframesInjected = true
+  
+  const fullCss = `
+    ${GRADIENT_ANIMATION_KEYFRAMES}
+    .animated-fill {
+      animation-fill-mode: backwards;
+      animation-timing-function: linear;
+    }
+  `
+  const style = document.createElement('style')
+  style.id = 'gradient-animations'
+  style.textContent = fullCss
+  document.head.appendChild(style)
+}
 
 /**
  * Builds a CSS filter string for drop-shadow with optional thickness emulation.
@@ -57,17 +76,40 @@ export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithG
         .join(', ')
       const anim = gradient.animation
       const hasAnimation = anim?.enabled === true
-      const result: Record<string, string> = gradient.type === 'linear'
-        ? { background: hasAnimation 
-            ? `linear-gradient(var(--gradient-angle, ${gradient.angle}deg), ${stops})` 
-            : `linear-gradient(${gradient.angle}deg, ${stops})` }
-        : { background: `radial-gradient(circle, ${stops})` }
+      const angle = gradient.angle ?? 90
+      
+      // For angle rotation: use CSS custom property so keyframes can animate it
+      // For scroll/shimmer: use fixed angle
+      const needsAngleAnim = hasAnimation && anim.angleRotation !== 'none'
+      const angleValue = needsAngleAnim ? 'var(--gradient-angle, ' + angle + 'deg)' : angle + 'deg'
+      
+      const gradientCss = gradient.type === 'linear'
+        ? `linear-gradient(${angleValue}, ${stops})`
+        : `radial-gradient(circle, ${stops})`
+      
+      const result: Record<string, string> = {
+        backgroundImage: gradientCss,
+      }
+      
       if (fill.opacity !== undefined && fill.opacity < 1) {
         result.opacity = String(fill.opacity)
       }
       if (hasAnimation) {
         const animCss = buildGradientAnimationCss(gradient)
-        result['--gradient-angle'] = `${gradient.angle}deg`
+        
+        // Set CSS var for keyframes to animate
+        if (anim.angleRotation !== 'none') {
+          result['--gradient-angle'] = angle + 'deg'
+        }
+        // Scroll: make background larger and animate position to shift gradient
+        if (anim.scrollDirection !== 'none') {
+          result.backgroundSize = '400% 100%'
+          result.backgroundRepeat = 'no-repeat'
+        }
+        if (anim.shimmerEnabled) {
+          result.backgroundSize = '400% 100%'
+        }
+        
         Object.assign(result, animCss)
       }
       return result

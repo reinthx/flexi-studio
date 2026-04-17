@@ -582,22 +582,7 @@ function onBrowseChange(e: Event) {
             @click="patch({ orientation: 'vertical' })">Vertical</button>
         </div>
       </div>
-      <div class="row">
-        <label class="ctrl-label">Window pos</label>
-        <div style="display:flex;gap:4px;">
-          <button class="tog" :class="{ active: g.windowX===20 && g.windowY===80 }" @click="patch({ windowX:20, windowY:80 })">TL</button>
-          <button class="tog" :class="{ active: g.windowX===300 && g.windowY===80 }" @click="patch({ windowX:300, windowY:80 })">TR</button>
-          <button class="tog" :class="{ active: g.windowX===20 && g.windowY===300 }" @click="patch({ windowX:20, windowY:300 })">BL</button>
-          <button class="tog" :class="{ active: g.windowX===300 && g.windowY===300 }" @click="patch({ windowX:300, windowY:300 })">BR</button>
-        </div>
-      </div>
-      <div class="row">
-        <label class="ctrl-label">Auto scale</label>
-        <label style="display: flex; align-items: center; gap: 6px; flex: 1;">
-          <input type="checkbox" :checked="g.autoScale" @change="e => patch({ autoScale: (e.target as HTMLInputElement).checked })" />
-          <span style="font-size: 11px; color: var(--text);">Resize bars with window</span>
-        </label>
-      </div>
+      
     </div>
 
     <!-- Values -->
@@ -612,8 +597,6 @@ function onBrowseChange(e: Event) {
           <option value="encdps">DPS</option>
           <option value="enchps">HPS</option>
           <option value="dtps">DTPS</option>
-          <option value="damage%">DMG%</option>
-          <option value="crithit%">Crit%</option>
         </select>
       </div>
       <div class="row">

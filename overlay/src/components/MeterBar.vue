@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed } from 'vue'
 import type { BarStyle, Orientation, BarLabel } from '@shared/configSchema'
 import { useBarStyles } from '@shared/useBarStyles'
@@ -172,13 +172,13 @@ function fieldText(template: string): string {
           :width="iconSize"
           :height="iconSize"
           :alt="bar.job"
-          :style="{ ...iconImageStyle, ...iconOutlineStyle }"
+          :style="iconImageStyle"
           @error="(e) => { (e.target as HTMLImageElement).src = iconFallback }"
         />
       </div>
     </template>
 
-    <!-- Icon inline â€” standalone absolutely positioned (not separateRow) -->
+    <!-- Icon inline — standalone absolutely positioned (not separateRow) -->
     <template v-if="showIcon && !iconConfig.separateRow">
       <div :style="iconInlineStyle">
         <template v-if="iconConfig.bgShape.enabled">
@@ -188,7 +188,7 @@ function fieldText(template: string): string {
             @error="(e) => { (e.target as HTMLImageElement).src = iconFallback }" />
         </template>
         <img v-else :src="iconSrc" :width="iconSize" :height="iconSize" :alt="bar.job"
-          :style="{ display:'block', ...iconImageStyle, ...iconOutlineStyle }"
+          :style="{ display:'block', ...iconImageStyle }"
           @error="(e) => { (e.target as HTMLImageElement).src = iconFallback }" />
       </div>
     </template>

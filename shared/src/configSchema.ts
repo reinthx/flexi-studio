@@ -397,7 +397,6 @@ export interface GlobalConfig {
   sortBy: string           // any CombatData combatant field key
   maxCombatants: number
   showHeader: boolean      // header visibility shortcut (also in header.show)
-  autoScale: boolean
   transitionDuration: number  // ms
   holdDuration: number        // ms before clearing after isActive → false
   orientation: Orientation
@@ -425,8 +424,6 @@ export interface GlobalConfig {
     offsetX: number
     offsetY: number
   }
-  windowX: number             // window position X (px)
-  windowY: number             // window position Y (px)
   mergePets: boolean          // merge pet damage into owner
   tabsEnabled: boolean        // master toggle to enable tab system
   tabs: TabConfig[]          // all available tab configurations
@@ -504,12 +501,22 @@ export interface HitRecord {
   amount: number
 }
 
+export interface CastEvent {
+  t: number         // ms since pull start
+  abilityName: string
+  abilityId: string
+  source: string
+  target: string
+  type: 'instant' | 'cast' | 'tick'
+}
+
 export interface DeathRecord {
   targetName: string
   targetId: string
   timestamp: number  // ms since pull start
   hpSamples: HpSample[]
   lastHits?: HitRecord[]  // damage/heals on this target in the 30s before death
+  resurrectTime?: number  // ms since pull start, when raised (if applicable)
 }
 
 export interface PullRecord {
@@ -528,6 +535,7 @@ export interface PullRecord {
   damageTakenData?: Record<string, CombatantAbilityData>  // target name → per-ability received damage
   deaths?: DeathRecord[]
   combatantIds?: Record<string, string>  // combatant name → FFXIV object ID
+  castData?: Record<string, CastEvent[]>  // combatant name → cast events
 }
 
 // ─── Raw OverlayPlugin event shapes ───────────────────────────────────────────

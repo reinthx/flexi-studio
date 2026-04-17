@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useElementSize } from '@vueuse/core'
 import type { BarStyle, Orientation, BarLabel } from '@shared/configSchema'
@@ -162,13 +162,13 @@ const tokens = computed(() => ({
           :width="iconSize"
           :height="iconSize"
           :alt="props.bar.job"
-          :style="{ ...iconImageStyle, ...iconOutlineStyle }"
+          :style="iconImageStyle"
           @error="(e) => { (e.target as HTMLImageElement).src = iconFallback }"
         />
       </div>
     </template>
 
-    <!-- Icon inline â€” standalone absolutely positioned (not separateRow) -->
+    <!-- Icon inline — standalone absolutely positioned (not separateRow) -->
     <template v-if="showIcon && !separateRow">
       <div :style="iconInlineStyle">
         <template v-if="iconConfig.bgShape.enabled">
@@ -178,7 +178,7 @@ const tokens = computed(() => ({
             @error="(e) => { (e.target as HTMLImageElement).src = iconFallback }" />
         </template>
         <img v-else :src="iconSrc" :width="iconSize" :height="iconSize" :alt="props.bar.job"
-          :style="{ display:'block', ...iconImageStyle, ...iconOutlineStyle }"
+          :style="{ display:'block', ...iconImageStyle }"
           @error="(e) => { (e.target as HTMLImageElement).src = iconFallback }" />
       </div>
     </template>

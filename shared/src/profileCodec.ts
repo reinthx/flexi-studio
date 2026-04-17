@@ -342,7 +342,7 @@ const DEFAULT_LABEL = {
 }
 
 const DEFAULT_GLOBAL = {
-  dpsType: 'encdps', sortBy: 'encdps', maxCombatants: 72, showHeader: true, autoScale: false,
+  dpsType: 'encdps', sortBy: 'encdps', maxCombatants: 72, showHeader: true,
   transitionDuration: 800, holdDuration: 12000, orientation: 'vertical', opacity: 1,
   outOfCombat: 'dim', outOfCombatOpacity: 0.4, valueFormat: 'abbreviated',
   combatantFilter: 'all', partyOnly: false, selfOnly: false, blurNames: false,
@@ -350,7 +350,7 @@ const DEFAULT_GLOBAL = {
   windowBorder: { enabled: false, color: '#2a2a3e', width: 1, radius: 4 },
   windowShadow: { enabled: false, color: 'rgba(0,0,0,0.5)', blur: 8, offsetX: 0, offsetY: 2 },
   windowBg: 'transparent', windowBackground: { type: 'solid', color: 'transparent' },
-  windowX: 20, windowY: 80, mergePets: true,
+  mergePets: true,
   header: { show: true, template: '{encounter}  {duration}', font: 'Segoe UI', size: 11, color: '#cccccc', background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
   footer: { show: false, template: 'Total: {totalDPS} DPS', font: 'Segoe UI', size: 11, color: '#cccccc', background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
   rankIndicator: { rank1Enabled: false, rank1Style: {}, showNumbers: false, rank1HeightIncrease: 0, rank1ShowCrown: false, rank1Crown: { enabled: false, icon: '👑', imageUrl: '$CRW:cute', size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' }, rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
@@ -467,11 +467,11 @@ function cleanProfile(profile: any): any {
   // Strip global fields matching defaults
   if (cleaned.global) {
     const globalScalarDefaults: Record<string, any> = {
-      dpsType: 'encdps', sortBy: 'encdps', maxCombatants: 72, showHeader: true, autoScale: false,
+      dpsType: 'encdps', sortBy: 'encdps', maxCombatants: 72, showHeader: true,
       transitionDuration: 800, holdDuration: 12000, orientation: 'vertical', opacity: 1,
       outOfCombat: 'dim', outOfCombatOpacity: 0.4, valueFormat: 'abbreviated',
       combatantFilter: 'all', partyOnly: false, selfOnly: false, blurNames: false,
-      windowOpacity: 1, windowBg: 'transparent', windowX: 20, windowY: 80, mergePets: true,
+      windowOpacity: 1, windowBg: 'transparent', mergePets: true,
       header: { show: true, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
       footer: { show: false, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
       rankIndicator: { rank1Enabled: false, showNumbers: false, rank1HeightIncrease: 0, rank1ShowCrown: false, rank1Crown: { enabled: false, icon: '👑', imageUrl: '$CRW:cute', size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' }, rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
