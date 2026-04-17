@@ -522,25 +522,27 @@ const selectedDeath = computed<DeathRecord | null>(() =>
 const deathHitLog = computed(() => {
   if (!selectedDeath.value?.lastHits) return []
   const samples = selectedDeath.value.hpSamples ?? []
-  return [...selectedDeath.value.lastHits]
-    .sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
-    .map(hit => {
-      let hp = 1
-      let prevHp = 1
-      let maxHp = 1
-      for (const s of samples) {
-        if ((s.t ?? 0) <= (hit.t ?? 0)) {
-          prevHp = hp
-          hp = s.hp ?? 1
-          maxHp = Math.max(maxHp, s.hp ?? 1)
-        } else {
-          break
-        }
+  if (samples.length === 0) return []
+  const maxHp = samples.reduce((max, s) => Math.max(max, s.hp ?? 1), 1)
+  const sortedSamples = [...samples].sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
+  const sortedHits = [...selectedDeath.value.lastHits].sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
+  return sortedHits.map(hit => {
+    const t = hit.t ?? 0
+    let prevHp = 1
+    let hp = 1
+    for (let i = 0; i < sortedSamples.length; i++) {
+      if ((sortedSamples[i].t ?? 0) <= t) {
+        prevHp = i > 0 ? (sortedSamples[i - 1]?.hp ?? 1) : 1
+        hp = sortedSamples[i].hp ?? 1
+      } else {
+        break
       }
-      const change = hp - prevHp
-      const effectiveType = hit.type === 'heal' || change > 0.01 ? 'heal' : 'dmg'
-      return { ...hit, hp, prevHp, maxHp, effectiveType }
-    })
+    }
+    const changeInHp = hp - prevHp
+    const changePct = changeInHp / maxHp
+    const effectiveType = hit.type === 'heal' || changeInHp > 0.01 ? 'heal' : 'dmg'
+    return { ...hit, hp, prevHp, maxHp, effectiveType, changePct }
+  })
 })
 
 function hpBarColor(hp: number): string {
@@ -902,6 +904,20 @@ onMounted(() => {
       const ts = e.data.timestamp ?? 0
       // Only skip if we have existing data AND timestamp is older
       if (lastBroadcastTime.value > 0 && ts <= lastBroadcastTime.value) return
+
+      // Clear data if pull changed (before updating with new data)
+      const newPullIndex = 'pullIndex' in e.data ? (e.data.pullIndex ?? null) : activePull.value
+      if (newPullIndex !== activePull.value) {
+        allData.value = {}
+        dpsTimeline.value = {}
+        hpsTimeline.value = {}
+        dtakenTimeline.value = {}
+        damageTakenData.value = {}
+        deaths.value = []
+        combatantIds.value = {}
+        castData.value = {}
+      }
+
       lastBroadcastTime.value = ts
       allData.value              = e.data.abilityData      ?? {}
       dpsTimeline.value          = e.data.dpsTimeline      ?? {}
@@ -1366,8 +1382,8 @@ onUnmounted(() => { channel?.close(); channel = null })
                   <th class="dl-col-type"></th>
                   <th class="dl-col-ability">Ability</th>
                   <th class="dl-col-source">Source</th>
-                  <th class="dl-col-amount">Amount</th>
                   <th class="dl-col-hpbar">HP</th>
+                  <th class="dl-col-amount">Amount</th>
                 </tr></thead>
                 <tbody>
                   <tr
@@ -1387,9 +1403,6 @@ onUnmounted(() => { channel?.close(); channel = null })
                     </td>
                     <td class="dl-col-ability">{{ hit.abilityName }}</td>
                     <td class="dl-col-source">{{ hit.sourceName }}</td>
-                    <td class="dl-col-amount" :class="hit.effectiveType === 'heal' ? 'dl-amount-heal-bold' : (hit.abilityName === 'Death' ? 'dl-amount-death' : 'dl-amount-dmg-bold')">
-                      {{ hit.abilityName === 'Death' ? 'KO' : (hit.effectiveType === 'heal' ? '+' : '-') + f(hit.amount) }}
-                    </td>
                     <td class="dl-col-hpbar">
                       <div class="dl-hpbar-container">
                         <div
@@ -1397,12 +1410,15 @@ onUnmounted(() => { channel?.close(); channel = null })
                           :style="`width: ${(hit.maxHp || 1) * 100}%`"
                         ></div>
                         <div
-                          v-if="hit.prevHp !== hit.hp"
+                          v-if="hit.changePct && Math.abs(hit.changePct) > 0.001"
                           class="dl-hpbar-change"
                           :class="hit.effectiveType === 'heal' ? 'dl-hpbar-heal' : 'dl-hpbar-dmg'"
-                          :style="`width: ${Math.abs(hit.hp - hit.prevHp) * 100}%`"
+                          :style="`width: ${Math.abs(hit.changePct) * 100}%`"
                         ></div>
                       </div>
+                    </td>
+                    <td class="dl-col-amount" :class="hit.effectiveType === 'heal' ? 'dl-amount-heal-bold' : (hit.abilityName === 'Death' ? 'dl-amount-death' : 'dl-amount-dmg-bold')">
+                      {{ hit.abilityName === 'Death' ? 'KO' : (hit.effectiveType === 'heal' ? '+' : '-') + f(hit.amount) }}
                     </td>
                   </tr>
                 </tbody>
@@ -1790,7 +1806,7 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.05em;
   text-align: left; white-space: nowrap;
 }
-.dl-col-amount { text-align: right; }
+.dl-col-amount { }
 .dl-hit-table tbody tr { border-bottom: 1px solid rgba(255,255,255,0.03); }
 .dl-hit-table td {
   padding: 3px 7px; white-space: nowrap;

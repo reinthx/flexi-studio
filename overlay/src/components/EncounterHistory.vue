@@ -56,7 +56,6 @@ const encounters = computed(() => {
 })
 const isViewingHistory = computed(() => store.viewingPull !== null)
 
-// Close popup when clicking outside
 function onClickOutside(e: MouseEvent): void {
   if (!showHistory.value) return
   const target = e.target as HTMLElement

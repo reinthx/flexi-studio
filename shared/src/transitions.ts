@@ -13,6 +13,7 @@
 export interface BarFrame {
   name: string
   job: string
+  partyGroup: string
   /** 0–1 representing fill fraction (value / max value in list) */
   fillFraction: number
   /** Raw display value (already formatted by caller) */

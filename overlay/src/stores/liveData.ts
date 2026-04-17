@@ -232,8 +232,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
     if (filter === 'self') {
       filtered = filtered.filter(c => c.name === selfName.value || c.name === 'YOU')
-    } else if (filter === 'party' && partyNames.value.size > 0) {
-      filtered = filtered.filter(c => partyNames.value.has(c.name) || c.name === 'YOU')
+    } else if (filter === 'party' && partyData.value.length > 0) {
+      // For alliance raids, only include actual party members (inParty: true)
+      const partySet = new Set(partyData.value.filter(p => p.inParty).map(p => p.name))
+      filtered = filtered.filter(c => partySet.has(c.name) || c.name === 'YOU')
     }
 
     filtered = [...filtered]
@@ -251,6 +253,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
       return dur > 0 ? dt / dur : 0
     }
 
+    // Determine party groups for alliance raids
+    const isAlliance = partyData.value.length > 8
+    const nameToPartyIdx = new Map(partyData.value.map((p, i) => [p.name, i]))
+
     const bars: BarFrame[] = filtered.map((c, i) => {
       let rawVal: number
       if (g.dpsType === 'dtps') {
@@ -258,9 +264,21 @@ export const useLiveDataStore = defineStore('liveData', () => {
       } else {
         rawVal = parseFloat(c[g.dpsType] ?? '0')
       }
+
+      // Calculate party group (A/B/C for alliances, "Party" for normal)
+      let partyGroup = 'Party'
+      if (isAlliance) {
+        const partyIdx = nameToPartyIdx.get(c.name)
+        if (partyIdx !== undefined) {
+          const allianceParty = Math.floor(partyIdx / 8)
+          partyGroup = ['Party A', 'Party B', 'Party C'][allianceParty] ?? 'Party'
+        }
+      }
+
       return {
         name: c.name,
         job: normalizeJob(c['Job'] ?? ''),
+        partyGroup,
         fillFraction: rawVal / maxVal,
         displayValue: formatValue(rawVal, g.valueFormat),
         displayPct: c['damage%'] ?? '0',
@@ -369,6 +387,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
       target: targetName || '',
       type: castType,
     })
+
+    const casts = currentCastData.value[sourceName]
+    if (casts.length > 3000) casts.splice(0, casts.length - 3000)
   }
 
   // Write damage/heal amount into the correct TIMELINE_BUCKET_SEC-second slot.
@@ -648,7 +669,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const last = sessionPulls.value[0]
     if (last?.encounterName === record.encounterName && last?.duration === record.duration) return
 
-    sessionPulls.value = [record, ...sessionPulls.value].slice(0, 60)
+    sessionPulls.value = [record, ...sessionPulls.value].slice(0, 15)
     persistPulls()
   }
 
@@ -897,7 +918,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const maxVal = profile.value.global.dpsType === 'dtps'
       ? Math.max(...pull.combatants.map(c => getDtpsValue(c)))
       : Math.max(...pull.combatants.map(c => parseFloat(c[profile.value.global.dpsType] ?? '0')))
-    
+
     const bars: BarFrame[] = pull.combatants.map((c, i) => {
       const rawVal = profile.value.global.dpsType === 'dtps'
         ? getDtpsValue(c)
@@ -905,6 +926,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       return {
         name: c.name,
         job: normalizeJob(c['Job'] ?? ''),
+        partyGroup: 'Party',
         fillFraction: rawVal / (maxVal || 1),
         displayValue: formatValue(rawVal, profile.value.global.valueFormat),
         displayPct: c['damage%'] ?? '0',
