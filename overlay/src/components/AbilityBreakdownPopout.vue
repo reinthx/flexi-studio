@@ -539,7 +539,7 @@ const deathHitLog = computed(() => {
     const hit = sortedHits[i]
     const prevHp = hp
     
-    const sample = sortedSamples.findLast(s => s.t && s.t <= hit.t)
+    const sample = sortedSamples.slice().reverse().find(s => s.t && s.t <= hit.t)
     if (sample) {
       hp = sample.hp
     } else {
