@@ -38,12 +38,13 @@ const tokens = computed(() => ({
 const text = computed(() => renderTemplate(props.config.template, tokens.value))
 
 const currentFilter = computed((): CombatantFilter => {
-  return props.global?.combatantFilter ?? (props.global?.selfOnly ? 'self' : props.global?.partyOnly ? 'party' : 'all')
+  return props.global?.combatantFilter ?? (props.global?.selfOnly ? 'self' : props.global?.partyOnly ? 'alliance' : 'all')
 })
 
 const filterLabel = computed(() => {
   switch (currentFilter.value) {
     case 'self': return 'SELF'
+    case 'alliance': return 'ALLIANCE'
     case 'party': return 'PARTY'
     default: return 'ALL'
   }
@@ -51,7 +52,7 @@ const filterLabel = computed(() => {
 
 function cycleFilter() {
   if (!props.onSetCombatantFilter) return
-  const next = currentFilter.value === 'all' ? 'party' : currentFilter.value === 'party' ? 'self' : 'all'
+  const next = currentFilter.value === 'all' ? 'alliance' : currentFilter.value === 'alliance' ? 'party' : currentFilter.value === 'party' ? 'self' : 'all'
   props.onSetCombatantFilter(next)
 }
 
@@ -79,9 +80,9 @@ const isMergePets = computed(() => props.global?.mergePets ?? true)
       </button>
       <button
         class="pill-btn filter-btn"
-        :class="{ 'filter-all': currentFilter === 'all', 'filter-party': currentFilter === 'party', 'filter-self': currentFilter === 'self' }"
+        :class="{ 'filter-all': currentFilter === 'all', 'filter-alliance': currentFilter === 'alliance', 'filter-party': currentFilter === 'party', 'filter-self': currentFilter === 'self' }"
         @click="cycleFilter"
-        title="Cycle: All → Party → Self"
+        title="Cycle: All → Alliance → Party → Self"
       >
         {{ filterLabel }}
       </button>

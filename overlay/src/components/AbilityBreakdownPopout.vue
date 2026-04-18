@@ -33,8 +33,28 @@ const castData            = ref<Record<string, CastEvent[]>>({})
 const castHoverData = ref<{ time: number; ability: string; target: string; x: number; y: number } | null>(null)
 
 // Party data with inParty info for grouping
-interface PartyMemberData { id: number; name: string; inParty: boolean }
+interface PartyMemberData { id: number; name: string; inParty: boolean; partyType?: string }
 const partyData = ref<PartyMemberData[]>([])
+
+// Helper to format partyType with space (AllianceA -> "Alliance A")
+function formatPartyLabel(pt: string | undefined, isSelf: boolean, partyIdx?: number, totalPartySize?: number): string {
+  // If ACT says Solo/Party but we have >8 members (alliance), use position-based
+  // Only if player IS in partyData (partyIdx !== undefined) - else use ACT's partyType as-is
+  if (totalPartySize !== undefined && totalPartySize > 8 && partyIdx !== undefined && (!pt || pt === 'Solo' || pt === 'Party')) {
+    const allianceParty = Math.floor(partyIdx / 8)
+    const label = ['Alliance A', 'Alliance B', 'Alliance C'][allianceParty] ?? 'Party'
+    return isSelf ? `${label} (YOU)` : label
+  }
+  // If solo-queued in 8-man (total 8), treat 'Solo' as 'Party' to keep everyone together
+  if (totalPartySize !== undefined && totalPartySize <= 8) {
+    if (!pt || pt === 'Solo') return 'Party'
+    return pt.replace(/^Alliance/, 'Alliance ')
+  }
+  // For alliance >8 without partyType, fallback
+  if (!pt) return 'Party'
+  const label = pt.replace(/^Alliance/, 'Alliance ')
+  return label
+}
 
 // Toggle to show friendly NPCs (Non-player companions, minions that deal damage, etc.)
 const showFriendlyNPCs = ref(false)
@@ -75,52 +95,50 @@ const combatantGroups = computed<CombatantGroup[]>(() => {
   const all = visibleCombatants.value
   if (all.length === 0) return []
 
-  const nameToInParty = new Map<string, boolean>()
-  for (const p of partyData.value) {
-    nameToInParty.set(p.name, p.inParty)
+  const nameToPartyType = new Map<string, { pt: string | undefined; idx: number }>()
+  for (let i = 0; i < partyData.value.length; i++) {
+    const p = partyData.value[i]
+    nameToPartyType.set(p.name, { pt: p.partyType, idx: i })
   }
 
-  const selfInParty = nameToInParty.get(selfName.value) ?? false
+  const selfPartyInfo = nameToPartyType.get(selfName.value)
+  const selfPartyType = selfPartyInfo?.pt
+  const selfIdx = selfPartyInfo?.idx ?? 0
   const isAlliance = partyData.value.length > 8
-  const selfPartyIdx = partyData.value.findIndex(p => p.name === selfName.value)
-  const selfAllianceParty = selfPartyIdx >= 0 ? Math.floor(selfPartyIdx / 8) : 0
 
-  const partyA: string[] = []
-  const partyB: string[] = []
-  const partyC: string[] = []
-  const others: string[] = []
+  const partyMap = new Map<string, string[]>()
 
   for (const name of all) {
-    const isInParty = nameToInParty.get(name) ?? false
+    const info = nameToPartyType.get(name)
+    const isSelf = name === selfName.value
+    const label = formatPartyLabel(info?.pt, isSelf, info?.idx, partyData.value.length)
 
-    if (name === selfName.value) {
-      if (isAlliance) {
-        if (selfAllianceParty === 0) partyA.push(name)
-        else if (selfAllianceParty === 1) partyB.push(name)
-        else partyC.push(name)
-      } else {
-        partyA.push(name)
-      }
-    } else if (selfInParty && !isAlliance) {
-      partyA.push(name)
-    } else if (isInParty && isAlliance) {
-      const memberIdx = partyData.value.findIndex(p => p.name === name)
-      const allianceParty = memberIdx >= 0 ? Math.floor(memberIdx / 8) : 0
-      if (allianceParty === 0) partyA.push(name)
-      else if (allianceParty === 1) partyB.push(name)
-      else partyC.push(name)
-    } else {
-      others.push(name)
-    }
+    if (!partyMap.has(label)) partyMap.set(label, [])
+    partyMap.get(label)!.push(name)
   }
 
   const groups: CombatantGroup[] = []
-  if (partyA.length > 0) {
-    groups.push({ label: selfInParty ? 'Party (YOU)' : (isAlliance ? 'Party A' : 'Party'), names: partyA, collapsed: true })
+
+  if (isAlliance && (selfPartyType || selfIdx >= 8)) {
+    const selfLabel = formatPartyLabel(selfPartyType, true, selfIdx, partyData.value.length)
+    const selfParty = partyMap.get(selfLabel)
+    if (selfParty) {
+      groups.push({ label: selfLabel, names: selfParty, collapsed: false })
+    }
+
+    for (const [label, names] of partyMap) {
+      if (label !== selfLabel) {
+        groups.push({ label, names, collapsed: true })
+      }
+    }
+  } else {
+    const selfLabel = formatPartyLabel(selfPartyType, true, selfIdx, partyData.value.length)
+    for (const [label, names] of partyMap) {
+      groups.push({ label, names, collapsed: label !== selfLabel })
+    }
   }
-  if (partyB.length > 0) groups.push({ label: 'Party B', names: partyB, collapsed: true })
-  if (partyC.length > 0) groups.push({ label: 'Party C', names: partyC, collapsed: true })
-  if (others.length > 0) groups.push({ label: 'Enemies/Other', names: others, collapsed: false })
+
+  if (groups.length === 0) groups.push({ label: 'All', names: all, collapsed: false })
 
   return groups
 })
@@ -234,64 +252,50 @@ const castGroups = computed<CastGroup[]>(() => {
   const allCastNames = Object.keys(castData.value)
   if (allCastNames.length === 0) return []
 
-  // Build lookup: name -> inParty status
-  const nameToInParty = new Map<string, boolean>()
-  for (const p of partyData.value) {
-    nameToInParty.set(p.name, p.inParty)
+  const nameToPartyType = new Map<string, { pt: string | undefined; idx: number }>()
+  for (let i = 0; i < partyData.value.length; i++) {
+    const p = partyData.value[i]
+    nameToPartyType.set(p.name, { pt: p.partyType, idx: i })
   }
 
-  // Determine player's party
-  const selfInParty = nameToInParty.get(selfName.value) ?? false
+  const selfPartyInfo = nameToPartyType.get(selfName.value)
+  const selfPartyType = selfPartyInfo?.pt
+  const selfIdx = selfPartyInfo?.idx ?? 0
   const isAlliance = partyData.value.length > 8
 
-  // Get player's party index in alliance
-  const selfPartyIdx = partyData.value.findIndex(p => p.name === selfName.value)
-  const selfAllianceParty = selfPartyIdx >= 0 ? Math.floor(selfPartyIdx / 8) : 0
-
-  const partyA: string[] = []
-  const partyB: string[] = []
-  const partyC: string[] = []
-  const others: string[] = []
-  let hasSelf = false
+  const partyMap = new Map<string, string[]>()
 
   for (const name of allCastNames) {
-    // Skip enemies and NPCs unless their toggles are enabled
     if (isEnemy(name) && !showEnemies.value) continue
     if (isNPC(name) && !showFriendlyNPCs.value) continue
 
-    const isInParty = nameToInParty.get(name) ?? false
+    const info = nameToPartyType.get(name)
+    const isSelf = name === selfName.value || name === 'YOU'
+    const label = formatPartyLabel(info?.pt, isSelf, info?.idx, partyData.value.length)
 
-    if (name === selfName.value || name === 'YOU') {
-      hasSelf = true
-      if (isAlliance) {
-        if (selfAllianceParty === 0) partyA.push(name)
-        else if (selfAllianceParty === 1) partyB.push(name)
-        else partyC.push(name)
-      } else {
-        partyA.push(name)
+    if (!partyMap.has(label)) partyMap.set(label, [])
+    partyMap.get(label)!.push(name)
+  }
+
+  const groups: CastGroup[] = []
+
+  if (isAlliance && (selfPartyType || selfIdx >= 8)) {
+    const selfLabel = formatPartyLabel(selfPartyType, true, selfIdx, partyData.value.length)
+    const selfParty = partyMap.get(selfLabel)
+    if (selfParty) {
+      groups.push({ label: selfLabel, names: selfParty })
+    }
+
+    for (const [label, names] of partyMap) {
+      if (label !== selfLabel) {
+        groups.push({ label, names })
       }
-    } else if (selfInParty && !isAlliance) {
-      partyA.push(name)
-    } else if (isInParty && isAlliance) {
-      const memberIdx = partyData.value.findIndex(p => p.name === name)
-      const allianceParty = memberIdx >= 0 ? Math.floor(memberIdx / 8) : 0
-      if (allianceParty === 0) partyA.push(name)
-      else if (allianceParty === 1) partyB.push(name)
-      else partyC.push(name)
-    } else {
-      others.push(name)
+    }
+  } else {
+    for (const [label, names] of partyMap) {
+      groups.push({ label, names })
     }
   }
-
-  // Build groups with proper labels
-  const groups: CastGroup[] = []
-  if (partyA.length > 0) {
-    const label = hasSelf && selfInParty ? 'Party (YOU)' : (isAlliance ? 'Party A' : 'Party')
-    groups.push({ label, names: partyA })
-  }
-  if (partyB.length > 0) groups.push({ label: 'Party B', names: partyB })
-  if (partyC.length > 0) groups.push({ label: 'Party C', names: partyC })
-  if (others.length > 0) groups.push({ label: 'Others', names: others })
 
   return groups
 })
@@ -523,26 +527,39 @@ const deathHitLog = computed(() => {
   if (!selectedDeath.value?.lastHits) return []
   const samples = selectedDeath.value.hpSamples ?? []
   if (samples.length === 0) return []
-  const maxHp = samples.reduce((max, s) => Math.max(max, s.hp ?? 1), 1)
   const sortedSamples = [...samples].sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
   const sortedHits = [...selectedDeath.value.lastHits].sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
-  return sortedHits.map(hit => {
-    const t = hit.t ?? 0
-    let prevHp = 1
-    let hp = 1
-    for (let i = 0; i < sortedSamples.length; i++) {
-      if ((sortedSamples[i].t ?? 0) <= t) {
-        prevHp = i > 0 ? (sortedSamples[i - 1]?.hp ?? 1) : 1
-        hp = sortedSamples[i].hp ?? 1
+  
+  let hp = 1
+  const results: Array<{
+    hp: number; prevHp: number; maxHp: number; effectiveType: string; changePct: number
+  }> = []
+  
+  for (let i = 0; i < sortedHits.length; i++) {
+    const hit = sortedHits[i]
+    const prevHp = hp
+    
+    const sample = sortedSamples.findLast(s => s.t && s.t <= hit.t)
+    if (sample) {
+      hp = sample.hp
+    } else {
+      if (hit.type === 'heal') {
+        hp = Math.min(1, hp + 0.15)
       } else {
-        break
+        hp = Math.max(0, hp - 0.15)
       }
     }
-    const changeInHp = hp - prevHp
-    const changePct = changeInHp / maxHp
-    const effectiveType = hit.type === 'heal' || changeInHp > 0.01 ? 'heal' : 'dmg'
-    return { ...hit, hp, prevHp, maxHp, effectiveType, changePct }
-  })
+    
+    results.push({
+      hp,
+      prevHp,
+      maxHp: 1,
+      effectiveType: hit.type === 'heal' ? 'heal' : 'dmg',
+      changePct: hp - prevHp
+    })
+  }
+  
+  return sortedHits.map((hit, i) => ({ ...hit, ...results[i] }))
 })
 
 function hpBarColor(hp: number): string {
@@ -577,7 +594,9 @@ function deathSparkPoints(death: DeathRecord): string {
     return ''
   }
 
-  const relevantSamples = hpSamples.filter(s => s.t >= firstHitTime)
+  const relevantSamples = hpSamples
+    .filter(s => s.t >= firstHitTime)
+    .sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
   if (relevantSamples.length < 2) return ''
 
   return relevantSamples
@@ -604,7 +623,9 @@ function deathHpBars(death: DeathRecord): { x: number; hp: number; width: number
     return bars
   }
 
-  const relevantSamples = death.hpSamples.filter(s => s.t >= firstHitTime)
+  const relevantSamples = death.hpSamples
+    .filter(s => s.t >= firstHitTime)
+    .sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
   if (relevantSamples.length === 0) {
     bars.push({ x: 0, hp: 0, width: 120, eventType: 'death', change: 0 })
     return bars
@@ -902,12 +923,21 @@ onMounted(() => {
   channel.onmessage = (e) => {
     if (e.data?.type === 'encounterData') {
       const ts = e.data.timestamp ?? 0
-      // Only skip if we have existing data AND timestamp is older
-      if (lastBroadcastTime.value > 0 && ts <= lastBroadcastTime.value) return
+
+      // When viewing historical pull, validate by pullIndex, not timestamp
+      // Historical data has pullIndex >= 0, live data has pullIndex === null
+      const incomingPullIndex = 'pullIndex' in e.data ? e.data.pullIndex : null
+
+      // If viewing historical pull, accept only data for that specific pull
+      if (activePull.value !== null) {
+        if (incomingPullIndex !== activePull.value) return
+      } else {
+        // For live view, skip if timestamp is not newer
+        if (lastBroadcastTime.value > 0 && ts <= lastBroadcastTime.value) return
+      }
 
       // Clear data if pull changed (before updating with new data)
-      const newPullIndex = 'pullIndex' in e.data ? (e.data.pullIndex ?? null) : activePull.value
-      if (newPullIndex !== activePull.value) {
+      if (incomingPullIndex !== activePull.value) {
         allData.value = {}
         dpsTimeline.value = {}
         hpsTimeline.value = {}
@@ -1407,13 +1437,15 @@ onUnmounted(() => { channel?.close(); channel = null })
                       <div class="dl-hpbar-container">
                         <div
                           class="dl-hpbar-bg"
-                          :style="`width: ${(hit.maxHp || 1) * 100}%`"
+                          :style="`width: ${(hit.hp ?? 1) * 100}%`"
                         ></div>
                         <div
                           v-if="hit.changePct && Math.abs(hit.changePct) > 0.001"
                           class="dl-hpbar-change"
                           :class="hit.effectiveType === 'heal' ? 'dl-hpbar-heal' : 'dl-hpbar-dmg'"
-                          :style="`width: ${Math.abs(hit.changePct) * 100}%`"
+                          :style="hit.effectiveType === 'heal' 
+                            ? `left: ${((hit.hp ?? 0) - hit.changePct) * 100}%; width: ${hit.changePct * 100}%`
+                            : `width: ${Math.abs(hit.changePct) * 100}%`"
                         ></div>
                       </div>
                     </td>
@@ -1834,7 +1866,7 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 .dl-col-hpbar   { width: 80px; padding: 0 4px !important; }
 
 .dl-hpbar-container { height: 12px; background: rgba(255,255,255,0.1); border-radius: 2px; position: relative; overflow: hidden; }
-.dl-hpbar-bg { position: absolute; left: 0; top: 0; height: 100%; background: rgba(100,100,100,0.3); border-radius: 2px; }
+.dl-hpbar-bg { position: absolute; left: 0; top: 0; height: 100%; background: rgba(100,200,100,0.25); border-radius: 2px; }
 .dl-hpbar-change.dl-hpbar-heal { position: absolute; top: 0; height: 100%; background: #00e676; opacity: 0.6; border-radius: 2px; }
 .dl-hpbar-change.dl-hpbar-dmg { position: absolute; top: 0; height: 100%; background: #ff1744; opacity: 0.6; border-radius: 2px; }
 

@@ -52,7 +52,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
   const selfName = ref('')
   const zone = ref('')
   const partyNames = ref<Set<string>>(new Set())
-  const partyData = ref<{ id: number; name: string; inParty: boolean }[]>([])
+  const partyData = ref<{ id: number; name: string; inParty: boolean; partyType?: string }[]>([])
   const frame = shallowRef<Frame | null>(null)
   const sessionPulls = ref<PullRecord[]>([])
   const viewingPull = ref<number | null>(null)  // null = live
@@ -120,6 +120,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const deaths         = pullIndex === null ? deepClone(currentDeaths.value)            : deepClone(pull?.deaths           ?? [])
     const combatantIds   = pullIndex === null ? deepClone(currentCombatantIds.value)      : deepClone(pull?.combatantIds     ?? {})
     const castData       = pullIndex === null ? deepClone(currentCastData.value)         : deepClone(pull?.castData         ?? {})
+    const partyDataHistorical = pullIndex === null ? partyData.value : (pull?.partyData ?? [])
+    const partyNamesHistorical = pullIndex === null ? partyNames.value : new Set((pull?.partyData ?? []).map(p => p.name))
     const encounterDurationSec = pullIndex === null
       ? parseDurationToSec(frame.value?.encounterDuration ?? '')
       : parseInt(pull?.encounter?.['DURATION'] ?? '0', 10)
@@ -132,8 +134,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
       damageTakenData, deaths, combatantIds, castData,
       selfName: selfName.value,
       blurNames: profile.value.global.blurNames ?? false,
-      partyNames: Array.from(partyNames.value),
-      partyData: partyData.value.map(p => ({ id: p.id, name: p.name, inParty: p.inParty })),
+      partyNames: Array.from(partyNamesHistorical),
+      partyData: partyDataHistorical.map(p => ({ id: p.id, name: p.name, inParty: p.inParty, partyType: p.partyType })),
       encounterDurationSec,
       pullIndex,
       selectedCombatant,
@@ -232,10 +234,28 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
     if (filter === 'self') {
       filtered = filtered.filter(c => c.name === selfName.value || c.name === 'YOU')
+    } else if (filter === 'alliance' && partyData.value.length > 0) {
+      // Show entire alliance (all combatants with inParty: true)
+      const allianceSet = new Set(partyData.value.filter(p => p.inParty).map(p => p.name))
+      filtered = filtered.filter(c => allianceSet.has(c.name) || c.name === 'YOU')
     } else if (filter === 'party' && partyData.value.length > 0) {
-      // For alliance raids, only include actual party members (inParty: true)
-      const partySet = new Set(partyData.value.filter(p => p.inParty).map(p => p.name))
-      filtered = filtered.filter(c => partySet.has(c.name) || c.name === 'YOU')
+      // For party filter: show only your actual party group (8 people in your party)
+      const isAlliance = partyData.value.length > 8
+      if (isAlliance) {
+        // Alliance: find self's party group and show only that party
+        const selfIdx = partyData.value.findIndex(p => p.name === selfName.value)
+        if (selfIdx >= 0) {
+          const selfPartyNum = Math.floor(selfIdx / 8)
+          const partyStart = selfPartyNum * 8
+          const partyEnd = partyStart + 8
+          const partySet = new Set(partyData.value.slice(partyStart, partyEnd).map(p => p.name))
+          filtered = filtered.filter(c => partySet.has(c.name) || c.name === 'YOU')
+        }
+      } else {
+        // Normal party: show all with inParty: true
+        const partySet = new Set(partyData.value.filter(p => p.inParty).map(p => p.name))
+        filtered = filtered.filter(c => partySet.has(c.name) || c.name === 'YOU')
+      }
     }
 
     filtered = [...filtered]
@@ -265,14 +285,20 @@ export const useLiveDataStore = defineStore('liveData', () => {
         rawVal = parseFloat(c[g.dpsType] ?? '0')
       }
 
-      // Calculate party group (A/B/C for alliances, "Party" for normal)
+      // Calculate party group from partyType if available, fallback to position-based
       let partyGroup = 'Party'
-      if (isAlliance) {
+      const partyMember = partyData.value.find(p => p.name === c.name)
+      const pt = partyMember?.partyType
+
+      // If ACT says Solo/Party but we have >8 members, use position-based for alliance
+      if ((!pt || pt === 'Solo' || pt === 'Party') && isAlliance) {
         const partyIdx = nameToPartyIdx.get(c.name)
         if (partyIdx !== undefined) {
           const allianceParty = Math.floor(partyIdx / 8)
-          partyGroup = ['Party A', 'Party B', 'Party C'][allianceParty] ?? 'Party'
+          partyGroup = ['Alliance A', 'Alliance B', 'Alliance C'][allianceParty] ?? 'Party'
         }
+      } else if (pt) {
+        partyGroup = pt.replace(/^Alliance/, 'Alliance ')
       }
 
       return {
@@ -411,12 +437,17 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   // Push an HP% sample into the rolling buffer (max 200 entries per combatant).
+  // Records at most once per second to avoid noise from frequent updates.
+  let lastHpSampleTime = new Map<string, number>()
   function recordHpSample(name: string, currentHp: number, maxHp: number): void {
     if (!name || maxHp <= 0) return
+    const t = pullStartTime > 0 ? Date.now() - pullStartTime : 0
+    const lastT = lastHpSampleTime.get(name) ?? 0
+    if (t - lastT < 1000) return
+    lastHpSampleTime.set(name, t)
     const hp = Math.max(0, Math.min(1, currentHp / maxHp))
     if (!hpSampleBuffer.has(name)) hpSampleBuffer.set(name, [])
     const samples = hpSampleBuffer.get(name)!
-    const t = pullStartTime > 0 ? Date.now() - pullStartTime : 0
     samples.push({ t, hp })
     if (samples.length > 200) samples.splice(0, samples.length - 200)
   }
@@ -663,6 +694,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       deaths:           deepClone(currentDeaths.value),
       combatantIds:     deepClone(currentCombatantIds.value),
       castData:         deepClone(currentCastData.value),
+      partyData:        deepClone(partyData.value),
     }
 
     // Avoid duplicate stashes for same pull
@@ -692,7 +724,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   function onPartyChanged(event: PartyChangedEvent): void {
     partyNames.value = new Set(event.party.map(p => p.name))
-    partyData.value = event.party.map(p => ({ id: p.id, name: p.name, inParty: p.inParty }))
+    partyData.value = event.party.map(p => ({ id: p.id, name: p.name, inParty: p.inParty, partyType: p.partyType }))
   }
 
   function onBroadcastMessage(event: BroadcastMessageEvent): void {
@@ -785,6 +817,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
           const deaths          = idx === null ? deepClone(currentDeaths.value)             : deepClone(pull?.deaths           ?? {})
           const combatantIds    = idx === null ? deepClone(currentCombatantIds.value)       : deepClone(pull?.combatantIds     ?? {})
           const castData        = idx === null ? deepClone(currentCastData.value)           : deepClone(pull?.castData         ?? {})
+          const partyDataHistorical = idx === null ? partyData.value : (pull?.partyData ?? [])
+          const partyNamesHistorical = idx === null ? partyNames.value : new Set((pull?.partyData ?? []).map(p => p.name))
           const encounterDurationSec = idx === null
             ? parseDurationToSec(frame.value?.encounterDuration ?? '')
             : parseInt(pull?.encounter?.['DURATION'] ?? '0', 10)
@@ -797,8 +831,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
             damageTakenData, deaths, combatantIds, castData,
             selfName: selfName.value,
             blurNames: profile.value.global.blurNames ?? false,
-            partyNames: Array.from(partyNames.value),
-            partyData: partyData.value.map(p => ({ id: p.id, name: p.name, inParty: p.inParty })),
+            partyNames: Array.from(partyNamesHistorical),
+            partyData: partyDataHistorical.map(p => ({ id: p.id, name: p.name, inParty: p.inParty, partyType: p.partyType })),
             encounterDurationSec,
             pullIndex: idx,
             pullList: buildPullList(),
@@ -919,14 +953,35 @@ export const useLiveDataStore = defineStore('liveData', () => {
       ? Math.max(...pull.combatants.map(c => getDtpsValue(c)))
       : Math.max(...pull.combatants.map(c => parseFloat(c[profile.value.global.dpsType] ?? '0')))
 
+    // Use historical partyData for party grouping
+    const historicalParty = pull.partyData ?? []
+    const historicalIsAlliance = historicalParty.length > 8
+    const historicalNameToIdx = new Map(historicalParty.map((p, i) => [p.name, i]))
+
     const bars: BarFrame[] = pull.combatants.map((c, i) => {
       const rawVal = profile.value.global.dpsType === 'dtps'
         ? getDtpsValue(c)
         : parseFloat(c[profile.value.global.dpsType] ?? '0')
+
+      // Determine party group from historical partyData
+      let partyGroup = 'Party'
+      const partyMember = historicalParty.find(p => p.name === c.name)
+      const pt = partyMember?.partyType
+
+      if ((!pt || pt === 'Solo' || pt === 'Party') && historicalIsAlliance) {
+        const partyIdx = historicalNameToIdx.get(c.name)
+        if (partyIdx !== undefined) {
+          const allianceParty = Math.floor(partyIdx / 8)
+          partyGroup = ['Alliance A', 'Alliance B', 'Alliance C'][allianceParty] ?? 'Party'
+        }
+      } else if (pt) {
+        partyGroup = pt.replace(/^Alliance/, 'Alliance ')
+      }
+
       return {
         name: c.name,
         job: normalizeJob(c['Job'] ?? ''),
-        partyGroup: 'Party',
+        partyGroup,
         fillFraction: rawVal / (maxVal || 1),
         displayValue: formatValue(rawVal, profile.value.global.valueFormat),
         displayPct: c['damage%'] ?? '0',
@@ -983,9 +1038,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
     stop,
     viewPull,
     applyConfig,
-    setCombatantFilter: (filter: 'all' | 'party' | 'self') => {
+    setCombatantFilter: (filter: 'all' | 'alliance' | 'party' | 'self') => {
       profile.value.global.combatantFilter = filter
-      profile.value.global.partyOnly = filter === 'party'
+      profile.value.global.partyOnly = filter === 'party' || filter === 'alliance'
       profile.value.global.selfOnly = filter === 'self'
     },
     toggleBlurNames: () => { profile.value.global.blurNames = !profile.value.global.blurNames },

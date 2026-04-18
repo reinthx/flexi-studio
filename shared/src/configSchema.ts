@@ -390,7 +390,7 @@ export type DpsType = 'encdps' | 'enchps' | 'dtps' | 'damage%' | 'healed%' | 'cr
 export type ValueFormat = 'raw' | 'abbreviated' | 'formatted'
 export type Orientation = 'vertical' | 'horizontal'
 export type OutOfCombatBehavior = 'show' | 'dim' | 'hide'
-export type CombatantFilter = 'all' | 'party' | 'self'
+export type CombatantFilter = 'all' | 'alliance' | 'party' | 'self'
 
 export interface GlobalConfig {
   dpsType: DpsType
@@ -536,6 +536,7 @@ export interface PullRecord {
   deaths?: DeathRecord[]
   combatantIds?: Record<string, string>  // combatant name → FFXIV object ID
   castData?: Record<string, CastEvent[]>  // combatant name → cast events
+  partyData?: PartyMember[]  // party state at time of pull (for historical grouping)
 }
 
 // ─── Raw OverlayPlugin event shapes ───────────────────────────────────────────
@@ -575,6 +576,7 @@ export interface PartyMember {
   worldId: number
   job: string
   inParty: boolean
+  partyType?: string  // "Party", "AllianceA", "AllianceB", "AllianceC", etc
 }
 
 export interface PartyChangedEvent {
