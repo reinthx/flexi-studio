@@ -1000,8 +1000,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
       bars,
       encounterTitle: pull.encounterName,
       encounterDuration: pull.duration,
-      totalDps: pull.encounter['ENCDPS'] ?? '',
-      totalHps: pull.encounter['ENCHPS'] ?? '',
+      totalDps: formatValue(parseFloat(pull.encounter['ENCDPS'] ?? '0'), profile.value.global.valueFormat),
+      totalHps: formatValue(parseFloat(pull.encounter['ENCHPS'] ?? '0'), profile.value.global.valueFormat),
       totalDtps: formatValue(parseFloat(pull.encounter['damagetaken'] ?? '0') / (parseFloat(pull.encounter['DURATION'] ?? '0') || 1), profile.value.global.valueFormat),
       isActive: true,
     })

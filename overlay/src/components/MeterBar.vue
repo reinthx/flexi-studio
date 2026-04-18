@@ -7,7 +7,7 @@ import { renderTemplate } from '../lib/templateRenderer'
 import { getJobIconSrc } from '@shared/jobMap'
 import { MOCK_NAMES } from '@shared/overlayBridge'
 import { formatValue } from '@shared/formatValue'
-import type { FormatType } from '@shared/formatValue'
+import type { ValueFormat } from '@shared/configSchema'
 
 const emit = defineEmits<{ click: [] }>()
 
@@ -98,7 +98,7 @@ const maxHitValue = computed(() => {
   const baseNum = parseFloat(baseStr.replace(/,/g, ''))
   if (isNaN(baseNum)) return raw
   const num = multipliers[suffix] ? baseNum * multipliers[suffix] : baseNum
-  const fmt: FormatType = props.valueFormat ?? 'abbreviated'
+  const fmt: ValueFormat = props.valueFormat ?? 'abbreviated'
   return formatValue(num, fmt)
 })
 

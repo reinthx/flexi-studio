@@ -16,7 +16,7 @@ import {
   deepClone,
 } from '@shared/index'
 import type { CombatDataEvent, ChangePrimaryPlayerEvent, PartyChangedEvent, Frame, BarFrame, Profile } from '@shared/index'
-import { formatValue } from '../lib/formatValue'
+import { formatValue } from '@shared/formatValue'
 import { normalizeJob } from '@shared/jobMap'
 
 export const useLiveDataStore = defineStore('editorLiveData', () => {
