@@ -1,28 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { formatValue } from '@shared/formatValue'
-import type { CombatantAbilityData, DpsTimeline, DeathRecord, DeathEvent, CastEvent } from '@shared/configSchema'
+import type { CombatantAbilityData, DpsTimeline, DeathRecord, DeathEvent, CastEvent, ResourceSample } from '@shared/configSchema'
 import { TIMELINE_BUCKET_SEC } from '@shared/configSchema'
-import { buildDeathEvents } from '@shared/deathRecap'
-
-interface PullEntry { index: number | null; encounterName: string; duration: string }
-type BreakdownView = 'overview' | 'done' | 'taken' | 'timeline' | 'deaths' | 'casts' | 'events'
-type TimelineOverlay = 'deaths' | 'raises' | 'casts' | 'spikes'
-type EventFilter = 'damage' | 'healing' | 'casts' | 'deaths' | 'raises'
-
-interface BreakdownEventRow {
-  key: string
-  t: number
-  actor: string
-  eventType: EventFilter
-  ability: string
-  source: string
-  target: string
-  amount: number | null
-  hpBefore: string
-  hpAfter: string
-  note: string
-}
+import { getJobIconSrc, normalizeJob } from '@shared/jobMap'
+import { abilityInitials, resolveAbilityInfo } from '@shared/abilityIcons'
+import ActorRail from './AbilityBreakdown/ActorRail.vue'
+import AbilityCell from './AbilityBreakdown/AbilityCell.vue'
+import type { BreakdownView, CastFilter, CombatantGroup, EventActorScope, EventFilter, PartyMemberData, PullEntry, ResourceTrackKey, TimelineOverlay } from './AbilityBreakdown/types'
+import { deathEventsFor, deathHpBars as buildDeathHpBars, formatHpBefore as formatDeathHpBefore, formatHpValue as formatDeathHpValue, sortPlayerDeaths } from './AbilityBreakdown/deathTransforms'
+import { useEventRows } from './AbilityBreakdown/eventRows'
+import { useBreakdownViewState } from './AbilityBreakdown/viewState'
 
 // ── State from main window ────────────────────────────────────────────────────
 const allData             = ref<Record<string, CombatantAbilityData>>({})
@@ -35,30 +23,44 @@ const partyNames          = ref<string[]>([])
 const selected            = ref('')
 const pullList            = ref<PullEntry[]>([])
 const activePull          = ref<number | null>(null)
-const activeView          = ref<BreakdownView>('overview')
-const chartMetric         = ref<'dps' | 'hps' | 'dtps'>('dps')
 const encounterDurationSec = ref(0)
 const hiddenSeries        = ref<Set<string>>(new Set())
 const damageTakenData     = ref<Record<string, CombatantAbilityData>>({})
 const deaths              = ref<DeathRecord[]>([])
 const combatantIds        = ref<Record<string, string>>({})
+const combatantJobs       = ref<Record<string, string>>({})
 const showEnemies         = ref(false)
 const summaryMode         = ref<'done' | 'taken'>('done')
 const lastBroadcastTime   = ref(0)
 const castData            = ref<Record<string, CastEvent[]>>({})
-const selectedAbility     = ref('')
-const doneDimension       = ref<'ability' | 'targets' | 'sources'>('ability')
-const takenMode           = ref<'damage' | 'healing'>('damage')
-const deathInspectorTab   = ref<'recap' | 'context' | 'related'>('recap')
-const eventWindowOnly     = ref(false)
-const eventFilters        = ref<Set<EventFilter>>(new Set(['damage', 'healing', 'casts', 'deaths', 'raises']))
-const timelineOverlays    = ref<Set<TimelineOverlay>>(new Set(['deaths', 'raises', 'spikes']))
+const resourceData        = ref<Record<string, ResourceSample[]>>({})
+
+const {
+  activeView,
+  chartMetric,
+  selectedAbility,
+  doneDimension,
+  takenMode,
+  deathInspectorTab,
+  eventWindowOnly,
+  eventActorScope,
+  eventFilters,
+  timelineOverlays,
+  timelineFocusBucket,
+  castFilters,
+  viewTabs,
+  toggleTimelineOverlay,
+  toggleEventFilter,
+  toggleCastFilter,
+  openTimelineAtBucket,
+} = useBreakdownViewState()
 
 // Cast timeline hover state
 const castHoverData = ref<{ time: number; ability: string; target: string; x: number; y: number } | null>(null)
+const abilityIconSrcs = ref<Record<string, string>>({})
+const abilityCooldownMs = ref<Record<string, number>>({})
+const abilityIconRequested = new Set<string>()
 
-// Party data with inParty info for grouping
-interface PartyMemberData { id: number; name: string; inParty: boolean; partyType?: string }
 const partyData = ref<PartyMemberData[]>([])
 
 // Helper to format partyType with space (AllianceA -> "Alliance A")
@@ -108,13 +110,6 @@ function isNPC(name: string): boolean {
 const visibleCombatants = computed(() =>
   combatants.value.filter(n => (showEnemies.value || !isEnemy(n)) && (showFriendlyNPCs.value || !isNPC(n)))
 )
-
-// Grouped combatants with party info
-interface CombatantGroup {
-  label: string
-  names: string[]
-  collapsed?: boolean
-}
 
 const combatantGroups = computed<CombatantGroup[]>(() => {
   const all = visibleCombatants.value
@@ -191,6 +186,18 @@ function tabLabel(name: string): string {
   return name
 }
 
+function actorJob(name: string): string {
+  const direct = combatantJobs.value[name]
+  if (direct) return normalizeJob(direct)
+  const partyJob = partyData.value.find(member => member.name === name)?.job
+  return partyJob ? normalizeJob(partyJob) : ''
+}
+
+function actorJobIcon(name: string): string {
+  const job = actorJob(name)
+  return job ? getJobIconSrc(job) : ''
+}
+
 const blurTextStyle = {
   fontFamily: "'redacted-script-bold', monospace",
   filter: 'blur(1px)',
@@ -249,16 +256,6 @@ const takenAbilities = computed(() =>
 const activeTableRows  = computed(() => summaryMode.value === 'taken' ? takenAbilities.value  : abilities.value)
 const activeTableTotal = computed(() => summaryMode.value === 'taken' ? takenTotal.value      : playerTotal.value)
 
-const viewTabs: Array<{ id: BreakdownView; label: string }> = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'done', label: 'Done' },
-  { id: 'taken', label: 'Taken' },
-  { id: 'timeline', label: 'Timeline' },
-  { id: 'deaths', label: 'Deaths' },
-  { id: 'casts', label: 'Casts' },
-  { id: 'events', label: 'Events' },
-]
-
 const currentPullEntry = computed(() =>
   pullList.value.find(entry => entry.index === activePull.value) ?? null
 )
@@ -302,24 +299,28 @@ const selectedActorOverviewCards = computed(() => ([
     value: f(playerTotal.value),
     detail: `${abilities.value.length} abilities`,
     tone: 'done',
+    view: 'done' as BreakdownView,
   },
   {
     label: 'Taken',
     value: f(takenTotal.value),
     detail: `${takenAbilities.value.length} sources`,
     tone: 'taken',
+    view: 'taken' as BreakdownView,
   },
   {
     label: 'Deaths',
     value: String(selectedActorDeaths.value.length),
     detail: selectedActorDeaths.value.length > 0 ? `Last @ ${fmtTime(selectedActorDeaths.value.at(-1)?.timestamp ?? 0)}` : 'No deaths',
     tone: 'deaths',
+    view: 'deaths' as BreakdownView,
   },
   {
     label: 'Casts',
     value: f(selectedActorCastCount.value),
     detail: `${castPlayerData.value?.abilities.length ?? 0} tracked abilities`,
     tone: 'casts',
+    view: 'casts' as BreakdownView,
   },
 ]))
 
@@ -358,6 +359,18 @@ function selectorBadgeFor(name: string): string {
   return `${f(totalOutgoingFor(name))} out`
 }
 
+function takenSelectorBadgeFor(name: string): string {
+  return f(totalTakenFor(name))
+}
+
+function castSelectorBadgeFor(name: string): string {
+  return `${castCountFor(name)} casts`
+}
+
+function eventSelectorBadgeFor(name: string): string {
+  return `${eventRowCountFor(name)} rows`
+}
+
 const selectorMax = computed(() =>
   Math.max(1, ...visibleCombatants.value.map(name => selectorValueFor(name)))
 )
@@ -370,38 +383,17 @@ function selectActor(name: string): void {
   selected.value = name
   castSelectedPlayer.value = name
   encounterSelectedPlayer.value = name
+  const nextHidden = new Set(hiddenSeries.value)
+  nextHidden.delete(name)
+  hiddenSeries.value = nextHidden
 }
 
 function selectAbility(name: string): void {
   selectedAbility.value = name
 }
 
-function toggleTimelineOverlay(name: TimelineOverlay): void {
-  const next = new Set(timelineOverlays.value)
-  if (next.has(name)) next.delete(name)
-  else next.add(name)
-  timelineOverlays.value = next
-}
-
-function toggleEventFilter(name: EventFilter): void {
-  const next = new Set(eventFilters.value)
-  if (next.has(name)) next.delete(name)
-  else next.add(name)
-  eventFilters.value = next
-}
-
 // ── Deaths ────────────────────────────────────────────────────────────────────
-const sortedDeaths = computed(() => {
-  try {
-    const arr = deaths.value
-    if (!Array.isArray(arr)) return []
-    return arr
-      .filter(d => d && d.targetId && d.targetId.startsWith('10'))
-      .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))
-  } catch {
-    return []
-  }
-})
+const sortedDeaths = computed(() => sortPlayerDeaths(deaths.value))
 
 // ── Casts tab ─────────────────────────────────────────────────────────────────
 const castSelectedPlayer = ref('')
@@ -604,6 +596,204 @@ const castTimelineBuckets = computed(() => {
   return buckets
 })
 
+const MITIGATION_PATTERNS = [
+  /reprisal/, /rampart/, /arms length/, /arm's length/, /feint/, /addle/, /bloodbath/, /second wind/,
+  /sentinel/, /guardian/, /hallowed ground/, /bulwark/, /sheltron/, /holy sheltron/, /intervention/, /divine veil/, /passage of arms/, /cover/,
+  /vengeance/, /damnation/, /bloodwhetting/, /raw intuition/, /nascent flash/, /shake it off/, /thrill of battle/, /holmgang/, /equilibrium/,
+  /shadow wall/, /the blackest night/, /oblation/, /dark mind/, /dark missionary/, /living dead/, /living shadow/,
+  /nebula/, /camouflage/, /heart of stone/, /heart of corundum/, /heart of light/, /superbolide/, /great nebula/, /aurora/,
+  /temperance/, /aquaveil/, /liturgy of the bell/, /divine benison/, /divine caress/, /asylum/, /plenary indulgence/, /benediction/, /tetragrammaton/,
+  /sacred soil/, /expedient/, /seraphism/, /seraph/, /protraction/, /recitation/, /deployment tactics/, /emergency tactics/, /dissipation/, /fey illumination/, /excogitation/,
+  /collective unconscious/, /exaltation/, /celestial intersection/, /neutral sect/, /macrocosmos/, /horoscope/, /synastry/,
+  /kerachole/, /taurochole/, /haima/, /panhaima/, /holos/, /krasis/, /zoe/, /soteria/, /physis/, /rhizomata/, /pepsis/, /philosophia/, /eukrasian diagnosis/, /eukrasian prognosis/,
+  /mantra/, /riddle of earth/, /shade shift/, /arcane crest/, /crest of time borrowed/, /third eye/, /perfect defense/,
+  /troubadour/, /tactician/, /dismantle/, /shield samba/, /improvisation/, /improvised finish/, /curing waltz/,
+  /manaward/, /magick barrier/, /radiant aegis/, /everlasting flight/,
+  /barrier/, /mitig/,
+]
+
+const COOLDOWN_PATTERNS = [
+  /sprint/, /swiftcast/, /lucid dreaming/, /surecast/, /true north/, /leg sweep/, /interject/, /low blow/, /provoke/, /shirk/,
+  /fight or flight/, /requiescat/, /imperator/, /expiacion/, /circle of scorn/, /intervene/, /atonement/, /confiteor/,
+  /berserk/, /inner release/, /infuriate/, /primal rend/, /primal wrath/, /onslaught/, /upheaval/, /orogeny/,
+  /delirium/, /blood weapon/, /salted earth/, /salt and darkness/, /carve and spit/, /abyssal drain/, /shadowbringer/, /edge of shadow/, /flood of shadow/,
+  /no mercy/, /bloodfest/, /sonic break/, /double down/, /rough divide/, /danger zone/, /blasting zone/, /bow shock/, /continuation/, /reign of beasts/,
+  /presence of mind/, /thin air/, /assize/, /afflatus misery/, /temperance/, /liturgy of the bell/,
+  /aetherflow/, /chain stratagem/, /energy drain/, /recitation/, /deployment tactics/, /dissipation/, /summon seraph/, /seraphism/,
+  /draw/, /divination/, /lightspeed/, /earthly star/, /minor arcana/, /lord of crowns/, /lady of crowns/, /sleeve draw/, /astrodyne/,
+  /rhizomata/, /soteria/, /phlegma/, /toxikon/, /psyche/, /pneuma/, /zoe/, /philosophia/,
+  /ley lines/, /triplecast/, /amplifier/, /manafont/, /transpose/, /sharpcast/, /enochian/, /paradox/, /xenoglossy/, /foul/,
+  /acceleration/, /embolden/, /manafication/, /fleche/, /contre sixte/, /corps-a-corps/, /engagement/, /displacement/, /magick barrier/, /resolution/,
+  /searing light/, /summon bahamut/, /summon phoenix/, /summon solar bahamut/, /energy drain/, /energy siphon/, /enkindle/, /aethercharge/, /fester/, /painflare/,
+  /battle litany/, /life surge/, /lance charge/, /dragon sight/, /geirskogul/, /nastrond/, /wyrmwind thrust/, /stardiver/, /dragonfire dive/, /mirage dive/,
+  /brotherhood/, /riddle of fire/, /riddle of wind/, /perfect balance/, /form shift/, /thunderclap/, /enlightenment/, /six-sided star/,
+  /mug/, /trick attack/, /dokumori/, /bunshin/, /kassatsu/, /ten chi jin/, /dream within a dream/, /assassinate/, /bhavacakra/, /hellfrog medium/,
+  /meikyo shisui/, /ikishoten/, /hissatsu/, /tsubame-gaeshi/, /hagakure/, /meditate/, /senei/, /guren/, /shoha/, /kaeshi/,
+  /arcane circle/, /gluttony/, /plentiful harvest/, /enshroud/, /soul sow/, /harvest moon/, /lemure/, /communio/,
+  /serpent's ire/, /reawaken/, /vicewinder/, /slither/, /uncoiled fury/, /twinfang/, /twinblood/,
+  /battle voice/, /raging strikes/, /barrage/, /radiant finale/, /wanderer's minuet/, /mage's ballad/, /army's paeon/, /sidewinder/, /apex arrow/, /blast arrow/, /pitch perfect/,
+  /wildfire/, /reassemble/, /barrel stabilizer/, /hypercharge/, /chainsaw/, /air anchor/, /drill/, /bio blaster/, /automaton queen/, /rook autoturret/, /queen overdrive/,
+  /technical step/, /technical finish/, /devilment/, /flourish/, /standard step/, /standard finish/, /fan dance/, /starfall dance/, /tillana/, /saber dance/,
+  /starry muse/, /subtractive palette/, /creature motif/, /weapon motif/, /landscape motif/, /muse/, /hammer stamp/, /mog of the ages/, /retribution of the madeen/,
+]
+
+const HEAL_PATTERNS = [
+  /cure/, /heal/, /medica/, /regen/, /benefic/, /succor/, /adlo/, /physick/, /lustrate/,
+  /essential dignity/, /afflatus/, /tetra/, /excog/, /indom/, /aspected/, /pneuma/,
+]
+
+function castCategory(event: CastEvent): CastFilter {
+  const name = event.abilityName.toLowerCase().replace(/[’']/g, "'")
+  if (MITIGATION_PATTERNS.some(pattern => pattern.test(name))) return 'mitigations'
+  if (COOLDOWN_PATTERNS.some(pattern => pattern.test(name))) return 'cooldowns'
+  if (HEAL_PATTERNS.some(pattern => pattern.test(name))) return 'heals'
+  return 'dps'
+}
+
+const filteredCastTimelineEvents = computed(() => {
+  if (!castPlayerData.value) return []
+  return castPlayerData.value.events
+    .map(event => ({ ...event, category: castCategory(event) }))
+    .filter(event => castFilters.value.has(event.category))
+    .sort((a, b) => a.t - b.t)
+})
+
+const castTimelineRows = computed(() => {
+  if (!castPlayerData.value) return []
+  return castPlayerData.value.abilities
+    .map(ability => {
+      const category = castCategory(ability.events[0] ?? { abilityName: ability.name, t: 0, target: '', type: 'cast' })
+      return {
+        ...ability,
+        category,
+        events: ability.events
+          .slice()
+          .sort((a, b) => a.t - b.t),
+      }
+    })
+    .filter(row => castFilters.value.has(row.category))
+    .sort((a, b) => {
+      const order: Record<CastFilter, number> = { cooldowns: 0, mitigations: 1, dps: 2, heals: 3 }
+      return order[a.category] - order[b.category] || b.casts - a.casts || a.name.localeCompare(b.name)
+    })
+})
+
+const castTimelineGroups = computed(() => {
+  const labels: Record<CastFilter, string> = {
+    cooldowns: 'Cooldowns',
+    mitigations: 'Mitigations',
+    dps: 'DPS / GCD',
+    heals: 'Heals',
+  }
+  return (['cooldowns', 'mitigations', 'dps', 'heals'] as CastFilter[])
+    .map(category => ({
+      category,
+      label: labels[category],
+      rows: castTimelineRows.value.filter(row => row.category === category),
+    }))
+    .filter(group => group.rows.length > 0)
+})
+
+const castTimelinePixelWidth = computed(() =>
+  Math.max(1100, Math.ceil(castTimelineDuration.value * 14))
+)
+
+const selectedResourceSamples = computed(() => {
+  if (!castSelectedPlayer.value) return []
+  return resourceData.value[castSelectedPlayer.value] ?? []
+})
+
+const castResourceTracks = computed(() => {
+  const samples = selectedResourceSamples.value
+  if (samples.length === 0 || castTimelineDuration.value <= 0) return []
+  const latest = samples[samples.length - 1]
+  const rows: Array<{ key: ResourceTrackKey; label: string; value: string; color: string; fill: string }> = [{
+    key: 'hp',
+    label: 'HP',
+    value: `${Math.round((latest.hp ?? 0) * 100)}%`,
+    color: '#22c55e',
+    fill: 'rgba(34,197,94,0.16)',
+  }]
+  if (samples.some(sample => sample.mp !== undefined && (sample.maxMp ?? 0) > 0)) {
+    rows.push({
+      key: 'mp',
+      label: 'MP',
+      value: `${Math.round((latest.mp ?? 0) * 100)}%`,
+      color: '#38bdf8',
+      fill: 'rgba(56,189,248,0.14)',
+    })
+  }
+  return rows
+})
+
+function resourcePoint(sample: ResourceSample, key: ResourceTrackKey): { x: number; y: number } {
+  const durationMs = Math.max(1, castTimelineDuration.value * 1000)
+  const value = key === 'hp' ? sample.hp : (sample.mp ?? 0)
+  return {
+    x: Math.max(0, Math.min(100, (sample.t / durationMs) * 100)),
+    y: Math.max(0, Math.min(100, (1 - value) * 100)),
+  }
+}
+
+function resourcePolyline(key: ResourceTrackKey): string {
+  return selectedResourceSamples.value
+    .filter(sample => key === 'hp' || sample.mp !== undefined)
+    .map(sample => {
+      const point = resourcePoint(sample, key)
+      return `${point.x.toFixed(2)},${point.y.toFixed(2)}`
+    })
+    .join(' ')
+}
+
+function resourceAreaPath(key: ResourceTrackKey): string {
+  const points = selectedResourceSamples.value
+    .filter(sample => key === 'hp' || sample.mp !== undefined)
+    .map(sample => resourcePoint(sample, key))
+  if (points.length === 0) return ''
+  const start = points[0]
+  const end = points[points.length - 1]
+  const line = points.map(point => `L ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ')
+  return `M ${start.x.toFixed(2)} 100 L ${start.x.toFixed(2)} ${start.y.toFixed(2)} ${line} L ${end.x.toFixed(2)} 100 Z`
+}
+
+function castEventLeft(event: CastEvent): string {
+  if (castTimelineDuration.value <= 0) return '0%'
+  const markerT = event.type === 'cast' && !event.buffDurationMs && event.endT ? event.endT : event.t
+  return `${Math.min(100, Math.max(0, ((markerT / 1000) / castTimelineDuration.value) * 100))}%`
+}
+
+function castEventWidth(event: CastEvent): string {
+  if (event.buffDurationMs && castTimelineDuration.value > 0) {
+    const pct = (event.buffDurationMs / 1000) / castTimelineDuration.value * 100
+    return `${Math.max(22, pct)}%`
+  }
+  return '22px'
+}
+
+function castCastWindowLeft(event: CastEvent): string {
+  if (castTimelineDuration.value <= 0) return '0%'
+  return `${Math.min(100, Math.max(0, ((event.t / 1000) / castTimelineDuration.value) * 100))}%`
+}
+
+function castCastWindowWidth(event: CastEvent): string {
+  if (event.type !== 'cast' || !event.durationMs || castTimelineDuration.value <= 0) return '0%'
+  const pct = (event.durationMs / 1000) / castTimelineDuration.value * 100
+  return `${Math.max(4, pct)}%`
+}
+
+function castCooldownWidth(event: CastEvent): string {
+  const cooldownMs = event.cooldownMs ?? abilityRecastMs(event.abilityId, event.abilityName)
+  if (!cooldownMs || castTimelineDuration.value <= 0) return '0%'
+  const pct = (cooldownMs / 1000) / castTimelineDuration.value * 100
+  const startPct = ((event.t / 1000) / castTimelineDuration.value) * 100
+  return `${Math.max(0, Math.min(pct, 100 - startPct))}%`
+}
+
+function castCooldownLabel(event: CastEvent): string {
+  const cooldownMs = event.cooldownMs ?? abilityRecastMs(event.abilityId, event.abilityName)
+  return cooldownMs ? `${Math.round(cooldownMs / 1000)}s cooldown` : ''
+}
+
 function getAbilityBuckets(abilityName: string) {
   if (!castPlayerData.value) return []
   const events = castPlayerData.value.events.filter(e => e.abilityName === abilityName)
@@ -624,6 +814,72 @@ function getAbilityBuckets(abilityName: string) {
   }
 
   return buckets
+}
+
+function abilityIconKey(abilityId: string, abilityName: string): string {
+  return `${abilityId || 'unknown'}:${abilityName}`
+}
+
+function abilityIconSrc(abilityId: string, abilityName: string): string {
+  return abilityIconSrcs.value[abilityIconKey(abilityId, abilityName)] ?? ''
+}
+
+function abilityRecastMs(abilityId: string, abilityName: string): number {
+  return abilityCooldownMs.value[abilityIconKey(abilityId, abilityName)] ?? 0
+}
+
+function queueAbilityIcon(abilityId: string, abilityName: string): void {
+  const key = abilityIconKey(abilityId, abilityName)
+  if (abilityIconRequested.has(key)) return
+  abilityIconRequested.add(key)
+  resolveAbilityInfo(abilityId).then(info => {
+    if (info.iconSrc) abilityIconSrcs.value = { ...abilityIconSrcs.value, [key]: info.iconSrc }
+    if (info.recastMs) abilityCooldownMs.value = { ...abilityCooldownMs.value, [key]: info.recastMs }
+  })
+}
+
+function clearAbilityIcon(abilityId: string, abilityName: string): void {
+  const key = abilityIconKey(abilityId, abilityName)
+  if (!abilityIconSrcs.value[key]) return
+  const next = { ...abilityIconSrcs.value }
+  delete next[key]
+  abilityIconSrcs.value = next
+}
+
+watch(castTimelineRows, rows => {
+  for (const row of rows) {
+    const first = row.events[0]
+    if (first?.abilityId) queueAbilityIcon(first.abilityId, row.name)
+  }
+}, { immediate: true })
+
+function abilityIdForName(abilityName: string): string {
+  for (const source of [allData.value, damageTakenData.value]) {
+    for (const actorData of Object.values(source)) {
+      for (const ability of Object.values(actorData)) {
+        if (ability.abilityName === abilityName) return ability.abilityId
+      }
+    }
+  }
+  for (const events of Object.values(castData.value)) {
+    const match = events.find(event => event.abilityName === abilityName)
+    if (match?.abilityId) return match.abilityId
+  }
+  return ''
+}
+
+function queueVisibleAbilityIcons(): void {
+  for (const row of [...abilities.value, ...takenAbilities.value]) {
+    queueAbilityIcon(row.abilityId, row.abilityName)
+  }
+  for (const row of eventRows.value.slice(0, 80)) {
+    const id = abilityIdForName(row.ability)
+    if (id) queueAbilityIcon(id, row.ability)
+  }
+  for (const hit of deathHitLog.value) {
+    const id = abilityIdForName(hit.abilityName)
+    if (id) queueAbilityIcon(id, hit.abilityName)
+  }
 }
 
 // ── Encounter tab ─────────────────────────────────────────────────────────────
@@ -695,16 +951,29 @@ const selectedDeath = computed<DeathRecord | null>(() =>
   selectedDeathIndex.value !== null ? (sortedDeaths.value[selectedDeathIndex.value] ?? null) : null
 )
 
-function deathEventsFor(death: DeathRecord): DeathEvent[] {
-  if (Array.isArray(death.events) && death.events.length > 0) return death.events
-  return buildDeathEvents(death.hpSamples ?? [], death.lastHits ?? [], death.timestamp ?? 0)
-}
-
 const deathHitLog = computed(() => selectedDeath.value ? deathEventsFor(selectedDeath.value) : [])
 
 const selectedDoneAbility = computed(() =>
   abilities.value.find(row => row.abilityName === selectedAbility.value) ?? abilities.value[0] ?? null
 )
+
+const selectedDoneHighestHitAbility = computed(() =>
+  abilities.value.reduce((best, row) =>
+    !best || row.maxHit > best.maxHit ? row : best, null as (typeof abilities.value)[number] | null)
+)
+
+const partyHighestHit = computed(() => {
+  let best: { actor: string; ability: string; amount: number } | null = null
+  for (const name of visibleCombatants.value) {
+    if (isEnemy(name)) continue
+    for (const ability of Object.values(allData.value[name] ?? {})) {
+      if (!best || ability.maxHit > best.amount) {
+        best = { actor: name, ability: ability.abilityName, amount: ability.maxHit }
+      }
+    }
+  }
+  return best
+})
 
 const selectedTakenAbility = computed(() =>
   takenAbilities.value.find(row => row.abilityName === selectedAbility.value) ?? takenAbilities.value[0] ?? null
@@ -764,35 +1033,16 @@ function fmtTime(ms: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`
 }
 
-function formatHpValue(value: number): string {
-  return f(Math.max(0, Math.round(value)))
+function fmtSeconds(seconds: number): string {
+  if (!seconds || seconds < 0) return '0:00'
+  const s = Math.floor(seconds)
+  const m = Math.floor(s / 60)
+  return `${m}:${String(s % 60).padStart(2, '0')}`
 }
 
-function formatHpBefore(event: DeathEvent): string {
-  const pct = Math.round(event.hpBefore * 100)
-  return `${formatHpValue(event.hpBeforeRaw)} / ${formatHpValue(event.maxHp)} (${pct}%)`
-}
-
-function deathHpBars(death: DeathRecord): Array<{
-  x: number
-  width: number
-  hpBefore: number
-  hpAfter: number
-  type: 'dmg' | 'heal' | 'death'
-  isEstimated: boolean
-}> {
-  const events = deathEventsFor(death)
-  if (events.length === 0) return []
-  const barWidth = 120 / events.length
-  return events.map((event, index) => ({
-    x: index * barWidth,
-    width: barWidth,
-    hpBefore: event.hpBefore,
-    hpAfter: event.hpAfter,
-    type: event.type,
-    isEstimated: event.isEstimated === true,
-  }))
-}
+const formatHpValue = (value: number) => formatDeathHpValue(value, f)
+const formatHpBefore = (event: DeathEvent) => formatDeathHpBefore(event, f)
+const deathHpBars = (death: DeathRecord) => buildDeathHpBars(death)
 
 // ── Pull selector ─────────────────────────────────────────────────────────────
 function onPullSelect(e: Event): void {
@@ -875,11 +1125,17 @@ const chartLines = computed(() => {
 
   const series = names
     .filter(n => showEnemies.value || !isEnemy(n))
+    .sort((a, b) => {
+      if (a === resolvedSelected.value) return -1
+      if (b === resolvedSelected.value) return 1
+      return a.localeCompare(b)
+    })
     .map((name, i) => ({
       name,
       color: CHART_COLORS[i % CHART_COLORS.length],
       values: smoothBuckets(timeline[name] ?? []).map(v => v / TIMELINE_BUCKET_SEC),
       isGroup: false,
+      isFocused: name === resolvedSelected.value,
     }))
 
   // Group line = sum of all individual series per bucket
@@ -889,7 +1145,7 @@ const chartLines = computed(() => {
   }
   const allSeries = [
     ...series,
-    { name: GROUP_NAME, color: GROUP_COLOR, values: groupBuckets, isGroup: true },
+    { name: GROUP_NAME, color: GROUP_COLOR, values: groupBuckets, isGroup: true, isFocused: false },
   ]
 
   // Y max: highest visible value (individual or group)
@@ -943,6 +1199,9 @@ function onSvgMouseMove(e: MouseEvent): void {
 }
 
 const hoverBucket = computed(() => {
+  if (!hoverVisible.value && timelineFocusBucket.value !== null && chartLines.value) {
+    return Math.max(0, Math.min(chartLines.value.maxBuckets - 1, timelineFocusBucket.value))
+  }
   if (!hoverVisible.value || !chartLines.value) return -1
   const { maxBuckets } = chartLines.value
   if (maxBuckets < 2) return -1
@@ -996,6 +1255,55 @@ const timelineSpikeMarkers = computed(() => {
     .slice(0, 3)
 })
 
+const overviewTimelineBars = computed(() => {
+  const values = (activeTimeline.value[resolvedSelected.value] ?? []).map(value => value / TIMELINE_BUCKET_SEC)
+  if (values.length === 0) return []
+  const bucketCount = Math.min(28, values.length)
+  const groupSize = Math.ceil(values.length / bucketCount)
+  const grouped: Array<{ key: string; height: string; label: string; value: string; bucket: number }> = []
+
+  for (let i = 0; i < values.length; i += groupSize) {
+    const slice = values.slice(i, i + groupSize)
+    const value = slice.reduce((sum, item) => sum + item, 0) / Math.max(slice.length, 1)
+    grouped.push({
+      key: `overview-timeline-${i}`,
+      height: '0%',
+      label: fmtTime(i * TIMELINE_BUCKET_SEC * 1000),
+      value: f(value),
+      bucket: i,
+    })
+  }
+
+  const max = Math.max(1, ...grouped.map(item => Number(item.value.replace(/[^0-9.]/g, '')) || 0), ...values)
+  return grouped.map(item => {
+    const raw = values.slice(item.bucket, item.bucket + groupSize)
+    const value = raw.reduce((sum, next) => sum + next, 0) / Math.max(raw.length, 1)
+    return {
+      ...item,
+      height: `${Math.max(8, Math.min(100, (value / max) * 100)).toFixed(1)}%`,
+      value: f(value),
+    }
+  })
+})
+
+function openOverviewCard(view: BreakdownView): void {
+  activeView.value = view
+}
+
+function openSelectedTimeline(): void {
+  const firstSpike = timelineSpikeMarkers.value[0]
+  if (firstSpike) timelineFocusBucket.value = firstSpike.index
+  activeView.value = 'timeline'
+}
+
+function openLatestDeath(): void {
+  if (selectedActorDeaths.value.length > 0) {
+    const latest = selectedActorDeaths.value[selectedActorDeaths.value.length - 1]
+    selectedDeathIndex.value = sortedDeaths.value.findIndex(death => death === latest)
+  }
+  activeView.value = 'deaths'
+}
+
 function markerXForTime(timeSec: number, maxBuckets: number): number {
   const bucket = Math.max(0, Math.min(maxBuckets - 1, timeSec / TIMELINE_BUCKET_SEC))
   return PL + (bucket / Math.max(maxBuckets - 1, 1)) * CW
@@ -1033,70 +1341,19 @@ const tooltipStyle = computed(() => {
 
 const f = (n: number) => formatValue(n, 'abbreviated')
 
-const eventRowsRaw = computed<BreakdownEventRow[]>(() => {
-  const actor = resolvedSelected.value
-  if (!actor) return []
-
-  const rows: BreakdownEventRow[] = []
-
-  for (const cast of selectedActorCastEvents.value) {
-    rows.push({
-      key: `cast-${cast.t}-${cast.abilityName}-${cast.target ?? ''}`,
-      t: cast.t,
-      actor,
-      eventType: 'casts',
-      ability: cast.abilityName,
-      source: actor,
-      target: cast.target ?? '',
-      amount: null,
-      hpBefore: '—',
-      hpAfter: '—',
-      note: cast.type === 'tick' ? 'tick' : 'cast',
-    })
-  }
-
-  for (const death of selectedActorDeaths.value) {
-    for (const event of deathEventsFor(death)) {
-      rows.push({
-        key: `death-event-${death.timestamp}-${event.t}-${event.abilityName}-${event.type}`,
-        t: event.t,
-        actor,
-        eventType: event.isDeathBlow ? 'deaths' : event.type === 'heal' ? 'healing' : 'damage',
-        ability: event.isDeathBlow ? 'KO' : event.abilityName,
-        source: event.sourceName,
-        target: actor,
-        amount: event.isDeathBlow ? null : event.amount,
-        hpBefore: formatHpBefore(event),
-        hpAfter: `${formatHpValue(event.hpAfterRaw)} / ${formatHpValue(event.maxHp)} (${Math.round(event.hpAfter * 100)}%)`,
-        note: event.isEstimated ? 'estimated death recap' : 'death recap',
-      })
-    }
-
-    if (death.resurrectTime) {
-      rows.push({
-        key: `raise-${death.resurrectTime}-${actor}`,
-        t: death.resurrectTime,
-        actor,
-        eventType: 'raises',
-        ability: 'Raise',
-        source: '',
-        target: actor,
-        amount: null,
-        hpBefore: '0%',
-        hpAfter: 'raised',
-        note: 'resurrection detected',
-      })
-    }
-  }
-
-  return rows.sort((a, b) => b.t - a.t)
+const { eventRowCountFor, eventRows } = useEventRows({
+  eventActorScope,
+  visibleCombatants,
+  resolvedSelected,
+  castData,
+  sortedDeaths,
+  eventFilters,
+  eventWindowOnly,
+  selectedDeathWindow,
+  format: f,
 })
 
-const eventRows = computed(() => {
-  const filtered = eventRowsRaw.value.filter(row => eventFilters.value.has(row.eventType))
-  if (!eventWindowOnly.value || !selectedDeathWindow.value) return filtered
-  return filtered.filter(row => row.t >= selectedDeathWindow.value!.start && row.t <= selectedDeathWindow.value!.end)
-})
+watch([abilities, takenAbilities, eventRows, deathHitLog], queueVisibleAbilityIcons, { immediate: true })
 
 const activeFilterChips = computed(() => {
   const chips = [
@@ -1115,7 +1372,7 @@ const activeFilterChips = computed(() => {
 let channel: BroadcastChannel | null = null
 
 onMounted(() => {
-  document.title = 'Ability Breakdown'
+  document.title = 'Flexi Breakdown'
   if (typeof BroadcastChannel === 'undefined') return
   channel = new BroadcastChannel('flexi-breakdown')
   channel.onmessage = (e) => {
@@ -1143,7 +1400,9 @@ onMounted(() => {
         damageTakenData.value = {}
         deaths.value = []
         combatantIds.value = {}
+        combatantJobs.value = {}
         castData.value = {}
+        resourceData.value = {}
       }
 
       lastBroadcastTime.value = ts
@@ -1154,7 +1413,9 @@ onMounted(() => {
       damageTakenData.value      = e.data.damageTakenData  ?? {}
       deaths.value               = e.data.deaths           ?? []
       combatantIds.value         = e.data.combatantIds     ?? {}
+      combatantJobs.value        = e.data.combatantJobs    ?? {}
       castData.value             = e.data.castData         ?? {}
+      resourceData.value         = e.data.resourceData     ?? {}
       selfName.value             = e.data.selfName         ?? ''
       blurNames.value            = e.data.blurNames        ?? false
       partyNames.value           = Array.isArray(e.data.partyNames) ? e.data.partyNames : []
@@ -1183,25 +1444,21 @@ onUnmounted(() => { channel?.close(); channel = null })
 <template>
   <div class="bp-root">
     <div class="bp-topbar">
-      <span class="bp-app-title">Ability Breakdown</span>
-      <select v-if="pullList.length > 0" class="bp-pull-select"
-        :value="String(activePull)" @change="onPullSelect">
-        <option v-for="entry in pullList" :key="String(entry.index)" :value="String(entry.index)">
-          {{ entry.index === null ? '⬤ Live' : `${entry.encounterName}  ${entry.duration}` }}
-        </option>
-      </select>
-      <button class="bp-toggle-btn" :class="{ active: showEnemies }" @click="showEnemies = !showEnemies" title="Show/hide enemies">
-        Enemies
-      </button>
-      <button class="bp-toggle-btn" :class="{ active: showFriendlyNPCs }" @click="showFriendlyNPCs = !showFriendlyNPCs" title="Show/hide friendly NPCs (minions, companions)">
-        NPCs
-      </button>
+      <span class="bp-app-title">Flexi Breakdown</span>
       <span v-if="encounterTotal > 0" class="bp-total">{{ f(encounterTotal) }} tracked</span>
     </div>
 
     <div class="bp-analysis-header">
       <div class="bp-analysis-main">
-        <div class="bp-analysis-kicker">Report Shell</div>
+        <div class="bp-report-select-row">
+          <div class="bp-analysis-kicker">Encounter</div>
+          <select v-if="pullList.length > 0" class="bp-pull-select bp-pull-select--header"
+            :value="String(activePull)" @change="onPullSelect">
+            <option v-for="entry in pullList" :key="String(entry.index)" :value="String(entry.index)">
+              {{ entry.index === null ? 'Live' : `${entry.encounterName}  ${entry.duration}` }}
+            </option>
+          </select>
+        </div>
         <div class="bp-analysis-title">{{ currentEncounterName || 'Current Encounter' }}</div>
       </div>
       <div class="bp-analysis-stats">
@@ -1273,30 +1530,33 @@ onUnmounted(() => { channel?.close(); channel = null })
     <div v-if="combatants.length === 0" class="bp-waiting">Waiting for combat data…</div>
     <template v-else-if="activeView === 'overview'">
       <div class="bp-workspace">
-        <aside class="bp-rail">
-          <div class="bp-rail-title">Selectors</div>
-          <template v-for="group in combatantGroups" :key="group.label">
-            <div class="bp-group-header" @click="toggleGroup(group.label)">
-              <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
-              <span class="bp-group-label">{{ group.label }}</span>
-            </div>
-            <template v-if="!groupCollapsed.has(group.label)">
-              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: resolvedSelected === name }" @click="selectActor(name)">
-                <div class="bp-rail-fill" :style="{ width: selectorFillWidth(name) }" />
-                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
-                <span class="bp-rail-meta">{{ selectorBadgeFor(name) }}</span>
-              </button>
-            </template>
-          </template>
-        </aside>
+        <ActorRail
+          :groups="combatantGroups"
+          :collapsed-groups="groupCollapsed"
+          :selected-name="resolvedSelected"
+          :value-for="selectorBadgeFor"
+          :fill-width-for="selectorFillWidth"
+          :actor-job="actorJob"
+          :actor-job-icon="actorJobIcon"
+          :name-style="nameStyle"
+          :tab-label="tabLabel"
+          @toggle-group="toggleGroup"
+          @select-actor="selectActor"
+        />
 
         <main class="bp-main">
           <div class="bp-card-grid">
-            <div v-for="card in selectedActorOverviewCards" :key="card.label" class="bp-card" :class="`bp-card--${card.tone}`">
+            <button
+              v-for="card in selectedActorOverviewCards"
+              :key="card.label"
+              class="bp-card bp-card--button"
+              :class="`bp-card--${card.tone}`"
+              @click="openOverviewCard(card.view)"
+            >
               <div class="bp-card-label">{{ card.label }}</div>
               <div class="bp-card-value">{{ card.value }}</div>
               <div class="bp-card-detail">{{ card.detail }}</div>
-            </div>
+            </button>
           </div>
 
           <div class="bp-overview-grid">
@@ -1306,7 +1566,7 @@ onUnmounted(() => { channel?.close(); channel = null })
                 <thead><tr><th class="col-name">Ability</th><th class="col-num">Total</th><th class="col-pct">%</th><th class="col-num">Rate</th></tr></thead>
                 <tbody>
                   <tr v-for="row in abilities.slice(0, 6)" :key="`ov-done-${row.abilityId}`" @click="selectAbility(row.abilityName)">
-                    <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname">{{ row.abilityName }}</span></td>
+                    <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
                     <td class="col-num">{{ f(row.totalDamage) }}</td>
                     <td class="col-pct">{{ row.pct }}%</td>
                     <td class="col-num">{{ encounterDurationSec > 0 ? f(row.dps) : '—' }}</td>
@@ -1321,7 +1581,7 @@ onUnmounted(() => { channel?.close(); channel = null })
                 <thead><tr><th class="col-name">Source Ability</th><th class="col-num">Total</th><th class="col-pct">%</th><th class="col-num">Near Deaths</th></tr></thead>
                 <tbody>
                   <tr v-for="row in takenAbilities.slice(0, 6)" :key="`ov-taken-${row.abilityId}`" @click="selectAbility(row.abilityName)">
-                    <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname">{{ row.abilityName }}</span></td>
+                    <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
                     <td class="col-num">{{ f(row.totalDamage) }}</td>
                     <td class="col-pct">{{ row.pct }}%</td>
                     <td class="col-num">{{ selectedActorDeathAbilitySet.has(row.abilityName) ? 'Yes' : '—' }}</td>
@@ -1333,11 +1593,28 @@ onUnmounted(() => { channel?.close(); channel = null })
             <section class="bp-panel">
               <div class="bp-panel-title">Timeline Snapshot</div>
               <div class="bp-mini-chart-shell">
-                <div class="bp-mini-chart-label">Selected actor uses the current timeline metric and shares hover state with the Timeline view.</div>
+                <div class="bp-mini-chart" :class="{ empty: overviewTimelineBars.length === 0 }">
+                  <button
+                    v-for="bar in overviewTimelineBars"
+                    :key="bar.key"
+                    class="bp-mini-chart-bar"
+                    :style="{ height: bar.height }"
+                    :title="`${bar.label} · ${bar.value}/s`"
+                    @click="openTimelineAtBucket(bar.bucket)"
+                  />
+                  <span v-if="overviewTimelineBars.length === 0">No timeline samples yet.</span>
+                </div>
                 <div class="bp-mini-chart-values">
                   <span class="bp-mini-pill">{{ metricLabel }}</span>
                   <span class="bp-mini-pill">{{ f((activeTimeline[resolvedSelected] ?? []).reduce((sum, value) => sum + value, 0) / Math.max(encounterDurationSec, 1)) }}/s avg</span>
-                  <span class="bp-mini-pill">{{ timelineSpikeMarkers.length }} notable spikes</span>
+                  <button
+                    v-for="spike in timelineSpikeMarkers"
+                    :key="`overview-spike-${spike.index}`"
+                    class="bp-mini-pill bp-mini-pill--button"
+                    @click="openTimelineAtBucket(spike.index)"
+                  >
+                    Spike @ {{ fmtTime(spike.index * TIMELINE_BUCKET_SEC * 1000) }} · {{ f(spike.value) }}/s
+                  </button>
                 </div>
               </div>
             </section>
@@ -1362,14 +1639,22 @@ onUnmounted(() => { channel?.close(); channel = null })
           <div class="bp-inspector-title">Overview Inspector</div>
           <div class="bp-inspector-block">
             <div class="bp-kv"><span>Player</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected || 'None' }}</strong></div>
-            <div class="bp-kv"><span>Biggest Done</span><strong>{{ selectedDoneAbility?.abilityName ?? '—' }}</strong></div>
+            <div class="bp-kv"><span>Biggest Hit</span><strong>{{ selectedDoneHighestHitAbility ? `${selectedDoneHighestHitAbility.abilityName} · ${f(selectedDoneHighestHitAbility.maxHit)}` : '—' }}</strong></div>
             <div class="bp-kv"><span>Biggest Taken</span><strong>{{ selectedTakenAbility?.abilityName ?? '—' }}</strong></div>
             <div class="bp-kv"><span>Deaths</span><strong>{{ selectedActorDeaths.length }}</strong></div>
             <div class="bp-kv"><span>Casts</span><strong>{{ selectedActorCastCount }}</strong></div>
           </div>
           <div class="bp-inspector-block">
-            <div class="bp-section-heading">Why this matters</div>
-            <p class="bp-inspector-copy">This landing page is tuned for fast triage: top output, top intake, a quick metric read, and the notable moments that should drive deeper review.</p>
+            <div class="bp-section-heading">Quick Actions</div>
+            <button class="bp-action-btn" @click="openOverviewCard('done')">Open outgoing breakdown</button>
+            <button class="bp-action-btn" @click="openOverviewCard('taken')">Open incoming breakdown</button>
+            <button class="bp-action-btn" @click="openSelectedTimeline">Open timeline at spike</button>
+            <button class="bp-action-btn" :disabled="selectedActorDeaths.length === 0" @click="openLatestDeath">Open latest death</button>
+            <div v-if="partyHighestHit" class="bp-party-highlight">
+              <span class="bp-party-label">Party highest hit</span>
+              <strong>{{ partyHighestHit.ability }} · {{ f(partyHighestHit.amount) }}</strong>
+              <span :style="nameStyle(partyHighestHit.actor)">{{ partyHighestHit.actor }}</span>
+            </div>
           </div>
         </aside>
       </div>
@@ -1377,22 +1662,19 @@ onUnmounted(() => { channel?.close(); channel = null })
 
     <template v-else-if="activeView === 'done'">
       <div class="bp-workspace">
-        <aside class="bp-rail">
-          <div class="bp-rail-title">Party Rail</div>
-          <template v-for="group in combatantGroups" :key="group.label">
-            <div class="bp-group-header" @click="toggleGroup(group.label)">
-              <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
-              <span class="bp-group-label">{{ group.label }}</span>
-            </div>
-            <template v-if="!groupCollapsed.has(group.label)">
-              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: resolvedSelected === name }" @click="selectActor(name)">
-                <div class="bp-rail-fill" :style="{ width: selectorFillWidth(name) }" />
-                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
-                <span class="bp-rail-meta">{{ selectorBadgeFor(name) }}</span>
-              </button>
-            </template>
-          </template>
-        </aside>
+        <ActorRail
+          :groups="combatantGroups"
+          :collapsed-groups="groupCollapsed"
+          :selected-name="resolvedSelected"
+          :value-for="selectorBadgeFor"
+          :fill-width-for="selectorFillWidth"
+          :actor-job="actorJob"
+          :actor-job-icon="actorJobIcon"
+          :name-style="nameStyle"
+          :tab-label="tabLabel"
+          @toggle-group="toggleGroup"
+          @select-actor="selectActor"
+        />
 
         <main class="bp-main">
           <div class="bp-panel-toolbar">
@@ -1418,7 +1700,7 @@ onUnmounted(() => { channel?.close(); channel = null })
               </tr></thead>
               <tbody>
                 <tr v-for="row in abilities" :key="row.abilityId" :class="{ 'bp-row-active': selectedDoneAbility?.abilityName === row.abilityName }" @click="selectAbility(row.abilityName)">
-                  <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname">{{ row.abilityName }}</span></td>
+                  <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
                   <td class="col-num">{{ f(row.totalDamage) }}</td>
                   <td class="col-pct">{{ row.pct }}%</td>
                   <td class="col-num">{{ encounterDurationSec > 0 ? f(row.dps) : '—' }}</td>
@@ -1442,6 +1724,8 @@ onUnmounted(() => { channel?.close(); channel = null })
               <div class="bp-kv"><span>Rate</span><strong>{{ encounterDurationSec > 0 ? f(selectedDoneAbility.dps) : '—' }}</strong></div>
               <div class="bp-kv"><span>Hits</span><strong>{{ selectedDoneAbility.hits }}</strong></div>
               <div class="bp-kv"><span>Range</span><strong>{{ f(selectedDoneAbility.minHit) }} → {{ f(selectedDoneAbility.maxHit) }}</strong></div>
+              <div class="bp-kv"><span>Crit Avg</span><strong>Not captured yet</strong></div>
+              <div class="bp-kv"><span>Direct Hit Avg</span><strong>Not captured yet</strong></div>
             </div>
           </template>
         </aside>
@@ -1450,22 +1734,20 @@ onUnmounted(() => { channel?.close(); channel = null })
 
     <template v-else-if="activeView === 'taken'">
       <div class="bp-workspace">
-        <aside class="bp-rail">
-          <div class="bp-rail-title">Target Rail</div>
-          <template v-for="group in combatantGroups" :key="group.label">
-            <div class="bp-group-header" @click="toggleGroup(group.label)">
-              <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
-              <span class="bp-group-label">{{ group.label }}</span>
-            </div>
-            <template v-if="!groupCollapsed.has(group.label)">
-              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: resolvedSelected === name }" @click="selectActor(name)">
-                <div class="bp-rail-fill bp-rail-fill--taken" :style="{ width: selectorFillWidth(name) }" />
-                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
-                <span class="bp-rail-meta">{{ f(totalTakenFor(name)) }}</span>
-              </button>
-            </template>
-          </template>
-        </aside>
+        <ActorRail
+          :groups="combatantGroups"
+          :collapsed-groups="groupCollapsed"
+          :selected-name="resolvedSelected"
+          fill-class="bp-rail-fill--taken"
+          :value-for="takenSelectorBadgeFor"
+          :fill-width-for="selectorFillWidth"
+          :actor-job="actorJob"
+          :actor-job-icon="actorJobIcon"
+          :name-style="nameStyle"
+          :tab-label="tabLabel"
+          @toggle-group="toggleGroup"
+          @select-actor="selectActor"
+        />
 
         <main class="bp-main">
           <div class="bp-panel-toolbar">
@@ -1490,7 +1772,7 @@ onUnmounted(() => { channel?.close(); channel = null })
               </tr></thead>
               <tbody>
                 <tr v-for="row in takenAbilities" :key="row.abilityId" :class="{ 'bp-row-active': selectedTakenAbility?.abilityName === row.abilityName }" @click="selectAbility(row.abilityName)">
-                  <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname">{{ row.abilityName }}</span></td>
+                  <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
                   <td class="col-num">{{ f(row.totalDamage) }}</td>
                   <td class="col-pct">{{ row.pct }}%</td>
                   <td class="col-num">{{ row.hits }}</td>
@@ -1521,27 +1803,28 @@ onUnmounted(() => { channel?.close(); channel = null })
 
     <template v-else-if="activeView === 'timeline'">
       <div class="bp-workspace">
-        <aside class="bp-rail">
-          <div class="bp-rail-title">Timeline Rail</div>
-          <div class="bp-metric-tabs">
-            <button class="bp-metric-tab" :class="{ active: chartMetric === 'dps' }"  @click="chartMetric = 'dps'">DPS</button>
-            <button class="bp-metric-tab" :class="{ active: chartMetric === 'hps' }"  @click="chartMetric = 'hps'">HPS</button>
-            <button class="bp-metric-tab" :class="{ active: chartMetric === 'dtps' }" @click="chartMetric = 'dtps'">DTPS</button>
-          </div>
-          <template v-for="group in combatantGroups" :key="group.label">
-            <div class="bp-group-header" @click="toggleGroup(group.label)">
-              <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
-              <span class="bp-group-label">{{ group.label }}</span>
+        <ActorRail
+          :groups="combatantGroups"
+          :collapsed-groups="groupCollapsed"
+          :selected-name="resolvedSelected"
+          fill-class="bp-rail-fill--timeline"
+          :value-for="selectorBadgeFor"
+          :fill-width-for="selectorFillWidth"
+          :actor-job="actorJob"
+          :actor-job-icon="actorJobIcon"
+          :name-style="nameStyle"
+          :tab-label="tabLabel"
+          @toggle-group="toggleGroup"
+          @select-actor="selectActor"
+        >
+          <template #before-groups>
+            <div class="bp-metric-tabs">
+              <button class="bp-metric-tab" :class="{ active: chartMetric === 'dps' }"  @click="chartMetric = 'dps'">DPS</button>
+              <button class="bp-metric-tab" :class="{ active: chartMetric === 'hps' }"  @click="chartMetric = 'hps'">HPS</button>
+              <button class="bp-metric-tab" :class="{ active: chartMetric === 'dtps' }" @click="chartMetric = 'dtps'">DTPS</button>
             </div>
-            <template v-if="!groupCollapsed.has(group.label)">
-              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: resolvedSelected === name }" @click="selectActor(name)">
-                <div class="bp-rail-fill bp-rail-fill--timeline" :style="{ width: selectorFillWidth(name) }" />
-                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
-                <span class="bp-rail-meta">{{ selectorBadgeFor(name) }}</span>
-              </button>
-            </template>
           </template>
-        </aside>
+        </ActorRail>
 
         <main class="bp-main">
           <div v-if="!chartLines" class="bp-waiting">No {{ metricLabel }} data for this encounter.</div>
@@ -1572,7 +1855,7 @@ onUnmounted(() => { channel?.close(); channel = null })
                 :stroke-dasharray="s.isGroup ? '5,3' : undefined"
                 stroke-linejoin="round"
                 stroke-linecap="round"
-                :opacity="s.isGroup ? 0.5 : 0.95"
+                :opacity="s.isGroup ? 0.45 : (s.isFocused ? 1 : 0.28)"
               />
 
               <line v-show="hoverVisible && hoverBucket >= 0"
@@ -1651,7 +1934,7 @@ onUnmounted(() => { channel?.close(); channel = null })
               <div v-for="s in chartLines.series" :key="s.name" class="bp-legend-item" :class="{ hidden: hiddenSeries.has(s.name) }" @click="toggleSeries(s.name)">
                 <span class="bp-legend-dot"
                   :style="{ background: s.isGroup ? 'transparent' : s.color, border: s.isGroup ? `1px dashed ${GROUP_COLOR}` : 'none' }" />
-                <span class="bp-legend-name" :style="s.isGroup ? undefined : nameStyle(s.name)">{{ s.isGroup ? 'Group' : tabLabel(s.name) }}</span>
+                <span class="bp-legend-name" :class="{ 'bp-legend-name--focused': s.isFocused }" :style="s.isGroup ? undefined : nameStyle(s.name)">{{ s.isGroup ? 'Group' : tabLabel(s.name) }}</span>
               </div>
             </div>
           </div>
@@ -1661,6 +1944,7 @@ onUnmounted(() => { channel?.close(); channel = null })
           <div class="bp-inspector-title">Timeline Inspector</div>
           <div class="bp-inspector-block">
             <div class="bp-kv"><span>Metric</span><strong>{{ metricLabel }}</strong></div>
+            <div class="bp-kv"><span>Selected Actor</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected }}</strong></div>
             <div class="bp-kv"><span>Hover Window</span><strong>{{ hoverTooltip?.timeLabel ?? '—' }}</strong></div>
             <div class="bp-kv"><span>Deaths</span><strong>{{ timelineInspectorDeaths.length }}</strong></div>
             <div class="bp-kv"><span>Casts</span><strong>{{ timelineInspectorCasts.length }}</strong></div>
@@ -1685,7 +1969,7 @@ onUnmounted(() => { channel?.close(); channel = null })
       <div v-if="sortedDeaths.length === 0" class="bp-waiting">No deaths recorded this pull.</div>
       <div v-else class="bp-workspace">
         <aside class="bp-rail bp-rail--deaths">
-          <div class="bp-rail-title">Death List</div>
+          <div class="bp-rail-title">Deaths</div>
           <div
             v-for="(death, i) in sortedDeaths" :key="i"
             class="dl-death-row"
@@ -1745,7 +2029,7 @@ onUnmounted(() => { channel?.close(); channel = null })
                       <span v-if="hit.isDeathBlow" class="dl-badge-death">X</span>
                       <span v-else :class="hit.type === 'heal' ? 'dl-badge-heal' : 'dl-badge-dmg'">{{ hit.type === 'heal' ? 'H' : 'D' }}</span>
                     </td>
-                    <td class="dl-col-ability">{{ hit.abilityName }}</td>
+                    <td class="dl-col-ability"><AbilityCell :ability-id="abilityIdForName(hit.abilityName)" :ability-name="hit.abilityName" :icon-src="abilityIconSrc(abilityIdForName(hit.abilityName), hit.abilityName)" small @icon-error="clearAbilityIcon(abilityIdForName(hit.abilityName), hit.abilityName)" /></td>
                     <td class="dl-col-source">{{ hit.sourceName }}</td>
                     <td class="dl-col-hpbefore">
                       <span>{{ formatHpBefore(hit) }}</span>
@@ -1819,22 +2103,20 @@ onUnmounted(() => { channel?.close(); channel = null })
 
     <template v-else-if="activeView === 'casts'">
       <div class="bp-workspace">
-        <aside class="bp-rail">
-          <div class="bp-rail-title">Cast Rail</div>
-          <template v-for="group in castGroups" :key="group.label">
-            <div class="bp-group-header" @click="toggleGroup(group.label)">
-              <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
-              <span class="bp-group-label">{{ group.label }}</span>
-            </div>
-            <template v-if="!groupCollapsed.has(group.label)">
-              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: castSelectedPlayer === name }" @click="selectActor(name)">
-                <div class="bp-rail-fill bp-rail-fill--casts" :style="{ width: selectorFillWidth(name) }" />
-                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
-                <span class="bp-rail-meta">{{ castCountFor(name) }} casts</span>
-              </button>
-            </template>
-          </template>
-        </aside>
+        <ActorRail
+          :groups="castGroups"
+          :collapsed-groups="groupCollapsed"
+          :selected-name="castSelectedPlayer"
+          fill-class="bp-rail-fill--casts"
+          :value-for="castSelectorBadgeFor"
+          :fill-width-for="selectorFillWidth"
+          :actor-job="actorJob"
+          :actor-job-icon="actorJobIcon"
+          :name-style="nameStyle"
+          :tab-label="tabLabel"
+          @toggle-group="toggleGroup"
+          @select-actor="selectActor"
+        />
 
         <main class="bp-main">
           <div v-if="!castPlayerData" class="bp-waiting">Select a party member to view casts.</div>
@@ -1845,44 +2127,128 @@ onUnmounted(() => { channel?.close(); channel = null })
               <div class="cast-tooltip-target" v-if="castHoverData.target">→ {{ castHoverData.target }}</div>
             </div>
 
-            <div class="cast-list-header">{{ castPlayerData.abilities.length }} abilities · {{ castPlayerData.events.length }} total casts</div>
-            <div class="cast-scroll">
-              <div v-for="ab in castPlayerData.abilities" :key="ab.name" class="cast-row" :class="{ expanded: castSelectedAbility === ab.name || selectedAbility === ab.name }">
-                <div class="cast-row-main" @click="castSelectedAbility = castSelectedAbility === ab.name ? null : ab.name; selectAbility(ab.name)">
-                  <div class="cast-ability-info">
-                    <span class="cast-ability-name">{{ ab.name }}</span>
-                    <span class="cast-ability-casts">{{ ab.casts }}</span>
+            <div class="cast-list-header">
+              <span>{{ castPlayerData.abilities.length }} abilities · {{ castPlayerData.events.length }} total casts</span>
+              <div class="bp-toolbar-group">
+                <button
+                  v-for="filter in ['cooldowns', 'mitigations', 'dps', 'heals']"
+                  :key="filter"
+                  class="bp-mode-btn"
+                  :class="{ active: castFilters.has(filter as CastFilter) }"
+                  @click="toggleCastFilter(filter as CastFilter)"
+                >
+                  {{ filter }}
+                </button>
+              </div>
+            </div>
+            <div class="cast-analysis-shell">
+              <div class="cast-analysis-scroll">
+                <div class="cast-analysis-table" :style="{ width: (castTimelinePixelWidth + 170) + 'px' }">
+                  <div class="cast-analysis-label-head">
+                    <span>Timeline</span>
+                    <small>Wheel or drag horizontally</small>
                   </div>
-                  <div class="cast-row-timeline" @mousemove="onCastTimelineHover($event, ab.name, castPlayerData?.events ?? [])" @mouseleave="castHoverData = null">
-                    <div class="cast-mini-bucket" v-for="(bucket, i) in getAbilityBuckets(ab.name)" :key="i">
-                      <div v-for="(c, j) in bucket.casts" :key="j" class="cast-mini-segment" :class="{ 'cast-bar-tick': c.type === 'tick' }" :style="{ left: (c.time / CAST_BUCKET_SEC * 100) + '%' }" />
+                  <div class="cast-analysis-grid cast-analysis-grid--head">
+                    <div class="cast-analysis-axis">
+                      <span v-for="tick in castTimeTicks" :key="`axis-${tick}`" class="cast-xiv-tick" :style="{ left: (tick / castTimelineDuration * 100) + '%' }">{{ fmtSeconds(tick) }}</span>
                     </div>
-                    <div v-if="castPlayerDeathTime !== null && castPlayerResTime !== null" class="cast-death-range" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%', width: ((castPlayerResTime - castPlayerDeathTime) / castTimelineDuration * 100) + '%' }" />
-                    <div v-if="castPlayerDeathTime !== null" class="cast-death-overlay" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%' }">
-                      <div class="cast-death-line"></div>
-                      <div class="cast-death-label">DIED</div>
-                    </div>
-                    <div v-if="castPlayerResTime !== null" class="cast-ress-overlay" :style="{ left: (castPlayerResTime / castTimelineDuration * 100) + '%' }">
-                      <div class="cast-ress-line"></div>
-                      <div class="cast-ress-label">RAISE</div>
-                    </div>
-                    <div class="cast-timeline-ticks">
-                      <span v-for="tick in castTimeTicks" :key="tick" class="cast-tick-mark" :style="{ left: (tick / castTimelineDuration * 100) + '%' }">{{ tick }}s</span>
-                    </div>
+                    <div
+                      v-for="tick in castTimeTicks"
+                      :key="`grid-${tick}`"
+                      class="cast-analysis-gridline"
+                      :style="{ left: (tick / castTimelineDuration * 100) + '%' }"
+                    />
+                    <div v-if="castPlayerDeathTime !== null" class="cast-analysis-death-line" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%' }" />
+                    <div v-if="castPlayerResTime !== null" class="cast-analysis-raise-line" :style="{ left: (castPlayerResTime / castTimelineDuration * 100) + '%' }" />
                   </div>
-                </div>
-                <div v-if="castSelectedAbility === ab.name" class="cast-row-details">
-                  <div class="cast-detail-stats">
-                    <div class="cast-stat">
-                      <span class="cast-stat-label">Avg Interval</span>
-                      <span class="cast-stat-value">{{ ab.avgInterval }}s</span>
-                    </div>
-                    <div class="cast-stat" v-if="ab.topTargets.length > 0">
-                      <span class="cast-stat-label">Top Targets</span>
-                      <div class="cast-target-chips">
-                        <span v-for="t in ab.topTargets" :key="t[0]" class="cast-target-chip">{{ t[0] }} ({{ t[1] }})</span>
+
+                  <template v-if="castResourceTracks.length > 0">
+                    <div class="cast-analysis-section">Resources</div>
+                    <div class="cast-analysis-section cast-analysis-section--timeline"></div>
+                    <template v-for="track in castResourceTracks" :key="track.key">
+                      <div class="cast-analysis-label cast-resource-label">
+                        <span class="cast-analysis-name">{{ track.label }}</span>
+                        <span class="cast-analysis-meta">{{ track.value }}</span>
                       </div>
+                      <div class="cast-analysis-grid cast-analysis-grid--resource">
+                        <div
+                          v-for="tick in castTimeTicks"
+                          :key="`resource-grid-${track.key}-${tick}`"
+                          class="cast-analysis-gridline"
+                          :style="{ left: (tick / castTimelineDuration * 100) + '%' }"
+                        />
+                        <svg class="cast-resource-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                          <path :d="resourceAreaPath(track.key)" :fill="track.fill" />
+                          <polyline :points="resourcePolyline(track.key)" fill="none" :stroke="track.color" stroke-width="2.3" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
+                        </svg>
+                        <div v-if="castPlayerDeathTime !== null" class="cast-analysis-death-line" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%' }" />
+                        <div v-if="castPlayerResTime !== null" class="cast-analysis-raise-line" :style="{ left: (castPlayerResTime / castTimelineDuration * 100) + '%' }" />
+                      </div>
+                    </template>
+                  </template>
+
+                  <template v-for="group in castTimelineGroups" :key="group.category">
+                    <div class="cast-analysis-section">{{ group.label }}</div>
+                    <div class="cast-analysis-section cast-analysis-section--timeline"></div>
+                    <template v-for="row in group.rows" :key="row.name">
+                      <div
+                        class="cast-analysis-label"
+                        :class="{ active: castSelectedAbility === row.name || selectedAbility === row.name }"
+                        @click="castSelectedAbility = row.name; selectAbility(row.name)"
+                      >
+                        <span class="cast-ability-icon">
+                          <img v-if="abilityIconSrc(row.events[0]?.abilityId ?? '', row.name)" :src="abilityIconSrc(row.events[0]?.abilityId ?? '', row.name)" :alt="row.name" @error="clearAbilityIcon(row.events[0]?.abilityId ?? '', row.name)" />
+                          <span v-else>{{ abilityInitials(row.name) }}</span>
+                        </span>
+                        <span class="cast-analysis-name">{{ row.name }}</span>
+                        <span class="cast-analysis-meta">{{ row.casts }} · avg {{ row.avgInterval }}s</span>
+                      </div>
+                      <div
+                        class="cast-analysis-grid cast-analysis-grid--row"
+                        :class="{ active: castSelectedAbility === row.name || selectedAbility === row.name }"
+                        @click="castSelectedAbility = row.name; selectAbility(row.name)"
+                      >
+                      <div
+                        v-for="tick in castTimeTicks"
+                        :key="`row-grid-${row.name}-${tick}`"
+                        class="cast-analysis-gridline"
+                        :style="{ left: (tick / castTimelineDuration * 100) + '%' }"
+                      />
+                      <template v-if="row.category === 'cooldowns' || row.category === 'mitigations'">
+                        <div
+                          v-for="event in row.events"
+                          :key="`row-cooldown-${event.t}-${event.abilityName}-${event.target}`"
+                          class="cast-cooldown-window"
+                          :style="{ left: castEventLeft(event), width: castCooldownWidth(event) }"
+                          :title="castCooldownLabel(event)"
+                        />
+                      </template>
+                      <div
+                        v-for="event in row.events.filter(e => e.type === 'cast' && e.durationMs && !e.buffDurationMs)"
+                        :key="`row-cast-window-${event.t}-${event.abilityName}-${event.target}`"
+                        class="cast-cast-window"
+                        :style="{ left: castCastWindowLeft(event), width: castCastWindowWidth(event) }"
+                        :title="`${event.abilityName} · ${(event.durationMs! / 1000).toFixed(1)}s cast`"
+                      />
+                      <button
+                        v-for="event in row.events"
+                        :key="`row-event-${event.t}-${event.abilityName}-${event.target}`"
+                        class="cast-analysis-event"
+                        :class="[`cast-analysis-event--${row.category}`, event.buffDurationMs ? 'cast-analysis-event--buff-window' : '']"
+                        :style="{ left: castEventLeft(event), width: castEventWidth(event) }"
+                        :title="`${fmtTime(event.t)} · ${event.abilityName}${event.durationMs ? ` · ${(event.durationMs / 1000).toFixed(1)}s cast` : ''}${event.buffDurationMs ? ` · ${(event.buffDurationMs / 1000).toFixed(0)}s active` : ''}${castCooldownLabel(event) ? ` · ${castCooldownLabel(event)}` : ''}${event.target ? ` → ${event.target}` : ''}`"
+                        @click.stop="castSelectedAbility = row.name; selectAbility(row.name)"
+                      >
+                        <img v-if="!event.buffDurationMs && abilityIconSrc(event.abilityId, event.abilityName)" class="cast-event-icon" :src="abilityIconSrc(event.abilityId, event.abilityName)" :alt="event.abilityName" @error="clearAbilityIcon(event.abilityId, event.abilityName)" />
+                        <span v-else>{{ event.buffDurationMs ? row.name : abilityInitials(row.name) }}</span>
+                      </button>
+                      <div v-if="castPlayerDeathTime !== null" class="cast-analysis-death-line" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%' }" />
+                      <div v-if="castPlayerResTime !== null" class="cast-analysis-raise-line" :style="{ left: (castPlayerResTime / castTimelineDuration * 100) + '%' }" />
                     </div>
+                    </template>
+                  </template>
+                  <div v-if="castTimelineGroups.length === 0" class="bp-empty-panel">
+                    No casts match the active filters.
                   </div>
                 </div>
               </div>
@@ -1907,27 +2273,27 @@ onUnmounted(() => { channel?.close(); channel = null })
 
     <template v-else-if="activeView === 'events'">
       <div class="bp-workspace">
-        <aside class="bp-rail">
-          <div class="bp-rail-title">Event Rail</div>
-          <template v-for="group in combatantGroups" :key="group.label">
-            <div class="bp-group-header" @click="toggleGroup(group.label)">
-              <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
-              <span class="bp-group-label">{{ group.label }}</span>
-            </div>
-            <template v-if="!groupCollapsed.has(group.label)">
-              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: resolvedSelected === name }" @click="selectActor(name)">
-                <div class="bp-rail-fill bp-rail-fill--events" :style="{ width: selectorFillWidth(name) }" />
-                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
-                <span class="bp-rail-meta">{{ eventRowsRaw.filter(row => row.actor === name).length }} rows</span>
-              </button>
-            </template>
-          </template>
-        </aside>
+        <ActorRail
+          :groups="combatantGroups"
+          :collapsed-groups="groupCollapsed"
+          :selected-name="resolvedSelected"
+          fill-class="bp-rail-fill--events"
+          :value-for="eventSelectorBadgeFor"
+          :fill-width-for="selectorFillWidth"
+          :actor-job="actorJob"
+          :actor-job-icon="actorJobIcon"
+          :name-style="nameStyle"
+          :tab-label="tabLabel"
+          @toggle-group="toggleGroup"
+          @select-actor="selectActor"
+        />
 
         <main class="bp-main">
           <div class="bp-panel-toolbar">
             <div class="bp-panel-title">Unified Events</div>
             <div class="bp-toolbar-group">
+              <button class="bp-mode-btn" :class="{ active: eventActorScope === 'selected' }" @click="eventActorScope = 'selected'">Selected Actor</button>
+              <button class="bp-mode-btn" :class="{ active: eventActorScope === 'all' }" @click="eventActorScope = 'all'">All Actors</button>
               <button v-for="filter in ['damage', 'healing', 'casts', 'deaths', 'raises']" :key="filter" class="bp-mode-btn" :class="{ active: eventFilters.has(filter as EventFilter) }" @click="toggleEventFilter(filter as EventFilter)">{{ filter }}</button>
             </div>
           </div>
@@ -1951,7 +2317,7 @@ onUnmounted(() => { channel?.close(); channel = null })
                   <td class="col-num">{{ fmtTime(row.t) }}</td>
                   <td class="col-name"><span class="aname" :style="nameStyle(row.actor)">{{ row.actor }}</span></td>
                   <td class="col-name">{{ row.eventType }}</td>
-                  <td class="col-name">{{ row.ability }}</td>
+                  <td class="col-name"><AbilityCell :ability-id="abilityIdForName(row.ability)" :ability-name="row.ability" :icon-src="abilityIconSrc(abilityIdForName(row.ability), row.ability)" small @icon-error="clearAbilityIcon(abilityIdForName(row.ability), row.ability)" /></td>
                   <td class="col-name">{{ row.source || '—' }}</td>
                   <td class="col-name">{{ row.target || '—' }}</td>
                   <td class="col-num">{{ row.amount === null ? '—' : f(row.amount) }}</td>
@@ -1968,6 +2334,7 @@ onUnmounted(() => { channel?.close(); channel = null })
           <div class="bp-inspector-title">Event Inspector</div>
           <div class="bp-inspector-block">
             <div class="bp-kv"><span>Rows</span><strong>{{ eventRows.length }}</strong></div>
+            <div class="bp-kv"><span>Actor Scope</span><strong>{{ eventActorScope === 'all' ? 'All actors' : 'Selected actor' }}</strong></div>
             <div class="bp-kv"><span>Selected Ability</span><strong>{{ selectedAbility || 'None' }}</strong></div>
             <div class="bp-kv"><span>Window</span><strong>{{ eventWindowOnly && selectedDeathWindow ? 'Selected death' : 'Whole pull' }}</strong></div>
           </div>
@@ -1986,7 +2353,19 @@ onUnmounted(() => { channel?.close(); channel = null })
 * { box-sizing: border-box; margin: 0; padding: 0; }
 .bp-root {
   width: 100vw; height: 100vh;
-  background: #0d0d10;
+  --flexi-bg-base: #0f0f17;
+  --flexi-bg-panel: #16161f;
+  --flexi-bg-control: #1e1e2e;
+  --flexi-bg-hover: #252538;
+  --flexi-border: rgba(255,255,255,0.08);
+  --flexi-accent: #9b5de5;
+  --flexi-accent-soft: rgba(155,93,229,0.16);
+  --flexi-accent-border: rgba(155,93,229,0.42);
+  --flexi-info: #8ecae6;
+  --flexi-success: #06d6a0;
+  --flexi-warning: #ffd166;
+  --flexi-danger: #ef476f;
+  background: var(--flexi-bg-base);
   color: rgba(255,255,255,0.85);
   font-family: 'Segoe UI', monospace, sans-serif;
   font-size: 12px;
@@ -1997,8 +2376,8 @@ onUnmounted(() => { channel?.close(); channel = null })
 .bp-topbar {
   display: flex; align-items: center; gap: 8px;
   padding: 5px 10px;
-  background: rgba(255,255,255,0.04);
-  border-bottom: 1px solid rgba(255,255,255,0.07);
+  background: var(--flexi-bg-panel);
+  border-bottom: 1px solid var(--flexi-border);
   flex-shrink: 0;
 }
 .bp-app-title { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.5); letter-spacing: 0.03em; white-space: nowrap; }
@@ -2013,7 +2392,12 @@ onUnmounted(() => { channel?.close(); channel = null })
   cursor: pointer; outline: none; color-scheme: dark;
 }
 .bp-pull-select option { background: #1a1a24; color: rgba(255,255,255,0.85); }
-.bp-pull-select:focus { border-color: rgba(100,180,255,0.4); }
+.bp-pull-select:focus { border-color: var(--flexi-accent-border); }
+.bp-pull-select--header {
+  flex: 0 1 340px;
+  min-width: 220px;
+  padding: 3px 8px;
+}
 
 /* ── View tabs ── */
 .bp-view-tabs { display: flex; border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0; }
@@ -2028,7 +2412,7 @@ onUnmounted(() => { channel?.close(); channel = null })
   margin-bottom: -1px;
 }
 .bp-view-tab:hover { color: rgba(255,255,255,0.65); }
-.bp-view-tab.active { color: #ffd250; border-bottom-color: #ffd250; }
+.bp-view-tab.active { color: var(--flexi-accent); border-bottom-color: var(--flexi-accent); }
 
 /* ── Combatant tabs ── */
 .bp-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0; }
@@ -2056,7 +2440,7 @@ onUnmounted(() => { channel?.close(); channel = null })
 }
 .bp-tab { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.5); padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 11px; font-family: inherit; transition: all 0.15s; }
 .bp-tab:hover { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.8); }
-.bp-tab.active { background: rgba(255,210,80,0.15); border-color: rgba(255,210,80,0.4); color: #ffd250; }
+.bp-tab.active { background: var(--flexi-accent-soft); border-color: var(--flexi-accent-border); color: #d9bcff; }
 
 .cast-group-label {
   font-size: 9px;
@@ -2096,6 +2480,43 @@ td { padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; co
 td.col-name { text-align: left; position: relative; max-width: 160px; }
 .row-fill { position: absolute; inset: 0; right: auto; background: rgba(255,255,255,0.05); pointer-events: none; min-width: 2px; }
 .aname { position: relative; z-index: 1; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ability-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.aname.ability-cell { display: inline-flex; }
+.breakdown-ability-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: linear-gradient(135deg, rgba(255,255,255,0.13), rgba(255,255,255,0.035));
+  color: rgba(255,255,255,0.74);
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1;
+}
+.breakdown-ability-icon--small {
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
+  font-size: 7px;
+}
+.breakdown-ability-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
 .col-pct { color: rgba(255,210,80,0.9); }
 .col-dim { color: rgba(255,255,255,0.3); }
 
@@ -2115,7 +2536,7 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   z-index: 10;
   min-width: 140px;
 }
-.bp-tooltip-time { font-size: 11px; font-weight: 600; color: #ffd250; margin-bottom: 4px; }
+.bp-tooltip-time { font-size: 11px; font-weight: 600; color: #d9bcff; margin-bottom: 4px; }
 .bp-tooltip-row { display: flex; align-items: center; gap: 5px; margin-bottom: 2px; }
 .bp-tooltip-group {
   display: flex; align-items: center; gap: 5px;
@@ -2133,6 +2554,7 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 .bp-legend-item.hidden { opacity: 0.3; }
 .bp-legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .bp-legend-name { font-size: 11px; color: rgba(255,255,255,0.65); white-space: nowrap; }
+.bp-legend-name--focused { color: #ffd250; font-weight: 700; }
 
 /* ── Show Enemies toggle ── */
 .bp-toggle-btn {
@@ -2410,6 +2832,10 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   color: rgba(255,255,255,0.35);
   border-bottom: 1px solid rgba(255,255,255,0.05);
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 .cast-scroll {
   flex: 1;
@@ -2426,6 +2852,290 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   cursor: pointer;
   transition: background 0.1s;
 }
+.cast-row-summary {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  color: rgba(255,255,255,0.45);
+  font-size: 10px;
+  min-width: 0;
+}
+.cast-xiv-tick {
+  position: absolute;
+  top: 5px;
+  transform: translateX(-50%);
+  color: rgba(255,255,255,0.58);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: #0d0d10;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.cast-analysis-shell {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: rgba(0,0,0,0.12);
+}
+.cast-analysis-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+.cast-analysis-table {
+  min-width: 100%;
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  align-content: start;
+}
+.cast-analysis-label-head {
+  position: sticky;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  height: 34px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 10px;
+  background: #11141b;
+  border-right: 1px solid rgba(255,255,255,0.08);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.cast-analysis-label-head span {
+  color: rgba(255,255,255,0.82);
+  font-weight: 600;
+}
+.cast-analysis-label-head small {
+  color: rgba(255,255,255,0.34);
+  font-size: 9px;
+  font-style: italic;
+}
+.cast-analysis-grid {
+  position: relative;
+  min-width: 100%;
+  height: 100%;
+}
+.cast-analysis-grid--head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  height: 34px;
+  background: #0d0d10;
+}
+.cast-analysis-axis {
+  position: absolute;
+  inset: 0;
+  height: 34px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.015);
+}
+.cast-analysis-gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255,255,255,0.13);
+}
+.cast-analysis-section {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  padding: 5px 10px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255,255,255,0.48);
+  background: rgba(255,255,255,0.04);
+  border-top: 1px solid rgba(255,255,255,0.07);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.cast-analysis-section--timeline {
+  position: relative;
+  left: auto;
+  z-index: 1;
+  padding: 0;
+  min-height: 24px;
+  background: rgba(255,255,255,0.025);
+  border-left: 1px solid rgba(255,255,255,0.04);
+}
+.cast-resource-label {
+  cursor: default;
+  background: #10141a;
+}
+.cast-analysis-grid--resource {
+  min-height: 34px;
+  border-bottom: 1px solid rgba(255,255,255,0.055);
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,0.045) 0 1px, transparent 1px 50%, rgba(255,255,255,0.035) 50% calc(50% + 1px), transparent calc(50% + 1px)),
+    rgba(255,255,255,0.014);
+}
+.cast-resource-svg {
+  position: absolute;
+  inset: 4px 0;
+  width: 100%;
+  height: calc(100% - 8px);
+  overflow: visible;
+  pointer-events: none;
+}
+.cast-analysis-label {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  min-height: 31px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: #0f1117;
+  border-right: 1px solid rgba(255,255,255,0.08);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  cursor: pointer;
+}
+.cast-analysis-label.active {
+  background: rgba(116,185,255,0.14);
+}
+.cast-analysis-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255,255,255,0.86);
+}
+.cast-ability-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: linear-gradient(135deg, rgba(255,255,255,0.13), rgba(255,255,255,0.035));
+  color: rgba(255,255,255,0.78);
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1;
+}
+.cast-ability-icon img,
+.cast-event-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cast-analysis-meta {
+  color: rgba(255,255,255,0.36);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.cast-analysis-grid--row {
+  min-height: 31px;
+  border-bottom: 1px solid rgba(255,255,255,0.055);
+  background: rgba(255,255,255,0.018);
+  cursor: pointer;
+}
+.cast-analysis-grid--row.active {
+  background: rgba(116,185,255,0.06);
+}
+.cast-analysis-event {
+  position: absolute;
+  top: 4px;
+  width: 22px;
+  height: 22px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(255,255,255,0.22);
+  border-radius: 4px;
+  color: rgba(255,255,255,0.92);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 18px;
+  cursor: pointer;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.35);
+  overflow: hidden;
+  padding: 0;
+}
+.cast-analysis-event > span {
+  display: block;
+  padding: 0 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cast-analysis-event--castbar {
+  min-width: 38px;
+  height: 18px;
+  top: 6px;
+  transform: none;
+  border-radius: 4px;
+  background: linear-gradient(90deg, rgba(48,120,255,0.42), rgba(116,185,255,0.78)) !important;
+  border-color: rgba(116,185,255,0.72) !important;
+  color: rgba(255,255,255,0.95) !important;
+  text-align: left;
+  padding: 0 6px;
+  font-size: 9px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cast-analysis-event:hover {
+  z-index: 6;
+  filter: brightness(1.25);
+}
+.cast-cooldown-window {
+  position: absolute;
+  top: 8px;
+  height: 14px;
+  transform: translateX(-1px);
+  border-radius: 3px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255,255,255,0.045) 0,
+    rgba(255,255,255,0.045) 5px,
+    rgba(255,255,255,0.015) 5px,
+    rgba(255,255,255,0.015) 10px
+  );
+  border: 1px solid rgba(255,255,255,0.055);
+  pointer-events: none;
+}
+.cast-cast-window {
+  position: absolute;
+  top: 12px;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(116,185,255,0.08), rgba(116,185,255,0.38));
+  border: 1px solid rgba(116,185,255,0.18);
+  pointer-events: none;
+}
+.cast-analysis-event--cooldowns { background: linear-gradient(135deg, #326ea8, #74b9ff); }
+.cast-analysis-event--mitigations { background: linear-gradient(135deg, #027a45, #00e676); color: #05100a; }
+.cast-analysis-event--dps { background: linear-gradient(135deg, #9a7422, #ffd250); color: #1b1300; }
+.cast-analysis-event--heals { background: linear-gradient(135deg, #a83464, #fd79a8); }
+.cast-analysis-event--buff-window {
+  height: 18px;
+  top: 6px;
+  min-width: 30px;
+  transform: none;
+  text-align: left;
+  padding: 0 6px;
+  border-radius: 4px;
+  opacity: 0.9;
+}
+.cast-analysis-death-line,
+.cast-analysis-raise-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  pointer-events: none;
+}
+.cast-analysis-death-line { background: rgba(255,23,68,0.65); }
+.cast-analysis-raise-line { background: rgba(0,230,118,0.65); }
 .cast-row-main:hover {
   background: rgba(255,255,255,0.03);
 }
@@ -2615,6 +3325,13 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   flex-direction: column;
   gap: 2px;
 }
+.bp-report-select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
 .bp-analysis-kicker {
   font-size: 10px;
   text-transform: uppercase;
@@ -2687,14 +3404,14 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   cursor: pointer;
 }
 .bp-filter-btn.active {
-  color: #b9e0ff;
-  border-color: rgba(116,185,255,0.35);
-  background: rgba(116,185,255,0.14);
+  color: #d9bcff;
+  border-color: var(--flexi-accent-border);
+  background: var(--flexi-accent-soft);
 }
 .bp-chip {
-  background: rgba(255,210,80,0.08);
-  border: 1px solid rgba(255,210,80,0.18);
-  color: rgba(255,220,140,0.82);
+  background: rgba(155,93,229,0.1);
+  border: 1px solid rgba(155,93,229,0.22);
+  color: #d9bcff;
 }
 .bp-workspace {
   flex: 1;
@@ -2767,9 +3484,17 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 .bp-rail-fill--casts { background: rgba(162,155,254,0.14); }
 .bp-rail-fill--events { background: rgba(0,230,118,0.12); }
 .bp-rail-name,
-.bp-rail-meta {
+.bp-rail-meta,
+.bp-job-icon {
   position: relative;
   z-index: 1;
+}
+.bp-job-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.65));
 }
 .bp-rail-name {
   flex: 1;
@@ -2799,8 +3524,20 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   display: flex;
   flex-direction: column;
   gap: 6px;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
 }
-.bp-card--done { box-shadow: inset 0 0 0 1px rgba(116,185,255,0.08); }
+.bp-card--button {
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+.bp-card--button:hover {
+  border-color: var(--flexi-accent-border);
+  background: rgba(155,93,229,0.1);
+  transform: translateY(-1px);
+}
+.bp-card--done { box-shadow: inset 0 0 0 1px rgba(155,93,229,0.12); }
 .bp-card--taken { box-shadow: inset 0 0 0 1px rgba(220,70,70,0.08); }
 .bp-card--deaths { box-shadow: inset 0 0 0 1px rgba(255,80,80,0.08); }
 .bp-card--casts { box-shadow: inset 0 0 0 1px rgba(162,155,254,0.08); }
@@ -2862,6 +3599,34 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   flex-direction: column;
   gap: 10px;
 }
+.bp-mini-chart {
+  height: 120px;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 6px;
+  background: rgba(0,0,0,0.16);
+}
+.bp-mini-chart.empty {
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,255,255,0.36);
+}
+.bp-mini-chart-bar {
+  flex: 1;
+  min-width: 3px;
+  border: none;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(180deg, rgba(217,188,255,0.92), rgba(155,93,229,0.34));
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.15s;
+}
+.bp-mini-chart-bar:hover {
+  filter: brightness(1.18);
+  transform: scaleY(1.03);
+}
 .bp-mini-chart-label {
   color: rgba(255,255,255,0.5);
   line-height: 1.4;
@@ -2877,6 +3642,15 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.08);
   color: rgba(255,255,255,0.68);
+}
+.bp-mini-pill--button {
+  cursor: pointer;
+  font-family: inherit;
+}
+.bp-mini-pill--button:hover {
+  color: #d9bcff;
+  border-color: var(--flexi-accent-border);
+  background: var(--flexi-accent-soft);
 }
 .bp-event-item {
   display: flex;
@@ -2922,10 +3696,50 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   border-top: 1px solid rgba(255,255,255,0.05);
 }
 .bp-inspector-list-item:first-of-type { border-top: none; }
-.bp-row-active { background: rgba(255,210,80,0.08) !important; }
+.bp-row-active { background: var(--flexi-accent-soft) !important; }
 .bp-toolbar-group--full {
   padding: 12px;
   border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.bp-party-highlight {
+  margin: 0 12px 12px;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,210,80,0.18);
+  background: rgba(255,210,80,0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bp-action-btn {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 4px;
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.72);
+  font-family: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.bp-action-btn:hover:not(:disabled) {
+  color: #d9bcff;
+  border-color: var(--flexi-accent-border);
+  background: var(--flexi-accent-soft);
+}
+.bp-action-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.bp-party-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255,220,140,0.7);
+}
+.bp-party-highlight strong {
+  color: rgba(255,255,255,0.9);
 }
 
 @media (max-width: 1180px) {

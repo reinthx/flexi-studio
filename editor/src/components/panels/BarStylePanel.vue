@@ -239,7 +239,7 @@ const sizeBadge = computed(() => {
           <DragNumber :model-value="def.gap" :min="0" :max="16" :step="1" unit="px" :speed="1"
             @update:model-value="setGap" />
         </div>
-        <p class="hint">Drag the ⌟ handle on the preview window to set bar length (width/height).</p>
+        <p class="hint">Resize the live overlay window to set bar length (width/height).</p>
       </div>
     </div>
 

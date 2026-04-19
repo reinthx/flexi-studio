@@ -9,6 +9,7 @@ import type { Profile, BarStyle, GlobalConfig, StyleOverrides } from '@shared/co
 export const useConfigStore = defineStore('config', () => {
   const profile = ref<Profile>(deepClone(DEFAULT_PROFILE))
   const dirty = ref(false)
+  let suppressNextDirty = false
 
   // ── Persistence ────────────────────────────────────────────────────────────
   async function load(): Promise<boolean> {
@@ -17,8 +18,10 @@ export const useConfigStore = defineStore('config', () => {
       const res = await callHandler({ call: 'loadData', key: 'act-flexi-profile' }) as { data?: string }
       if (res?.data) {
         const saved = JSON.parse(res.data)
+        suppressNextDirty = true
         profile.value = deepMerge(deepClone(DEFAULT_PROFILE), saved)
         loadFontBatch(profile.value)
+        dirty.value = false
         return true
       }
     } catch { /* OverlayPlugin not available */ }
@@ -27,8 +30,10 @@ export const useConfigStore = defineStore('config', () => {
     const saved = localStorage.getItem('act-flexi-profile')
     if (saved) {
       try {
+        suppressNextDirty = true
         profile.value = deepMerge(deepClone(DEFAULT_PROFILE), JSON.parse(saved))
         loadFontBatch(profile.value)
+        dirty.value = false
         return true
       } catch { /* keep default */ }
     }
@@ -47,6 +52,11 @@ export const useConfigStore = defineStore('config', () => {
 
   // Broadcast current config to the live overlay whenever it changes
   watch(profile, () => {
+    if (suppressNextDirty) {
+      suppressNextDirty = false
+      dirty.value = false
+      return
+    }
     dirty.value = true
   }, { deep: true })
 

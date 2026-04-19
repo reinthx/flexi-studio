@@ -297,6 +297,7 @@ function buildMockCombatData(): CombatDataEvent {
       encdps: String(c.dps),
       enchps: String(c.hps),
       dtps: dtps,
+      rdps: String(Math.round(c.dps * (1 + Math.random() * 0.08))),
       'damage%': ((c.dps / totalDps) * 100).toFixed(1),
       'healed%': ((c.hps / totalHps) * 100).toFixed(1),
       'crithit%': (18 + Math.random() * 10).toFixed(1),
@@ -317,6 +318,7 @@ function buildMockCombatData(): CombatDataEvent {
       ENCDPS: String(totalDps),
       ENCHPS: String(totalHps),
       DTRPS: durationSeconds > 0 ? String(Math.round(totalDamageTaken / durationSeconds)) : '0',
+      RDPS: String(Math.round(totalDps * 1.04)),
     },
     Combatant,
   }

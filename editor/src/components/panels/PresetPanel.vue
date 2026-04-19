@@ -228,7 +228,7 @@ const categoryOptions = computed(() => [
         <span class="cat-count">{{ store.builtInPresets.length }}</span>
       </div>
       <div v-if="!store.builtInCollapsed" class="category-body">
-        <div v-if="store.builtInLoading" class="loading-hint">Loading presets...</div>
+        <div v-if="store.builtInLoading" class="loading-hint">Loading presets…</div>
         <div v-else class="preset-list">
           <button
             v-for="(p, idx) in store.builtInPresets" :key="p.filename"

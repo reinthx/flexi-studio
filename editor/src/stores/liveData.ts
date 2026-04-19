@@ -62,6 +62,7 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
       return {
         name: c.name,
         job: normalizeJob(c['Job'] ?? ''),
+        partyGroup: 'Party',
         fillFraction: rawVal / maxVal,
         displayValue: formatValue(rawVal, g.valueFormat),
         displayPct: c['damage%'] ?? '0',
@@ -70,6 +71,7 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
         directhit: c['DirectHitPct'] ?? '---',
         tohit: c.tohit ?? '---',
         enchps: formatValue(parseFloat(c.enchps ?? '0'), g.valueFormat),
+        rdps: formatValue(parseFloat(c['rdps'] ?? '0'), g.valueFormat),
         maxHit: (c.maxhit ?? '---').replace('-', ' '),
         alpha: 1,
       }
@@ -82,6 +84,8 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
       encounterDuration: event.Encounter['duration'] ?? '',
       totalDps: formatValue(parseFloat(event.Encounter['ENCDPS'] ?? '0'), g.valueFormat),
       totalHps: formatValue(parseFloat(event.Encounter['ENCHPS'] ?? '0'), g.valueFormat),
+      totalDtps: formatValue(parseFloat(event.Encounter['DTRPS'] ?? '0'), g.valueFormat),
+      totalRdps: formatValue(parseFloat(event.Encounter['RDPS'] ?? '0'), g.valueFormat),
       isActive: event.isActive === 'true',
     })
   }

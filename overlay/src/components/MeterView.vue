@@ -80,13 +80,15 @@ function toggleMergePets() {
 }
 
 const selectedCombatant = ref<string | null>(null)
-function openAbilityBreakdown(name: string) {
-  localStorage.setItem('flexi-breakdown-init', name)
+function openAbilityBreakdown(name?: string) {
+  const initialName = name ?? store.selfName ?? bars.value[0]?.name ?? ''
+  if (initialName) localStorage.setItem('flexi-breakdown-init', initialName)
+  else localStorage.removeItem('flexi-breakdown-init')
   const url = new URL(window.location.href)
   url.hash = '/breakdown'
   window.open(url.toString(), 'flexi-breakdown', 'width=1300,height=840,resizable=yes')
   // Send encounter-aware data (respects viewingPull) with combatant pre-selected
-  store.broadcastForCombatant(name)
+  if (initialName) store.broadcastForCombatant(initialName)
   selectedCombatant.value = null
 }
 
@@ -201,11 +203,13 @@ onUnmounted(() => {
       :total-d-p-s="frame?.totalDps ?? ''"
       :total-h-p-s="frame?.totalHps ?? ''"
       :total-d-t-p-s="frame?.totalDtps ?? ''"
+      :total-r-d-p-s="frame?.totalRdps ?? ''"
       :pull-number="store.sessionPulls.length"
       :pull-count="store.sessionPulls.length"
       :global="g"
       :show-settings="true"
       :on-settings="openEditor"
+      :on-breakdown="() => openAbilityBreakdown()"
       :on-set-combatant-filter="setCombatantFilter"
       :on-toggle-blur-names="toggleBlurNames"
       :on-toggle-pin="togglePin"
@@ -217,7 +221,7 @@ onUnmounted(() => {
       <div v-if="g.header?.pinned" class="resize-corner" />
 
     <div class="bars-container" :style="containerStyle">
-      <div v-if="bars.length === 0" class="empty-state">Waiting for combat data...</div>
+      <div v-if="bars.length === 0" class="empty-state">Waiting for combat data…</div>
       <ScrollableBarsWrapper :maxHeight="barsMaxHeight">
         <MeterBar
           v-for="bar in bars"
@@ -244,6 +248,7 @@ onUnmounted(() => {
         :total-d-p-s="frame?.totalDps ?? ''"
         :total-h-p-s="frame?.totalHps ?? ''"
         :total-d-t-p-s="frame?.totalDtps ?? ''"
+        :total-r-d-p-s="frame?.totalRdps ?? ''"
         :pull-number="store.sessionPulls.length"
         :pull-count="store.sessionPulls.length"
         :global="g"
@@ -256,15 +261,18 @@ onUnmounted(() => {
 
 <style scoped>
 .meter-root {
-  width: 100%;
+  width: 100vw;
   height: 100vh;
+  min-width: 150px;
+  min-height: 80px;
   display: flex;
   flex-direction: column;
   overflow: auto;
   position: relative;
+  resize: both;
 }
 .meter-border {
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 100;
@@ -321,12 +329,13 @@ onUnmounted(() => {
 }
 .resize-corner {
   position: absolute;
-  bottom: 15px;
-  right: 15px;
+  bottom: 0;
+  right: 0;
   width: 16px;
   height: 16px;
   cursor: nwse-resize;
   pointer-events: auto;
+  z-index: 150;
 }
 .resize-corner::after {
   content: '';

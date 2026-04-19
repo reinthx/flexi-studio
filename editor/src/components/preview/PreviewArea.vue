@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch, useTemplateRef } from 'vue'
+import { computed, ref, useTemplateRef } from 'vue'
 import { useDraggable, useElementSize } from '@vueuse/core'
 import { useLiveDataStore } from '../../stores/liveData'
 import PreviewBar from './PreviewBar.vue'
@@ -8,8 +8,6 @@ import PreviewHeader from './PreviewHeader.vue'
 import { useConfigStore } from '../../stores/config'
 import { resolveBarStyle } from '@shared/styleResolver'
 import { buildFillCss } from '@shared/cssBuilder'
-
-const STORAGE_KEY = 'flexi-editor-meter-height'
 
 const liveData = useLiveDataStore()
 const config   = useConfigStore()
@@ -53,24 +51,7 @@ const { x, y } = useDraggable(wrapperRef, {
   initialValue: { x: initX.value, y: initY.value },
 })
 
-const { width: winW, height: winH } = useElementSize(meterRef)
-
-// Get saved height from session or use default
-const savedHeight = typeof sessionStorage !== 'undefined' 
-  ? parseInt(sessionStorage.getItem(STORAGE_KEY) || '', 10) 
-  : 0
-
-onMounted(() => {
-  if (meterRef.value && savedHeight > 0) {
-    meterRef.value.style.height = `${savedHeight}px`
-  }
-})
-
-watch(winH, (h) => {
-  if (h > 50 && meterRef.value) {
-    sessionStorage.setItem(STORAGE_KEY, String(h))
-  }
-})
+const { height: winH } = useElementSize(meterRef)
 
 // Window background — from global config (falls back to default)
 const windowBg = computed(() => g.value.windowBg ?? 'rgba(0,0,0,0.6)')
@@ -107,7 +88,7 @@ function toggleHeaderPin() {
     <div ref="wrapperEl" class="preview-wrapper" :style="wrapperStyle">
       <!-- Drag handle — sits ABOVE the meter window -->
       <div ref="titlebarEl" class="preview-titlebar">
-        <span class="titlebar-text">PREVIEW {{ winW }}×{{ winH }} ☼ bar {{ profile.default.height }}px</span>
+        <span class="titlebar-text">Layout Preview</span>
       </div>
 
       <!-- Header — outside meter frame -->
@@ -191,8 +172,7 @@ function toggleHeaderPin() {
 .preview-meter {
   position: relative;
   height: 300px;
-  resize: both;
-  overflow: auto;
+  overflow: hidden;
   min-width: 150px;
   border: 1px solid var(--border);
   border-radius: 0 0 4px 4px;

@@ -386,7 +386,7 @@ export interface PetConfig {
 
 // ─── Global Config ────────────────────────────────────────────────────────────
 
-export type DpsType = 'encdps' | 'enchps' | 'dtps' | 'damage%' | 'healed%' | 'crithit%'
+export type DpsType = 'encdps' | 'enchps' | 'dtps' | 'rdps' | 'damage%' | 'healed%' | 'crithit%'
 export type ValueFormat = 'raw' | 'abbreviated' | 'formatted'
 export type Orientation = 'vertical' | 'horizontal'
 export type OutOfCombatBehavior = 'show' | 'dim' | 'hide'
@@ -528,6 +528,21 @@ export interface CastEvent {
   source: string
   target: string
   type: 'instant' | 'cast' | 'tick'
+  durationMs?: number
+  endT?: number
+  buffDurationMs?: number
+  cooldownMs?: number
+  effectName?: string
+}
+
+export interface ResourceSample {
+  t: number         // ms since pull start
+  currentHp: number
+  maxHp: number
+  hp: number        // 0-1
+  currentMp?: number
+  maxMp?: number
+  mp?: number       // 0-1
 }
 
 export interface DeathRecord {
@@ -556,7 +571,9 @@ export interface PullRecord {
   damageTakenData?: Record<string, CombatantAbilityData>  // target name → per-ability received damage
   deaths?: DeathRecord[]
   combatantIds?: Record<string, string>  // combatant name → FFXIV object ID
+  combatantJobs?: Record<string, string> // combatant name → normalized job abbreviation
   castData?: Record<string, CastEvent[]>  // combatant name → cast events
+  resourceData?: Record<string, ResourceSample[]> // combatant name → HP/MP samples over time
   partyData?: PartyMember[]  // party state at time of pull (for historical grouping)
 }
 

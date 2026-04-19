@@ -597,6 +597,7 @@ function onBrowseChange(e: Event) {
           <option value="encdps">DPS</option>
           <option value="enchps">HPS</option>
           <option value="dtps">DTPS</option>
+          <option value="rdps">rDPS</option>
         </select>
       </div>
       <div class="row">

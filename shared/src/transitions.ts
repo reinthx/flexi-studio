@@ -24,6 +24,7 @@ export interface BarFrame {
   directhit: string
   tohit: string
   enchps: string
+  rdps: string
   maxHit: string
   /** 0–1 for enter/exit fade */
   alpha: number
@@ -38,6 +39,7 @@ export interface Frame {
   totalDps: string
   totalHps: string
   totalDtps: string
+  totalRdps: string
   isActive: boolean
 }
 
@@ -130,6 +132,7 @@ export class TransitionEngine {
         bars.push({
           name,
           job: n.job,
+          partyGroup: n.partyGroup,
           fillFraction: lerp(p.fillFraction, n.fillFraction, et),
           displayValue: n.displayValue,
           displayPct: n.displayPct,
@@ -138,6 +141,7 @@ export class TransitionEngine {
           directhit: n.directhit,
           tohit: n.tohit,
           enchps: n.enchps,
+          rdps: n.rdps,
           maxHit: n.maxHit,
           alpha: lerp(p.alpha, n.alpha, et),
         })
@@ -160,6 +164,7 @@ export class TransitionEngine {
       totalDps: next.totalDps,
       totalHps: next.totalHps,
       totalDtps: next.totalDtps,
+      totalRdps: next.totalRdps,
       isActive: next.isActive,
     }
   }

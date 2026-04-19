@@ -53,6 +53,7 @@ const TOKENS = [
   { token: '{crithit%}',   label: 'Crit %' },
   { token: '{directhit%}', label: 'Direct Hit %' },
   { token: '{enchps}',     label: 'HPS' },
+  { token: '{rdps}',       label: 'rDPS' },
   { token: '{maxHit}',     label: 'Max Hit' },
   { token: '{maxHitName}', label: 'Max Hit Name' },
   { token: '{maxHitValue}', label: 'Max Hit Value' },

@@ -67,22 +67,61 @@ const JOB_ALIASES: Record<string, string> = {
   'LIMIT BREAK': 'LB',
 }
 
-export function normalizeJob(raw: string): string {
-  const upper = raw.toUpperCase()
-  return JOB_ALIASES[upper] ?? raw
+const JOB_ID_ALIASES: Record<string, string> = {
+  '1': 'GLA',
+  '2': 'PGL',
+  '3': 'MRD',
+  '4': 'LNC',
+  '5': 'ARC',
+  '6': 'CNJ',
+  '7': 'THM',
+  '19': 'PLD',
+  '20': 'MNK',
+  '21': 'WAR',
+  '22': 'DRG',
+  '23': 'BRD',
+  '24': 'WHM',
+  '25': 'BLM',
+  '26': 'ACN',
+  '27': 'SMN',
+  '28': 'SCH',
+  '29': 'ROG',
+  '30': 'NIN',
+  '31': 'MCH',
+  '32': 'DRK',
+  '33': 'AST',
+  '34': 'SAM',
+  '35': 'RDM',
+  '36': 'BLU',
+  '37': 'GNB',
+  '38': 'DNC',
+  '39': 'RPR',
+  '40': 'SGE',
+  '41': 'VPR',
+  '42': 'PCT',
 }
 
-export function getJobInfo(abbrev: string): JobInfo {
-  const key = abbrev.toUpperCase() as Job
-  return JOB_MAP[key] ?? { role: 'unknown', label: abbrev, icon: 'ADV.png' }
+/** Normalize ACT job strings or numeric ClassJob IDs to abbreviations. */
+export function normalizeJob(raw: unknown): string {
+  if (raw === null || raw === undefined) return ''
+  const value = String(raw).trim()
+  if (!value) return ''
+  const upper = value.toUpperCase()
+  return JOB_ALIASES[upper] ?? JOB_ID_ALIASES[upper] ?? upper
 }
 
-export function getRole(abbrev: string): Role {
+export function getJobInfo(abbrev: unknown): JobInfo {
+  const normalized = normalizeJob(abbrev)
+  const key = normalized.toUpperCase() as Job
+  return JOB_MAP[key] ?? { role: 'unknown', label: normalized || 'Adventurer', icon: 'ADV.png' }
+}
+
+export function getRole(abbrev: unknown): Role {
   return getJobInfo(abbrev).role
 }
 
 
-export function getJobIconSrc(abbrev: string): string {
-  const key = abbrev.toUpperCase()
+export function getJobIconSrc(abbrev: unknown): string {
+  const key = normalizeJob(abbrev).toUpperCase()
   return JOB_ICONS[key] ?? JOB_ICONS['ADV'] ?? ''
 }

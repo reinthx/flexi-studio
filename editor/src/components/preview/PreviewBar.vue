@@ -112,6 +112,7 @@ const tokens = computed(() => ({
   'crithit%': `${props.bar.crithit}%`,
   'directhit%': `${props.bar.directhit}%`,
   enchps: props.bar.enchps,
+  rdps: props.bar.rdps,
   maxHit: maxHit.value,
   maxHitName: maxHitName.value,
   maxHitValue: maxHitValue.value,

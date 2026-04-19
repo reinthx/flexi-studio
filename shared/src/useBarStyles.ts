@@ -55,6 +55,7 @@ export interface BarData {
   crithit: string
   directhit: string
   enchps: string
+  rdps: string
   maxHit: string
   alpha: number
   rank: number

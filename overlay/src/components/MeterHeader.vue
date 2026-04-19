@@ -12,11 +12,13 @@ const props = defineProps<{
   totalDPS: string
   totalHPS: string
   totalDTPS?: string
+  totalRDPS?: string
   pullNumber: number
   pullCount: number
   global: GlobalConfig
   showSettings?: boolean
   onSettings?: () => void
+  onBreakdown?: () => void
   onSetCombatantFilter?: (filter: CombatantFilter) => void
   onToggleBlurNames?: () => void
   onTogglePin?: () => void
@@ -31,6 +33,7 @@ const tokens = computed(() => ({
   totalDPS:   props.totalDPS,
   totalHPS:   props.totalHPS,
   totalDTPS:  props.totalDTPS ?? '',
+  totalRDPS:  props.totalRDPS ?? '',
   pullNumber: String(props.pullNumber),
   pullCount:  String(props.pullCount),
 }))
@@ -96,11 +99,19 @@ const isMergePets = computed(() => props.global?.mergePets ?? true)
       </button>
       <button
         v-if="showSettings && onSettings"
-        class="settings-btn"
+        class="pill-btn"
         @click="onSettings"
-        title="Open editor"
+        title="Open Editor"
       >
-        ⚙
+        Editor
+      </button>
+      <button
+        v-if="showSettings && onBreakdown"
+        class="pill-btn"
+        @click="onBreakdown"
+        title="Open Breakdown"
+      >
+        Breakdown
       </button>
       <button
         class="pill-btn pin-btn"
