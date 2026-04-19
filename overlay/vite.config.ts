@@ -59,10 +59,6 @@ export default defineConfig({
     assetsDir: 'assets',
     rollupOptions: {
       input: resolve(__dirname, 'index.html'),
-      output: {
-        entryFileNames: 'assets/index.js',
-        format: 'iife',
-      },
     },
   },
 })
