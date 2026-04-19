@@ -124,12 +124,15 @@ export function addListener<K extends EventName>(
 ): void {
   const mode = detectMode()
 
-  registerLegacyListeners()
-  if (!legacyCallbacks.has(event)) legacyCallbacks.set(event, new Set())
-  legacyCallbacks.get(event)!.add(callback as EventCallback<EventName>)
-
   if (mode === 'modern') {
     window.addOverlayListener!(event, callback)
+    return
+  }
+
+  if (mode === 'legacy') {
+    registerLegacyListeners()
+    if (!legacyCallbacks.has(event)) legacyCallbacks.set(event, new Set())
+    legacyCallbacks.get(event)!.add(callback as EventCallback<EventName>)
     return
   }
 
@@ -143,18 +146,16 @@ export function removeListener<K extends EventName>(
   callback: EventCallback<K>,
 ): void {
   const mode = detectMode()
+  legacyCallbacks.get(event)?.delete(callback as EventCallback<EventName>)
 
   if (mode === 'modern') {
     window.removeOverlayListener!(event, callback)
     return
   }
 
-  if (mode === 'legacy') {
-    legacyCallbacks.get(event)?.delete(callback as EventCallback<EventName>)
-    return
+  if (mode === 'mock') {
+    devRemoveListener(event, callback as EventCallback<EventName>)
   }
-
-  devRemoveListener(event, callback as EventCallback<EventName>)
 }
 
 export async function callHandler(params: Record<string, unknown>): Promise<unknown> {

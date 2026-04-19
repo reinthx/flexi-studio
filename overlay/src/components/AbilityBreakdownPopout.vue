@@ -1,10 +1,28 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { formatValue } from '@shared/formatValue'
-import type { CombatantAbilityData, DpsTimeline, DeathRecord, HitRecord, CastEvent } from '@shared/configSchema'
+import type { CombatantAbilityData, DpsTimeline, DeathRecord, DeathEvent, CastEvent } from '@shared/configSchema'
 import { TIMELINE_BUCKET_SEC } from '@shared/configSchema'
+import { buildDeathEvents } from '@shared/deathRecap'
 
 interface PullEntry { index: number | null; encounterName: string; duration: string }
+type BreakdownView = 'overview' | 'done' | 'taken' | 'timeline' | 'deaths' | 'casts' | 'events'
+type TimelineOverlay = 'deaths' | 'raises' | 'casts' | 'spikes'
+type EventFilter = 'damage' | 'healing' | 'casts' | 'deaths' | 'raises'
+
+interface BreakdownEventRow {
+  key: string
+  t: number
+  actor: string
+  eventType: EventFilter
+  ability: string
+  source: string
+  target: string
+  amount: number | null
+  hpBefore: string
+  hpAfter: string
+  note: string
+}
 
 // ── State from main window ────────────────────────────────────────────────────
 const allData             = ref<Record<string, CombatantAbilityData>>({})
@@ -17,7 +35,7 @@ const partyNames          = ref<string[]>([])
 const selected            = ref('')
 const pullList            = ref<PullEntry[]>([])
 const activePull          = ref<number | null>(null)
-const activeView          = ref<'summary' | 'charts' | 'encounter' | 'deaths' | 'casts'>('summary')
+const activeView          = ref<BreakdownView>('overview')
 const chartMetric         = ref<'dps' | 'hps' | 'dtps'>('dps')
 const encounterDurationSec = ref(0)
 const hiddenSeries        = ref<Set<string>>(new Set())
@@ -28,6 +46,13 @@ const showEnemies         = ref(false)
 const summaryMode         = ref<'done' | 'taken'>('done')
 const lastBroadcastTime   = ref(0)
 const castData            = ref<Record<string, CastEvent[]>>({})
+const selectedAbility     = ref('')
+const doneDimension       = ref<'ability' | 'targets' | 'sources'>('ability')
+const takenMode           = ref<'damage' | 'healing'>('damage')
+const deathInspectorTab   = ref<'recap' | 'context' | 'related'>('recap')
+const eventWindowOnly     = ref(false)
+const eventFilters        = ref<Set<EventFilter>>(new Set(['damage', 'healing', 'casts', 'deaths', 'raises']))
+const timelineOverlays    = ref<Set<TimelineOverlay>>(new Set(['deaths', 'raises', 'spikes']))
 
 // Cast timeline hover state
 const castHoverData = ref<{ time: number; ability: string; target: string; x: number; y: number } | null>(null)
@@ -224,6 +249,147 @@ const takenAbilities = computed(() =>
 const activeTableRows  = computed(() => summaryMode.value === 'taken' ? takenAbilities.value  : abilities.value)
 const activeTableTotal = computed(() => summaryMode.value === 'taken' ? takenTotal.value      : playerTotal.value)
 
+const viewTabs: Array<{ id: BreakdownView; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'done', label: 'Done' },
+  { id: 'taken', label: 'Taken' },
+  { id: 'timeline', label: 'Timeline' },
+  { id: 'deaths', label: 'Deaths' },
+  { id: 'casts', label: 'Casts' },
+  { id: 'events', label: 'Events' },
+]
+
+const currentPullEntry = computed(() =>
+  pullList.value.find(entry => entry.index === activePull.value) ?? null
+)
+
+const currentEncounterName = computed(() =>
+  currentPullEntry.value?.encounterName ?? ''
+)
+
+const currentEncounterDuration = computed(() =>
+  currentPullEntry.value?.duration ?? ''
+)
+
+const pullStatusLabel = computed(() => activePull.value === null ? 'Live' : 'Historical')
+const encounterDurationLabel = computed(() =>
+  currentEncounterDuration.value || fmtTime(encounterDurationSec.value * 1000)
+)
+
+const selectedActorDeaths = computed(() =>
+  sortedDeaths.value.filter(death => death.targetName === resolvedSelected.value)
+)
+
+const selectedActorDeathAbilitySet = computed(() => {
+  const set = new Set<string>()
+  for (const death of selectedActorDeaths.value) {
+    for (const event of deathEventsFor(death)) {
+      if (event.type === 'dmg' && event.abilityName) set.add(event.abilityName)
+    }
+  }
+  return set
+})
+
+const selectedActorCastEvents = computed(() =>
+  castData.value[resolvedSelected.value] ?? []
+)
+
+const selectedActorCastCount = computed(() => selectedActorCastEvents.value.length)
+
+const selectedActorOverviewCards = computed(() => ([
+  {
+    label: 'Done',
+    value: f(playerTotal.value),
+    detail: `${abilities.value.length} abilities`,
+    tone: 'done',
+  },
+  {
+    label: 'Taken',
+    value: f(takenTotal.value),
+    detail: `${takenAbilities.value.length} sources`,
+    tone: 'taken',
+  },
+  {
+    label: 'Deaths',
+    value: String(selectedActorDeaths.value.length),
+    detail: selectedActorDeaths.value.length > 0 ? `Last @ ${fmtTime(selectedActorDeaths.value.at(-1)?.timestamp ?? 0)}` : 'No deaths',
+    tone: 'deaths',
+  },
+  {
+    label: 'Casts',
+    value: f(selectedActorCastCount.value),
+    detail: `${castPlayerData.value?.abilities.length ?? 0} tracked abilities`,
+    tone: 'casts',
+  },
+]))
+
+function totalOutgoingFor(name: string): number {
+  return Object.values(allData.value[name] ?? {}).reduce((sum, ability) => sum + ability.totalDamage, 0)
+}
+
+function totalTakenFor(name: string): number {
+  return Object.values(damageTakenData.value[name] ?? {}).reduce((sum, ability) => sum + ability.totalDamage, 0)
+}
+
+function deathCountFor(name: string): number {
+  return sortedDeaths.value.filter(death => death.targetName === name).length
+}
+
+function castCountFor(name: string): number {
+  return (castData.value[name] ?? []).length
+}
+
+function selectorValueFor(name: string): number {
+  if (activeView.value === 'taken') return totalTakenFor(name)
+  if (activeView.value === 'deaths') return deathCountFor(name)
+  if (activeView.value === 'casts') return castCountFor(name)
+  if (activeView.value === 'timeline') {
+    const buckets = activeTimeline.value[name] ?? []
+    return buckets.reduce((sum, value) => sum + value, 0)
+  }
+  return totalOutgoingFor(name)
+}
+
+function selectorBadgeFor(name: string): string {
+  if (activeView.value === 'deaths') return `${deathCountFor(name)} deaths`
+  if (activeView.value === 'casts') return `${castCountFor(name)} casts`
+  if (activeView.value === 'timeline') return `${metricLabel.value}`
+  if (activeView.value === 'taken') return `${f(totalTakenFor(name))} in`
+  return `${f(totalOutgoingFor(name))} out`
+}
+
+const selectorMax = computed(() =>
+  Math.max(1, ...visibleCombatants.value.map(name => selectorValueFor(name)))
+)
+
+function selectorFillWidth(name: string): string {
+  return `${((selectorValueFor(name) / selectorMax.value) * 100).toFixed(1)}%`
+}
+
+function selectActor(name: string): void {
+  selected.value = name
+  castSelectedPlayer.value = name
+  encounterSelectedPlayer.value = name
+}
+
+function selectAbility(name: string): void {
+  selectedAbility.value = name
+}
+
+function toggleTimelineOverlay(name: TimelineOverlay): void {
+  const next = new Set(timelineOverlays.value)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  timelineOverlays.value = next
+}
+
+function toggleEventFilter(name: EventFilter): void {
+  const next = new Set(eventFilters.value)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  eventFilters.value = next
+}
+
 // ── Deaths ────────────────────────────────────────────────────────────────────
 const sortedDeaths = computed(() => {
   try {
@@ -242,6 +408,14 @@ const castSelectedPlayer = ref('')
 const castSelectedAbility = ref<string | null>(null)
 
 watch(activePull, () => { castSelectedPlayer.value = ''; castSelectedAbility.value = null })
+watch(resolvedSelected, (name) => {
+  if (!name) return
+  castSelectedPlayer.value = name
+  encounterSelectedPlayer.value = name
+})
+watch(resolvedSelected, () => {
+  selectedAbility.value = ''
+})
 
 interface CastGroup {
   label: string
@@ -456,13 +630,11 @@ function getAbilityBuckets(abilityName: string) {
 const encounterSelectedPlayer = ref('')
 
 watch(activePull, () => { encounterSelectedPlayer.value = '' })
-
-const currentEncounterName = computed(() =>
-  pullList.value.find(e => e.index === activePull.value)?.encounterName ?? ''
-)
-const currentEncounterDuration = computed(() =>
-  pullList.value.find(e => e.index === activePull.value)?.duration ?? ''
-)
+watch(activePull, () => {
+  selectedAbility.value = ''
+  eventWindowOnly.value = false
+  deathInspectorTab.value = 'recap'
+})
 
 const dtakenPlayers = computed(() =>
   Object.keys(damageTakenData.value)
@@ -523,52 +695,65 @@ const selectedDeath = computed<DeathRecord | null>(() =>
   selectedDeathIndex.value !== null ? (sortedDeaths.value[selectedDeathIndex.value] ?? null) : null
 )
 
-const deathHitLog = computed(() => {
-  if (!selectedDeath.value?.lastHits) return []
-  const samples = selectedDeath.value.hpSamples ?? []
-  if (samples.length === 0) return []
-  const sortedSamples = [...samples].sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
-  const sortedHits = [...selectedDeath.value.lastHits].sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
-  
-  let hp = 1
-  const results: Array<{
-    hp: number; prevHp: number; maxHp: number; effectiveType: string; changePct: number
-  }> = []
-  
-  for (let i = 0; i < sortedHits.length; i++) {
-    const hit = sortedHits[i]
-    const prevHp = hp
-    
-    const sample = sortedSamples.slice().reverse().find(s => s.t && s.t <= hit.t)
-    if (sample) {
-      hp = sample.hp
-    } else {
-      if (hit.type === 'heal') {
-        hp = Math.min(1, hp + 0.15)
-      } else {
-        hp = Math.max(0, hp - 0.15)
-      }
-    }
-    
-    results.push({
-      hp,
-      prevHp,
-      maxHp: 1,
-      effectiveType: hit.type === 'heal' ? 'heal' : 'dmg',
-      changePct: hp - prevHp
-    })
-  }
-  
-  return sortedHits.map((hit, i) => ({ ...hit, ...results[i] }))
-})
-
-function hpBarColor(hp: number): string {
-  if (hp > 0.5)  return 'rgba(80,200,80,0.13)'
-  if (hp > 0.25) return 'rgba(220,190,50,0.13)'
-  return 'rgba(210,70,70,0.13)'
+function deathEventsFor(death: DeathRecord): DeathEvent[] {
+  if (Array.isArray(death.events) && death.events.length > 0) return death.events
+  return buildDeathEvents(death.hpSamples ?? [], death.lastHits ?? [], death.timestamp ?? 0)
 }
 
-function hitRowStyle(hit: { hp: number; prevHp: number; type: string; abilityName?: string }): string {
+const deathHitLog = computed(() => selectedDeath.value ? deathEventsFor(selectedDeath.value) : [])
+
+const selectedDoneAbility = computed(() =>
+  abilities.value.find(row => row.abilityName === selectedAbility.value) ?? abilities.value[0] ?? null
+)
+
+const selectedTakenAbility = computed(() =>
+  takenAbilities.value.find(row => row.abilityName === selectedAbility.value) ?? takenAbilities.value[0] ?? null
+)
+
+const selectedCastAbility = computed(() =>
+  castPlayerData.value?.abilities.find(ability => ability.name === selectedAbility.value || ability.name === castSelectedAbility.value)
+    ?? castPlayerData.value?.abilities[0]
+    ?? null
+)
+
+const selectedDeathRelatedDamage = computed(() => {
+  if (!selectedDeath.value) return []
+  const totals = new Map<string, number>()
+  for (const event of deathEventsFor(selectedDeath.value)) {
+    if (event.type !== 'dmg' || event.isDeathBlow) continue
+    totals.set(event.abilityName, (totals.get(event.abilityName) ?? 0) + event.amount)
+  }
+  return Array.from(totals.entries())
+    .map(([ability, amount]) => ({ ability, amount }))
+    .sort((a, b) => b.amount - a.amount)
+})
+
+const selectedDeathWindow = computed(() => {
+  if (!selectedDeath.value) return null
+  const events = deathEventsFor(selectedDeath.value)
+  if (events.length === 0) return null
+  return {
+    start: Math.min(...events.map(event => event.t)),
+    end: Math.max(selectedDeath.value.timestamp, ...events.map(event => event.t)),
+  }
+})
+
+const overviewNotableEvents = computed(() => {
+  const items = sortedDeaths.value
+    .slice()
+    .reverse()
+    .slice(0, 6)
+    .map((death, index) => ({
+      key: `death-${index}-${death.timestamp}`,
+      label: `${death.targetName} died`,
+      detail: `at ${fmtTime(death.timestamp)}${death.resurrectTime ? ` · raised ${fmtTime(death.resurrectTime)}` : ''}`,
+      type: 'death' as const,
+      death,
+    }))
+  return items
+})
+
+function hitRowStyle(_: DeathEvent): string {
   return ''
 }
 
@@ -579,151 +764,34 @@ function fmtTime(ms: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`
 }
 
-function deathSparkPoints(death: DeathRecord): string {
-  const { hpSamples, timestamp, lastHits } = death
-  if (!hpSamples || hpSamples.length < 2) return ''
-  const tStart = timestamp - 35000
-
-  // Find first hit to anchor timeline
-  const hits = lastHits ?? []
-  const firstHitTime = hits.length > 0 ? Math.max(tStart, hits[0].t ?? tStart) : null
-  const windowDuration = 30000
-
-  if (!firstHitTime) {
-    // No hits - just show death marker at end
-    return ''
-  }
-
-  const relevantSamples = hpSamples
-    .filter(s => s.t >= firstHitTime)
-    .sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
-  if (relevantSamples.length < 2) return ''
-
-  return relevantSamples
-    .slice(0, 50) // limit points
-    .map(s => {
-      const offset = s.t - firstHitTime
-      const x = Math.max(0, Math.min(120, (offset / windowDuration) * 120))
-      const y = 28 - (s.hp * 28)
-      return `${x.toFixed(1)},${y.toFixed(1)}`
-    })
-    .join(' ')
+function formatHpValue(value: number): string {
+  return f(Math.max(0, Math.round(value)))
 }
 
-function deathHpBars(death: DeathRecord): { x: number; hp: number; width: number; eventType: 'dmg' | 'heal' | 'death' | 'none'; change: number }[] {
-  const bars: { x: number; hp: number; width: number; eventType: 'dmg' | 'heal' | 'death' | 'none'; change: number }[] = []
-  if (!death?.hpSamples || !death?.timestamp) return bars
-  const tStart = death.timestamp - 35000
-
-  const hits = death.lastHits ?? []
-  const firstHitTime = hits.length > 0 ? Math.max(tStart, hits[0].t ?? tStart) : null
-
-  if (!firstHitTime) {
-    bars.push({ x: 0, hp: 0, width: 120, eventType: 'death', change: 0 })
-    return bars
-  }
-
-  const relevantSamples = death.hpSamples
-    .filter(s => s.t >= firstHitTime)
-    .sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
-  if (relevantSamples.length === 0) {
-    bars.push({ x: 0, hp: 0, width: 120, eventType: 'death', change: 0 })
-    return bars
-  }
-
-  const barCount = relevantSamples.length + 1
-  const barWidth = 120 / barCount
-
-  let prevHp = 1
-  for (let i = 0; i < relevantSamples.length; i++) {
-    const sample = relevantSamples[i]
-    const hp = sample.hp ?? 0
-    const change = hp - prevHp
-
-    let eventType: 'dmg' | 'heal' | 'none' = 'none'
-    if (change < -0.01) eventType = 'dmg'
-    else if (change > 0.01) eventType = 'heal'
-
-    bars.push({ x: i * barWidth, hp, width: barWidth, eventType, change })
-    prevHp = hp
-  }
-
-  bars.push({ x: 120 - barWidth, hp: 0, width: barWidth, eventType: 'death', change: 0 })
-
-  return bars
+function formatHpBefore(event: DeathEvent): string {
+  const pct = Math.round(event.hpBefore * 100)
+  return `${formatHpValue(event.hpBeforeRaw)} / ${formatHpValue(event.maxHp)} (${pct}%)`
 }
 
-// Vertical bar chart for death timeline: damage/heal events as bars (no gaps)
-function deathEventBars(death: DeathRecord): { x: number; amount: number; type: 'dmg' | 'heal' }[] {
-  const bars: { x: number; amount: number; type: 'dmg' | 'heal' }[] = []
-  if (!death?.lastHits || !death?.timestamp) return bars
-  const tStart = death.timestamp - 35000
-
-  // Find first hit to anchor timeline
-  const hits = death.lastHits ?? []
-  const firstHitTime = hits.length > 0 ? Math.max(tStart, hits[0].t ?? tStart) : null
-  const windowDuration = 30000
-
-  if (!firstHitTime) return bars
-
-  // Process hits in order
-  const sortedHits = [...hits].sort((a, b) => (a.t ?? 0) - (b.t ?? 0))
-  const maxAmount = Math.max(...sortedHits.map(h => Math.abs(h.amount ?? 0)), 1)
-
-  for (const hit of sortedHits) {
-    const t = hit.t ?? 0
-    if (t < firstHitTime) continue
-
-    const amount = hit.amount ?? 0
-    if (amount === 0) continue // Skip 0 values
-
-    const offset = t - firstHitTime
-    const x = Math.min(120, (offset / windowDuration) * 120)
-    bars.push({
-      x,
-      amount: Math.abs(amount),
-      type: hit.type === 'heal' ? 'heal' : 'dmg'
-    })
-  }
-
-  return bars
-}
-
-interface DeathBar {
-  time: number
-  amount: number
+function deathHpBars(death: DeathRecord): Array<{
+  x: number
+  width: number
+  hpBefore: number
+  hpAfter: number
   type: 'dmg' | 'heal' | 'death'
-}
-
-function deathBarData(death: DeathRecord): DeathBar[] {
-  const bars: DeathBar[] = []
-  if (!death?.lastHits) return bars
-  const deathTime = death.timestamp ?? 0
-
-  for (const hit of death.lastHits) {
-    const timeOffset = ((hit.t ?? 0) - (deathTime - 35000)) / 35000
-    if (timeOffset < 0 || timeOffset > 1) continue
-    bars.push({
-      time: timeOffset * 120,
-      amount: hit.type === 'heal' ? hit.amount : -hit.amount,
-      type: hit.type === 'heal' ? 'heal' : 'dmg',
-    })
-  }
-
-  // Add death marker at the end
-  bars.push({
-    time: 120,
-    amount: 0,
-    type: 'death',
-  })
-
-  return bars.sort((a, b) => a.time - b.time)
-}
-
-function deathBarMax(death: DeathRecord): number {
-  if (!death?.lastHits) return 1
-  const max = Math.max(...death.lastHits.map(h => Math.abs(h.amount ?? 0)))
-  return max > 0 ? max : 1
+  isEstimated: boolean
+}> {
+  const events = deathEventsFor(death)
+  if (events.length === 0) return []
+  const barWidth = 120 / events.length
+  return events.map((event, index) => ({
+    x: index * barWidth,
+    width: barWidth,
+    hpBefore: event.hpBefore,
+    hpAfter: event.hpAfter,
+    type: event.type,
+    isEstimated: event.isEstimated === true,
+  }))
 }
 
 // ── Pull selector ─────────────────────────────────────────────────────────────
@@ -900,6 +968,58 @@ const hoverTooltip = computed(() => {
   return { timeLabel, entries, groupVal }
 })
 
+const timelineDeathMarkers = computed(() =>
+  sortedDeaths.value
+    .filter(death => death.targetName === resolvedSelected.value)
+    .map(death => death.timestamp / 1000)
+    .filter(time => time >= 0)
+)
+
+const timelineRaiseMarkers = computed(() =>
+  sortedDeaths.value
+    .filter(death => death.targetName === resolvedSelected.value && death.resurrectTime)
+    .map(death => (death.resurrectTime ?? 0) / 1000)
+    .filter(time => time >= 0)
+)
+
+const timelineCastMarkers = computed(() =>
+  selectedActorCastEvents.value
+    .map(event => event.t / 1000)
+    .filter(time => time >= 0)
+)
+
+const timelineSpikeMarkers = computed(() => {
+  const values = (activeTimeline.value[resolvedSelected.value] ?? []).map(value => value / TIMELINE_BUCKET_SEC)
+  return values
+    .map((value, index) => ({ value, index }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 3)
+})
+
+function markerXForTime(timeSec: number, maxBuckets: number): number {
+  const bucket = Math.max(0, Math.min(maxBuckets - 1, timeSec / TIMELINE_BUCKET_SEC))
+  return PL + (bucket / Math.max(maxBuckets - 1, 1)) * CW
+}
+
+const hoverWindow = computed(() => {
+  if (hoverBucket.value < 0) return null
+  const start = hoverBucket.value * TIMELINE_BUCKET_SEC * 1000
+  const end = start + TIMELINE_BUCKET_SEC * 1000
+  return { start, end }
+})
+
+const timelineInspectorCasts = computed(() => {
+  if (!hoverWindow.value) return []
+  return selectedActorCastEvents.value
+    .filter(event => event.t >= hoverWindow.value!.start && event.t < hoverWindow.value!.end)
+    .slice(0, 6)
+})
+
+const timelineInspectorDeaths = computed(() => {
+  if (!hoverWindow.value) return []
+  return sortedDeaths.value.filter(death => death.timestamp >= hoverWindow.value!.start && death.timestamp < hoverWindow.value!.end)
+})
+
 const tooltipStyle = computed(() => {
   if (!hoverVisible.value || !hoverTooltip.value || !chartAreaRef.value) return { display: 'none' }
   const areaW = chartAreaRef.value.clientWidth
@@ -912,6 +1032,84 @@ const tooltipStyle = computed(() => {
 })
 
 const f = (n: number) => formatValue(n, 'abbreviated')
+
+const eventRowsRaw = computed<BreakdownEventRow[]>(() => {
+  const actor = resolvedSelected.value
+  if (!actor) return []
+
+  const rows: BreakdownEventRow[] = []
+
+  for (const cast of selectedActorCastEvents.value) {
+    rows.push({
+      key: `cast-${cast.t}-${cast.abilityName}-${cast.target ?? ''}`,
+      t: cast.t,
+      actor,
+      eventType: 'casts',
+      ability: cast.abilityName,
+      source: actor,
+      target: cast.target ?? '',
+      amount: null,
+      hpBefore: '—',
+      hpAfter: '—',
+      note: cast.type === 'tick' ? 'tick' : 'cast',
+    })
+  }
+
+  for (const death of selectedActorDeaths.value) {
+    for (const event of deathEventsFor(death)) {
+      rows.push({
+        key: `death-event-${death.timestamp}-${event.t}-${event.abilityName}-${event.type}`,
+        t: event.t,
+        actor,
+        eventType: event.isDeathBlow ? 'deaths' : event.type === 'heal' ? 'healing' : 'damage',
+        ability: event.isDeathBlow ? 'KO' : event.abilityName,
+        source: event.sourceName,
+        target: actor,
+        amount: event.isDeathBlow ? null : event.amount,
+        hpBefore: formatHpBefore(event),
+        hpAfter: `${formatHpValue(event.hpAfterRaw)} / ${formatHpValue(event.maxHp)} (${Math.round(event.hpAfter * 100)}%)`,
+        note: event.isEstimated ? 'estimated death recap' : 'death recap',
+      })
+    }
+
+    if (death.resurrectTime) {
+      rows.push({
+        key: `raise-${death.resurrectTime}-${actor}`,
+        t: death.resurrectTime,
+        actor,
+        eventType: 'raises',
+        ability: 'Raise',
+        source: '',
+        target: actor,
+        amount: null,
+        hpBefore: '0%',
+        hpAfter: 'raised',
+        note: 'resurrection detected',
+      })
+    }
+  }
+
+  return rows.sort((a, b) => b.t - a.t)
+})
+
+const eventRows = computed(() => {
+  const filtered = eventRowsRaw.value.filter(row => eventFilters.value.has(row.eventType))
+  if (!eventWindowOnly.value || !selectedDeathWindow.value) return filtered
+  return filtered.filter(row => row.t >= selectedDeathWindow.value!.start && row.t <= selectedDeathWindow.value!.end)
+})
+
+const activeFilterChips = computed(() => {
+  const chips = [
+    `Pull=${pullStatusLabel.value}`,
+    `Player=${resolvedSelected.value || 'None'}`,
+    `Metric=${metricLabel.value}`,
+  ]
+  if (showEnemies.value) chips.push('Show Enemies')
+  if (showFriendlyNPCs.value) chips.push('Show NPCs')
+  if (selectedAbility.value) chips.push(`Ability=${selectedAbility.value}`)
+  if (eventWindowOnly.value && selectedDeathWindow.value) chips.push(`Window=Death #${(selectedDeathIndex.value ?? 0) + 1}`)
+  return chips
+})
 
 // ── BroadcastChannel ──────────────────────────────────────────────────────────
 let channel: BroadcastChannel | null = null
@@ -984,8 +1182,6 @@ onUnmounted(() => { channel?.close(); channel = null })
 
 <template>
   <div class="bp-root">
-
-    <!-- Top bar -->
     <div class="bp-topbar">
       <span class="bp-app-title">Ability Breakdown</span>
       <select v-if="pullList.length > 0" class="bp-pull-select"
@@ -1003,406 +1199,527 @@ onUnmounted(() => { channel?.close(); channel = null })
       <span v-if="encounterTotal > 0" class="bp-total">{{ f(encounterTotal) }} tracked</span>
     </div>
 
-    <!-- View tabs -->
+    <div class="bp-analysis-header">
+      <div class="bp-analysis-main">
+        <div class="bp-analysis-kicker">Report Shell</div>
+        <div class="bp-analysis-title">{{ currentEncounterName || 'Current Encounter' }}</div>
+      </div>
+      <div class="bp-analysis-stats">
+        <div class="bp-analysis-stat">
+          <span class="bp-analysis-label">Pull</span>
+          <span class="bp-analysis-value">{{ currentPullEntry?.index === null || !currentPullEntry ? 'Live' : `#${currentPullEntry.index}` }}</span>
+        </div>
+        <div class="bp-analysis-stat">
+          <span class="bp-analysis-label">Encounter</span>
+          <span class="bp-analysis-value">{{ currentEncounterName || 'Unknown' }}</span>
+        </div>
+        <div class="bp-analysis-stat">
+          <span class="bp-analysis-label">Duration</span>
+          <span class="bp-analysis-value">{{ encounterDurationLabel }}</span>
+        </div>
+        <div class="bp-analysis-stat">
+          <span class="bp-analysis-label">Status</span>
+          <span class="bp-analysis-value">{{ pullStatusLabel }}</span>
+        </div>
+        <div class="bp-analysis-stat">
+          <span class="bp-analysis-label">Selected Target</span>
+          <span class="bp-analysis-value" :style="nameStyle(resolvedSelected)">{{ resolvedSelected || 'None' }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="bp-filter-strip">
+      <div class="bp-filter-groups">
+        <button class="bp-filter-btn" :class="{ active: !showEnemies }" @click="showEnemies = false">Party</button>
+        <button class="bp-filter-btn" :class="{ active: showEnemies }" @click="showEnemies = true">Show Enemies</button>
+        <button class="bp-filter-btn" :class="{ active: showFriendlyNPCs }" @click="showFriendlyNPCs = !showFriendlyNPCs">NPCs</button>
+        <button
+          v-if="activeView === 'timeline'"
+          v-for="overlay in ['deaths', 'raises', 'casts', 'spikes']"
+          :key="overlay"
+          class="bp-filter-btn"
+          :class="{ active: timelineOverlays.has(overlay as TimelineOverlay) }"
+          @click="toggleTimelineOverlay(overlay as TimelineOverlay)"
+        >
+          {{ overlay }}
+        </button>
+        <button
+          v-if="activeView === 'events'"
+          class="bp-filter-btn"
+          :class="{ active: eventWindowOnly }"
+          @click="eventWindowOnly = !eventWindowOnly"
+        >
+          Selected Window
+        </button>
+      </div>
+      <div class="bp-chip-row">
+        <span v-for="chip in activeFilterChips" :key="chip" class="bp-chip">{{ chip }}</span>
+      </div>
+    </div>
+
     <div class="bp-view-tabs">
-      <button class="bp-view-tab" :class="{ active: activeView === 'summary' }" @click="activeView = 'summary'">Summary</button>
-      <button class="bp-view-tab" :class="{ active: activeView === 'charts' }" @click="activeView = 'charts'">Charts</button>
-      <button class="bp-view-tab" :class="{ active: activeView === 'encounter' }" @click="activeView = 'encounter'">Encounter</button>
-      <button class="bp-view-tab" :class="{ active: activeView === 'casts' }" @click="activeView = 'casts'">Casts</button>
-      <button class="bp-view-tab" :class="{ active: activeView === 'deaths' }" @click="activeView = 'deaths'">
-        Deaths<span v-if="sortedDeaths.length > 0" class="bp-death-badge">{{ sortedDeaths.length }}</span>
+      <button
+        v-for="tab in viewTabs"
+        :key="tab.id"
+        class="bp-view-tab"
+        :class="{ active: activeView === tab.id }"
+        @click="activeView = tab.id"
+      >
+        {{ tab.label }}
+        <span v-if="tab.id === 'deaths' && sortedDeaths.length > 0" class="bp-death-badge">{{ sortedDeaths.length }}</span>
       </button>
     </div>
 
     <div v-if="combatants.length === 0" class="bp-waiting">Waiting for combat data…</div>
-
-    <!-- ── SUMMARY ── -->
-    <template v-else-if="activeView === 'summary'">
-      <div class="bp-tabs">
-        <template v-for="group in combatantGroups" :key="group.label">
-          <div class="bp-group-header" @click="toggleGroup(group.label)">
-            <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
-            <span class="bp-group-label">{{ group.label }}</span>
-          </div>
-          <template v-if="!groupCollapsed.has(group.label)">
-            <button v-for="name in group.names" :key="name" class="bp-tab"
-              :class="{ active: resolvedSelected === name }" @click="selected = name">
-              <span :style="nameStyle(name)">{{ tabLabel(name) }}</span>
-            </button>
-          </template>
-        </template>
-      </div>
-      <div class="bp-summary-mode-bar">
-        <button class="bp-mode-btn" :class="{ active: summaryMode === 'done' }" @click="summaryMode = 'done'">Done</button>
-        <button class="bp-mode-btn" :class="{ active: summaryMode === 'taken' }" @click="summaryMode = 'taken'">Taken</button>
-        <span class="bp-mode-total">{{ f(activeTableTotal) }}</span>
-      </div>
-      <div v-if="activeTableRows.length === 0" class="bp-waiting">No {{ summaryMode === 'taken' ? 'damage taken' : 'ability' }} data for this pull.</div>
-      <div v-else class="bp-scroll">
-        <table class="bp-table">
-          <thead><tr>
-            <th class="col-name">Ability</th>
-            <th class="col-num">Damage</th>
-            <th class="col-num">DPS</th>
-            <th class="col-pct">%</th>
-            <th class="col-num">Hits</th>
-            <th class="col-num">Avg</th>
-            <th class="col-num">Max</th>
-            <th class="col-num col-dim">Min</th>
-          </tr></thead>
-          <tbody>
-            <tr v-for="row in activeTableRows" :key="row.abilityId">
-              <td class="col-name">
-                <div class="row-fill" :style="{ width: row.pct + '%' }" />
-                <span class="aname">{{ row.abilityName }}</span>
-              </td>
-              <td class="col-num">{{ f(row.totalDamage) }}</td>
-              <td class="col-num">{{ encounterDurationSec > 0 ? f(row.dps) : '—' }}</td>
-              <td class="col-pct">{{ row.pct }}%</td>
-              <td class="col-num">{{ row.hits }}</td>
-              <td class="col-num">{{ f(row.avg) }}</td>
-              <td class="col-num">{{ f(row.maxHit) }}</td>
-              <td class="col-num col-dim">{{ f(row.minHit) }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </template>
-
-    <!-- ── CHARTS ── -->
-    <template v-else-if="activeView === 'charts'">
-      <!-- Metric selector -->
-      <div class="bp-metric-tabs">
-        <button class="bp-metric-tab" :class="{ active: chartMetric === 'dps' }"  @click="chartMetric = 'dps'">DPS</button>
-        <button class="bp-metric-tab" :class="{ active: chartMetric === 'hps' }"  @click="chartMetric = 'hps'">HPS</button>
-        <button class="bp-metric-tab" :class="{ active: chartMetric === 'dtps' }" @click="chartMetric = 'dtps'">DTPS</button>
-      </div>
-
-      <div v-if="!chartLines" class="bp-waiting">No {{ metricLabel }} data for this encounter.</div>
-      <div v-else ref="chartAreaRef" class="bp-chart-area">
-
-        <svg ref="svgRef" class="bp-chart-svg"
-          :viewBox="`0 0 ${SVG_W} ${SVG_H}`"
-          preserveAspectRatio="xMidYMid meet"
-          @mousemove="onSvgMouseMove"
-          @mouseleave="hoverVisible = false">
-
-          <!-- Y gridlines -->
-          <g v-for="tick in chartLines.yTicks" :key="tick.y">
-            <line :x1="PL" :y1="tick.y" :x2="PL + CW" :y2="tick.y" stroke="rgba(255,255,255,0.06)" stroke-width="1" />
-            <text :x="PL - 5" :y="tick.y + 4" text-anchor="end" class="axis-label">{{ tick.label }}</text>
-          </g>
-          <!-- X gridlines -->
-          <g v-for="tick in chartLines.xTicks" :key="tick.x">
-            <line :x1="tick.x" :y1="PT" :x2="tick.x" :y2="PT + CH" stroke="rgba(255,255,255,0.04)" stroke-width="1" />
-            <text :x="tick.x" :y="PT + CH + 14" text-anchor="middle" class="axis-label">{{ tick.label }}</text>
-          </g>
-          <rect :x="PL" :y="PT" :width="CW" :height="CH" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1" />
-
-          <!-- DPS lines -->
-          <polyline
-            v-for="s in chartLines.series"
-            v-show="!hiddenSeries.has(s.name)"
-            :key="s.name"
-            :points="chartLines.points(s.values)"
-            fill="none"
-            :stroke="s.color"
-            :stroke-width="s.isGroup ? 1.5 : 1.5"
-            :stroke-dasharray="s.isGroup ? '5,3' : undefined"
-            stroke-linejoin="round"
-            stroke-linecap="round"
-            :opacity="s.isGroup ? 0.6 : 1"
-          />
-
-          <!-- Hover: vertical line -->
-          <line v-show="hoverVisible && hoverBucket >= 0"
-            :x1="hoverLineX" :y1="PT" :x2="hoverLineX" :y2="PT + CH"
-            stroke="rgba(255,255,255,0.3)" stroke-width="1" stroke-dasharray="3,3" />
-
-          <!-- Hover: dots on each visible line -->
-          <circle
-            v-for="s in chartLines.series.filter(s => !s.isGroup && !hiddenSeries.has(s.name))"
-            v-show="hoverVisible && hoverBucket >= 0"
-            :key="`dot-${s.name}`"
-            :cx="hoverLineX"
-            :cy="PT + CH - Math.min((s.values[hoverBucket] ?? 0) / chartLines.maxDps, 1) * CH"
-            r="3" :fill="s.color" stroke="#0d0d10" stroke-width="1.5"
-          />
-        </svg>
-
-        <!-- Hover tooltip -->
-        <div class="bp-tooltip" :style="tooltipStyle" v-if="hoverTooltip">
-          <div class="bp-tooltip-time">{{ hoverTooltip.timeLabel }}</div>
-          <div v-for="entry in hoverTooltip.entries" :key="entry.name" class="bp-tooltip-row">
-            <span class="bp-tooltip-dot" :style="{ background: entry.color }" />
-            <span class="bp-tooltip-name" :style="nameStyle(entry.name)">{{ entry.label }}</span>
-            <span class="bp-tooltip-val">{{ f(entry.value) }}</span>
-          </div>
-          <div v-if="hoverTooltip.entries.length > 1" class="bp-tooltip-group">
-            <span class="bp-tooltip-name">Group</span>
-            <span class="bp-tooltip-val">{{ f(hoverTooltip.groupVal) }}</span>
-          </div>
-        </div>
-
-        <!-- Legend -->
-        <div class="bp-chart-legend">
-          <div v-for="s in chartLines.series" :key="s.name"
-            class="bp-legend-item" :class="{ hidden: hiddenSeries.has(s.name) }"
-            @click="toggleSeries(s.name)">
-            <span class="bp-legend-dot"
-              :style="{ background: s.isGroup ? 'transparent' : s.color,
-                        border: s.isGroup ? `1px dashed ${GROUP_COLOR}` : 'none' }" />
-            <span class="bp-legend-name"
-              :style="s.isGroup ? undefined : nameStyle(s.name)">
-              {{ s.isGroup ? 'Group' : tabLabel(s.name) }}
-            </span>
-          </div>
-        </div>
-      </div>
-    </template>
-
-    <!-- ── ENCOUNTER ── -->
-    <template v-else-if="activeView === 'encounter'">
-
-      <!-- Encounter name header -->
-      <div class="enc-header" v-if="currentEncounterName">
-        <span class="enc-name">{{ currentEncounterName }}</span>
-        <span class="enc-dur" v-if="currentEncounterDuration">{{ currentEncounterDuration }}</span>
-      </div>
-
-      <!-- Main two-column area -->
-      <div class="enc-main">
-
-        <!-- Left: Damage Taken per player -->
-        <div class="enc-left">
-          <div class="enc-section-label">Damage Taken</div>
-          <div class="enc-player-list">
-            <div v-if="dtakenPlayers.length === 0" class="enc-empty-small">No data yet</div>
-            <div
-              v-for="p in dtakenPlayers" :key="p.name"
-              class="enc-player-row"
-              :class="{ active: encSelectedResolved === p.name }"
-              @click="encounterSelectedPlayer = p.name"
-            >
-              <div class="enc-fill" :style="{ width: (p.total / dtakenPlayersMax * 100).toFixed(1) + '%' }" />
-              <span class="enc-player-name" :style="nameStyle(p.name)">{{ tabLabel(p.name) }}</span>
-              <span class="enc-player-val">{{ f(p.total) }}</span>
-            </div>
-
-            <!-- Adds: show only when enemies toggle on AND fight had multiple enemies -->
-            <template v-if="showEnemies && hasMultipleEnemies && dtakenEnemies.length > 0">
-              <div class="enc-section-label enc-section-label--adds">Adds</div>
-              <div
-                v-for="e in dtakenEnemies" :key="e.name"
-                class="enc-player-row enc-enemy-row"
-                :class="{ active: encSelectedResolved === e.name }"
-                @click="encounterSelectedPlayer = e.name"
-              >
-                <div class="enc-fill enc-fill--enemy" :style="{ width: (e.total / dtakenPlayersMax * 100).toFixed(1) + '%' }" />
-                <span class="enc-player-name">{{ e.name }}</span>
-                <span class="enc-player-val">{{ f(e.total) }}</span>
-              </div>
-            </template>
-          </div>
-        </div>
-
-        <!-- Right: Per-ability breakdown -->
-        <div class="enc-right">
-          <div v-if="!encSelectedResolved" class="enc-select-prompt">Select a player to review</div>
-          <template v-else>
-            <div class="enc-ability-header">
-              <span class="enc-ability-player" :style="nameStyle(encSelectedResolved)">{{ tabLabel(encSelectedResolved) }}</span>
-              <span class="enc-ability-total">{{ f(encTakenTotal) }} taken</span>
-            </div>
-            <div v-if="encTakenAbilities.length === 0" class="enc-empty-small">No ability data</div>
-            <div v-else class="enc-ability-scroll">
-              <table class="bp-table">
-                <thead><tr>
-                  <th class="col-name">Ability</th>
-                  <th class="col-num">Damage</th>
-                  <th class="col-pct">%</th>
-                  <th class="col-num">Hits</th>
-                  <th class="col-num">Avg</th>
-                  <th class="col-num">Max</th>
-                </tr></thead>
-                <tbody>
-                  <tr v-for="row in encTakenAbilities" :key="row.abilityId">
-                    <td class="col-name">
-                      <div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" />
-                      <span class="aname">{{ row.abilityName }}</span>
-                    </td>
-                    <td class="col-num">{{ f(row.totalDamage) }}</td>
-                    <td class="col-pct">{{ row.pct }}%</td>
-                    <td class="col-num">{{ row.hits }}</td>
-                    <td class="col-num">{{ f(row.avg) }}</td>
-                    <td class="col-num">{{ f(row.maxHit) }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </template>
-        </div>
-      </div>
-
-    </template>
-
-    <!-- ── CASTs ── -->
-    <template v-else-if="activeView === 'casts'">
-      <div v-if="partyMembers.length === 0" class="bp-waiting">No cast data recorded.</div>
-      <template v-else>
-        <!-- Player selector with collapsible group headers -->
-        <div class="bp-tabs">
-          <template v-for="group in castGroups" :key="group.label">
+    <template v-else-if="activeView === 'overview'">
+      <div class="bp-workspace">
+        <aside class="bp-rail">
+          <div class="bp-rail-title">Selectors</div>
+          <template v-for="group in combatantGroups" :key="group.label">
             <div class="bp-group-header" @click="toggleGroup(group.label)">
               <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
               <span class="bp-group-label">{{ group.label }}</span>
             </div>
             <template v-if="!groupCollapsed.has(group.label)">
-              <button v-for="name in group.names" :key="name" class="bp-tab"
-                :class="{ active: castSelectedPlayer === name }" @click="castSelectedPlayer = name">
-                <span :style="nameStyle(name)">{{ tabLabel(name) }}</span>
+              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: resolvedSelected === name }" @click="selectActor(name)">
+                <div class="bp-rail-fill" :style="{ width: selectorFillWidth(name) }" />
+                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
+                <span class="bp-rail-meta">{{ selectorBadgeFor(name) }}</span>
               </button>
             </template>
           </template>
-        </div>
+        </aside>
 
-        <div v-if="!castPlayerData" class="bp-waiting">Select a party member to view casts.</div>
-        <template v-else>
-          <!-- Hover tooltip -->
-          <div v-if="castHoverData" class="cast-hover-tooltip" :style="{ left: castHoverData.x + 'px', top: castHoverData.y + 'px' }">
-            <div class="cast-tooltip-time">{{ fmtTime(castHoverData.time * 1000) }}</div>
-            <div class="cast-tooltip-ability">{{ castHoverData.ability }}</div>
-            <div class="cast-tooltip-target" v-if="castHoverData.target">→ {{ castHoverData.target }}</div>
+        <main class="bp-main">
+          <div class="bp-card-grid">
+            <div v-for="card in selectedActorOverviewCards" :key="card.label" class="bp-card" :class="`bp-card--${card.tone}`">
+              <div class="bp-card-label">{{ card.label }}</div>
+              <div class="bp-card-value">{{ card.value }}</div>
+              <div class="bp-card-detail">{{ card.detail }}</div>
+            </div>
           </div>
 
-          <div class="cast-list-header">
-            {{ castPlayerData.abilities.length }} abilities · {{ castPlayerData.events.length }} total casts
-          </div>
-          <div class="cast-scroll">
-            <div
-              v-for="ab in castPlayerData.abilities"
-              :key="ab.name"
-              class="cast-row"
-              :class="{ expanded: castSelectedAbility === ab.name }"
-            >
-              <!-- Main row: Name + Timeline -->
-              <div class="cast-row-main" @click="castSelectedAbility = castSelectedAbility === ab.name ? null : ab.name">
-                <div class="cast-ability-info">
-                  <span class="cast-ability-name">{{ ab.name }}</span>
-                  <span class="cast-ability-casts">{{ ab.casts }}</span>
-                </div>
-                <div class="cast-row-timeline" @mousemove="onCastTimelineHover($event, ab.name, castPlayerData?.events ?? [])" @mouseleave="castHoverData = null">
-                  <div class="cast-mini-bucket" v-for="(bucket, i) in getAbilityBuckets(ab.name)" :key="i">
-                    <div
-                      v-for="(c, j) in bucket.casts"
-                      :key="j"
-                      class="cast-mini-segment"
-                      :class="{ 'cast-bar-tick': c.type === 'tick' }"
-                      :style="{ left: (c.time / CAST_BUCKET_SEC * 100) + '%' }"
-                    />
-                  </div>
-                  <!-- Death to resurrection highlight overlay -->
-                  <div v-if="castPlayerDeathTime !== null && castPlayerResTime !== null" class="cast-death-range" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%', width: ((castPlayerResTime - castPlayerDeathTime) / castTimelineDuration * 100) + '%' }" />
-                  <!-- Death line -->
-                  <div v-if="castPlayerDeathTime !== null" class="cast-death-overlay" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%' }">
-                    <div class="cast-death-line"></div>
-                    <div class="cast-death-label">DIED</div>
-                  </div>
-                  <!-- Resurrection line -->
-                  <div v-if="castPlayerResTime !== null" class="cast-ress-overlay" :style="{ left: (castPlayerResTime / castTimelineDuration * 100) + '%' }">
-                    <div class="cast-ress-line"></div>
-                    <div class="cast-ress-label">RAISE</div>
-                  </div>
-                  <!-- Time axis markers -->
-                  <div class="cast-timeline-ticks">
-                    <span v-for="tick in castTimeTicks" :key="tick" class="cast-tick-mark" :style="{ left: (tick / castTimelineDuration * 100) + '%' }">{{ tick }}s</span>
-                  </div>
+          <div class="bp-overview-grid">
+            <section class="bp-panel">
+              <div class="bp-panel-title">Top Abilities Done</div>
+              <table class="bp-table">
+                <thead><tr><th class="col-name">Ability</th><th class="col-num">Total</th><th class="col-pct">%</th><th class="col-num">Rate</th></tr></thead>
+                <tbody>
+                  <tr v-for="row in abilities.slice(0, 6)" :key="`ov-done-${row.abilityId}`" @click="selectAbility(row.abilityName)">
+                    <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname">{{ row.abilityName }}</span></td>
+                    <td class="col-num">{{ f(row.totalDamage) }}</td>
+                    <td class="col-pct">{{ row.pct }}%</td>
+                    <td class="col-num">{{ encounterDurationSec > 0 ? f(row.dps) : '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+
+            <section class="bp-panel">
+              <div class="bp-panel-title">Top Abilities Taken</div>
+              <table class="bp-table">
+                <thead><tr><th class="col-name">Source Ability</th><th class="col-num">Total</th><th class="col-pct">%</th><th class="col-num">Near Deaths</th></tr></thead>
+                <tbody>
+                  <tr v-for="row in takenAbilities.slice(0, 6)" :key="`ov-taken-${row.abilityId}`" @click="selectAbility(row.abilityName)">
+                    <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname">{{ row.abilityName }}</span></td>
+                    <td class="col-num">{{ f(row.totalDamage) }}</td>
+                    <td class="col-pct">{{ row.pct }}%</td>
+                    <td class="col-num">{{ selectedActorDeathAbilitySet.has(row.abilityName) ? 'Yes' : '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+
+            <section class="bp-panel">
+              <div class="bp-panel-title">Timeline Snapshot</div>
+              <div class="bp-mini-chart-shell">
+                <div class="bp-mini-chart-label">Selected actor uses the current timeline metric and shares hover state with the Timeline view.</div>
+                <div class="bp-mini-chart-values">
+                  <span class="bp-mini-pill">{{ metricLabel }}</span>
+                  <span class="bp-mini-pill">{{ f((activeTimeline[resolvedSelected] ?? []).reduce((sum, value) => sum + value, 0) / Math.max(encounterDurationSec, 1)) }}/s avg</span>
+                  <span class="bp-mini-pill">{{ timelineSpikeMarkers.length }} notable spikes</span>
                 </div>
               </div>
+            </section>
 
-              <!-- Expanded details -->
-              <div v-if="castSelectedAbility === ab.name" class="cast-row-details">
-                <div class="cast-detail-stats">
-                  <div class="cast-stat">
-                    <span class="cast-stat-label">Avg Interval</span>
-                    <span class="cast-stat-value">{{ ab.avgInterval }}s</span>
-                  </div>
-                  <div class="cast-stat" v-if="ab.topTargets.length > 0">
-                    <span class="cast-stat-label">Top Targets</span>
-                    <div class="cast-target-chips">
-                      <span v-for="t in ab.topTargets" :key="t[0]" class="cast-target-chip">
-                        {{ t[0] }} ({{ t[1] }})
-                      </span>
-                    </div>
-                  </div>
-                </div>
+            <section class="bp-panel">
+              <div class="bp-panel-title">Notable Events</div>
+              <div v-if="overviewNotableEvents.length === 0" class="bp-empty-panel">No deaths or raise windows yet.</div>
+              <button
+                v-for="item in overviewNotableEvents"
+                :key="item.key"
+                class="bp-event-item"
+                @click="selectActor(item.death.targetName); selectedDeathIndex = sortedDeaths.findIndex(d => d === item.death); activeView = 'deaths'"
+              >
+                <span class="bp-event-name" :style="nameStyle(item.death.targetName)">{{ item.label }}</span>
+                <span class="bp-event-detail">{{ item.detail }}</span>
+              </button>
+            </section>
+          </div>
+        </main>
+
+        <aside class="bp-inspector">
+          <div class="bp-inspector-title">Overview Inspector</div>
+          <div class="bp-inspector-block">
+            <div class="bp-kv"><span>Player</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected || 'None' }}</strong></div>
+            <div class="bp-kv"><span>Biggest Done</span><strong>{{ selectedDoneAbility?.abilityName ?? '—' }}</strong></div>
+            <div class="bp-kv"><span>Biggest Taken</span><strong>{{ selectedTakenAbility?.abilityName ?? '—' }}</strong></div>
+            <div class="bp-kv"><span>Deaths</span><strong>{{ selectedActorDeaths.length }}</strong></div>
+            <div class="bp-kv"><span>Casts</span><strong>{{ selectedActorCastCount }}</strong></div>
+          </div>
+          <div class="bp-inspector-block">
+            <div class="bp-section-heading">Why this matters</div>
+            <p class="bp-inspector-copy">This landing page is tuned for fast triage: top output, top intake, a quick metric read, and the notable moments that should drive deeper review.</p>
+          </div>
+        </aside>
+      </div>
+    </template>
+
+    <template v-else-if="activeView === 'done'">
+      <div class="bp-workspace">
+        <aside class="bp-rail">
+          <div class="bp-rail-title">Party Rail</div>
+          <template v-for="group in combatantGroups" :key="group.label">
+            <div class="bp-group-header" @click="toggleGroup(group.label)">
+              <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
+              <span class="bp-group-label">{{ group.label }}</span>
+            </div>
+            <template v-if="!groupCollapsed.has(group.label)">
+              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: resolvedSelected === name }" @click="selectActor(name)">
+                <div class="bp-rail-fill" :style="{ width: selectorFillWidth(name) }" />
+                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
+                <span class="bp-rail-meta">{{ selectorBadgeFor(name) }}</span>
+              </button>
+            </template>
+          </template>
+        </aside>
+
+        <main class="bp-main">
+          <div class="bp-panel-toolbar">
+            <div class="bp-panel-title">Outgoing Breakdown</div>
+            <div class="bp-toolbar-group">
+              <button class="bp-mode-btn" :class="{ active: doneDimension === 'ability' }" @click="doneDimension = 'ability'">Ability</button>
+              <button class="bp-mode-btn" :class="{ active: doneDimension === 'targets' }" @click="doneDimension = 'targets'">Targets</button>
+              <button class="bp-mode-btn" :class="{ active: doneDimension === 'sources' }" @click="doneDimension = 'sources'">Sources</button>
+            </div>
+          </div>
+          <div v-if="doneDimension !== 'ability'" class="bp-empty-panel">Target and source pivots are reserved for the shared event stream layer. The ability view is live now and keeps the selected ability pinned across views.</div>
+          <div v-else-if="abilities.length === 0" class="bp-waiting">No outgoing ability data for this pull.</div>
+          <div v-else class="bp-scroll">
+            <table class="bp-table">
+              <thead><tr>
+                <th class="col-name">Ability</th>
+                <th class="col-num">Total</th>
+                <th class="col-pct">%</th>
+                <th class="col-num">Rate</th>
+                <th class="col-num">Hits/Casts</th>
+                <th class="col-num">Avg</th>
+                <th class="col-num">Max</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="row in abilities" :key="row.abilityId" :class="{ 'bp-row-active': selectedDoneAbility?.abilityName === row.abilityName }" @click="selectAbility(row.abilityName)">
+                  <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname">{{ row.abilityName }}</span></td>
+                  <td class="col-num">{{ f(row.totalDamage) }}</td>
+                  <td class="col-pct">{{ row.pct }}%</td>
+                  <td class="col-num">{{ encounterDurationSec > 0 ? f(row.dps) : '—' }}</td>
+                  <td class="col-num">{{ row.hits }}</td>
+                  <td class="col-num">{{ f(row.avg) }}</td>
+                  <td class="col-num">{{ f(row.maxHit) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </main>
+
+        <aside class="bp-inspector">
+          <div class="bp-inspector-title">Ability Inspector</div>
+          <div v-if="!selectedDoneAbility" class="bp-empty-panel">Select an ability to inspect it.</div>
+          <template v-else>
+            <div class="bp-inspector-block">
+              <div class="bp-kv"><span>Ability</span><strong>{{ selectedDoneAbility.abilityName }}</strong></div>
+              <div class="bp-kv"><span>Total</span><strong>{{ f(selectedDoneAbility.totalDamage) }}</strong></div>
+              <div class="bp-kv"><span>Share</span><strong>{{ selectedDoneAbility.pct }}%</strong></div>
+              <div class="bp-kv"><span>Rate</span><strong>{{ encounterDurationSec > 0 ? f(selectedDoneAbility.dps) : '—' }}</strong></div>
+              <div class="bp-kv"><span>Hits</span><strong>{{ selectedDoneAbility.hits }}</strong></div>
+              <div class="bp-kv"><span>Range</span><strong>{{ f(selectedDoneAbility.minHit) }} → {{ f(selectedDoneAbility.maxHit) }}</strong></div>
+            </div>
+          </template>
+        </aside>
+      </div>
+    </template>
+
+    <template v-else-if="activeView === 'taken'">
+      <div class="bp-workspace">
+        <aside class="bp-rail">
+          <div class="bp-rail-title">Target Rail</div>
+          <template v-for="group in combatantGroups" :key="group.label">
+            <div class="bp-group-header" @click="toggleGroup(group.label)">
+              <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
+              <span class="bp-group-label">{{ group.label }}</span>
+            </div>
+            <template v-if="!groupCollapsed.has(group.label)">
+              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: resolvedSelected === name }" @click="selectActor(name)">
+                <div class="bp-rail-fill bp-rail-fill--taken" :style="{ width: selectorFillWidth(name) }" />
+                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
+                <span class="bp-rail-meta">{{ f(totalTakenFor(name)) }}</span>
+              </button>
+            </template>
+          </template>
+        </aside>
+
+        <main class="bp-main">
+          <div class="bp-panel-toolbar">
+            <div class="bp-panel-title">Incoming Breakdown</div>
+            <div class="bp-toolbar-group">
+              <button class="bp-mode-btn" :class="{ active: takenMode === 'damage' }" @click="takenMode = 'damage'">Damage Taken</button>
+              <button class="bp-mode-btn" :class="{ active: takenMode === 'healing' }" @click="takenMode = 'healing'">Healing Received</button>
+            </div>
+          </div>
+          <div v-if="takenMode === 'healing'" class="bp-empty-panel">Healing-received needs the same unified event stream as the Events tab. Damage Taken is ready now and already correlates against death recaps.</div>
+          <div v-else-if="takenAbilities.length === 0" class="bp-waiting">No incoming damage data for this pull.</div>
+          <div v-else class="bp-scroll">
+            <table class="bp-table">
+              <thead><tr>
+                <th class="col-name">Source Ability</th>
+                <th class="col-num">Total</th>
+                <th class="col-pct">%</th>
+                <th class="col-num">Hits</th>
+                <th class="col-num">Avg</th>
+                <th class="col-num">Max</th>
+                <th class="col-num">Near Deaths</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="row in takenAbilities" :key="row.abilityId" :class="{ 'bp-row-active': selectedTakenAbility?.abilityName === row.abilityName }" @click="selectAbility(row.abilityName)">
+                  <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname">{{ row.abilityName }}</span></td>
+                  <td class="col-num">{{ f(row.totalDamage) }}</td>
+                  <td class="col-pct">{{ row.pct }}%</td>
+                  <td class="col-num">{{ row.hits }}</td>
+                  <td class="col-num">{{ f(row.avg) }}</td>
+                  <td class="col-num">{{ f(row.maxHit) }}</td>
+                  <td class="col-num">{{ selectedActorDeathAbilitySet.has(row.abilityName) ? 'Yes' : '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </main>
+
+        <aside class="bp-inspector">
+          <div class="bp-inspector-title">Taken Inspector</div>
+          <div v-if="!selectedTakenAbility" class="bp-empty-panel">Select an incoming ability to inspect it.</div>
+          <template v-else>
+            <div class="bp-inspector-block">
+              <div class="bp-kv"><span>Ability</span><strong>{{ selectedTakenAbility.abilityName }}</strong></div>
+              <div class="bp-kv"><span>Total</span><strong>{{ f(selectedTakenAbility.totalDamage) }}</strong></div>
+              <div class="bp-kv"><span>Share</span><strong>{{ selectedTakenAbility.pct }}%</strong></div>
+              <div class="bp-kv"><span>Hits</span><strong>{{ selectedTakenAbility.hits }}</strong></div>
+              <div class="bp-kv"><span>Near Deaths</span><strong>{{ selectedActorDeathAbilitySet.has(selectedTakenAbility.abilityName) ? 'Correlated' : 'None tracked' }}</strong></div>
+            </div>
+          </template>
+        </aside>
+      </div>
+    </template>
+
+    <template v-else-if="activeView === 'timeline'">
+      <div class="bp-workspace">
+        <aside class="bp-rail">
+          <div class="bp-rail-title">Timeline Rail</div>
+          <div class="bp-metric-tabs">
+            <button class="bp-metric-tab" :class="{ active: chartMetric === 'dps' }"  @click="chartMetric = 'dps'">DPS</button>
+            <button class="bp-metric-tab" :class="{ active: chartMetric === 'hps' }"  @click="chartMetric = 'hps'">HPS</button>
+            <button class="bp-metric-tab" :class="{ active: chartMetric === 'dtps' }" @click="chartMetric = 'dtps'">DTPS</button>
+          </div>
+          <template v-for="group in combatantGroups" :key="group.label">
+            <div class="bp-group-header" @click="toggleGroup(group.label)">
+              <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
+              <span class="bp-group-label">{{ group.label }}</span>
+            </div>
+            <template v-if="!groupCollapsed.has(group.label)">
+              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: resolvedSelected === name }" @click="selectActor(name)">
+                <div class="bp-rail-fill bp-rail-fill--timeline" :style="{ width: selectorFillWidth(name) }" />
+                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
+                <span class="bp-rail-meta">{{ selectorBadgeFor(name) }}</span>
+              </button>
+            </template>
+          </template>
+        </aside>
+
+        <main class="bp-main">
+          <div v-if="!chartLines" class="bp-waiting">No {{ metricLabel }} data for this encounter.</div>
+          <div v-else ref="chartAreaRef" class="bp-chart-area">
+            <svg ref="svgRef" class="bp-chart-svg"
+              :viewBox="`0 0 ${SVG_W} ${SVG_H}`"
+              preserveAspectRatio="xMidYMid meet"
+              @mousemove="onSvgMouseMove"
+              @mouseleave="hoverVisible = false">
+              <g v-for="tick in chartLines.yTicks" :key="tick.y">
+                <line :x1="PL" :y1="tick.y" :x2="PL + CW" :y2="tick.y" stroke="rgba(255,255,255,0.06)" stroke-width="1" />
+                <text :x="PL - 5" :y="tick.y + 4" text-anchor="end" class="axis-label">{{ tick.label }}</text>
+              </g>
+              <g v-for="tick in chartLines.xTicks" :key="tick.x">
+                <line :x1="tick.x" :y1="PT" :x2="tick.x" :y2="PT + CH" stroke="rgba(255,255,255,0.04)" stroke-width="1" />
+                <text :x="tick.x" :y="PT + CH + 14" text-anchor="middle" class="axis-label">{{ tick.label }}</text>
+              </g>
+              <rect :x="PL" :y="PT" :width="CW" :height="CH" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1" />
+
+              <polyline
+                v-for="s in chartLines.series"
+                v-show="!hiddenSeries.has(s.name)"
+                :key="s.name"
+                :points="chartLines.points(s.values)"
+                fill="none"
+                :stroke="s.color"
+                :stroke-width="1.5"
+                :stroke-dasharray="s.isGroup ? '5,3' : undefined"
+                stroke-linejoin="round"
+                stroke-linecap="round"
+                :opacity="s.isGroup ? 0.5 : 0.95"
+              />
+
+              <line v-show="hoverVisible && hoverBucket >= 0"
+                :x1="hoverLineX" :y1="PT" :x2="hoverLineX" :y2="PT + CH"
+                stroke="rgba(255,255,255,0.3)" stroke-width="1" stroke-dasharray="3,3" />
+
+              <circle
+                v-for="s in chartLines.series.filter(s => !s.isGroup && !hiddenSeries.has(s.name))"
+                v-show="hoverVisible && hoverBucket >= 0"
+                :key="`dot-${s.name}`"
+                :cx="hoverLineX"
+                :cy="PT + CH - Math.min((s.values[hoverBucket] ?? 0) / chartLines.maxDps, 1) * CH"
+                r="3" :fill="s.color" stroke="#0d0d10" stroke-width="1.5"
+              />
+
+              <line
+                v-if="timelineOverlays.has('deaths')"
+                v-for="time in timelineDeathMarkers"
+                :key="`death-marker-${time}`"
+                :x1="markerXForTime(time, chartLines.maxBuckets)"
+                :y1="PT"
+                :x2="markerXForTime(time, chartLines.maxBuckets)"
+                :y2="PT + CH"
+                stroke="rgba(255,70,70,0.55)"
+                stroke-width="1.5"
+              />
+
+              <line
+                v-if="timelineOverlays.has('raises')"
+                v-for="time in timelineRaiseMarkers"
+                :key="`raise-marker-${time}`"
+                :x1="markerXForTime(time, chartLines.maxBuckets)"
+                :y1="PT"
+                :x2="markerXForTime(time, chartLines.maxBuckets)"
+                :y2="PT + CH"
+                stroke="rgba(90,220,120,0.55)"
+                stroke-width="1.5"
+              />
+
+              <circle
+                v-if="timelineOverlays.has('casts')"
+                v-for="time in timelineCastMarkers"
+                :key="`cast-marker-${time}`"
+                :cx="markerXForTime(time, chartLines.maxBuckets)"
+                :cy="PT + CH + 6"
+                r="2"
+                fill="#74b9ff"
+              />
+
+              <rect
+                v-if="timelineOverlays.has('spikes')"
+                v-for="spike in timelineSpikeMarkers"
+                :key="`spike-${spike.index}`"
+                :x="markerXForTime(spike.index * TIMELINE_BUCKET_SEC, chartLines.maxBuckets) - 4"
+                :y="PT"
+                width="8"
+                :height="CH"
+                fill="rgba(255,210,80,0.08)"
+              />
+            </svg>
+
+            <div class="bp-tooltip" :style="tooltipStyle" v-if="hoverTooltip">
+              <div class="bp-tooltip-time">{{ hoverTooltip.timeLabel }}</div>
+              <div v-for="entry in hoverTooltip.entries" :key="entry.name" class="bp-tooltip-row">
+                <span class="bp-tooltip-dot" :style="{ background: entry.color }" />
+                <span class="bp-tooltip-name" :style="nameStyle(entry.name)">{{ entry.label }}</span>
+                <span class="bp-tooltip-val">{{ f(entry.value) }}</span>
+              </div>
+              <div v-if="hoverTooltip.entries.length > 1" class="bp-tooltip-group">
+                <span class="bp-tooltip-name">Group</span>
+                <span class="bp-tooltip-val">{{ f(hoverTooltip.groupVal) }}</span>
+              </div>
+            </div>
+
+            <div class="bp-chart-legend">
+              <div v-for="s in chartLines.series" :key="s.name" class="bp-legend-item" :class="{ hidden: hiddenSeries.has(s.name) }" @click="toggleSeries(s.name)">
+                <span class="bp-legend-dot"
+                  :style="{ background: s.isGroup ? 'transparent' : s.color, border: s.isGroup ? `1px dashed ${GROUP_COLOR}` : 'none' }" />
+                <span class="bp-legend-name" :style="s.isGroup ? undefined : nameStyle(s.name)">{{ s.isGroup ? 'Group' : tabLabel(s.name) }}</span>
               </div>
             </div>
           </div>
-        </template>
-      </template>
+        </main>
 
+        <aside class="bp-inspector">
+          <div class="bp-inspector-title">Timeline Inspector</div>
+          <div class="bp-inspector-block">
+            <div class="bp-kv"><span>Metric</span><strong>{{ metricLabel }}</strong></div>
+            <div class="bp-kv"><span>Hover Window</span><strong>{{ hoverTooltip?.timeLabel ?? '—' }}</strong></div>
+            <div class="bp-kv"><span>Deaths</span><strong>{{ timelineInspectorDeaths.length }}</strong></div>
+            <div class="bp-kv"><span>Casts</span><strong>{{ timelineInspectorCasts.length }}</strong></div>
+          </div>
+          <div class="bp-inspector-block">
+            <div class="bp-section-heading">Window Events</div>
+            <div v-if="timelineInspectorDeaths.length === 0 && timelineInspectorCasts.length === 0" class="bp-empty-panel">Hover the chart to correlate deaths, raises, and casts in the same time bucket.</div>
+            <div v-for="death in timelineInspectorDeaths" :key="`ins-death-${death.timestamp}`" class="bp-inspector-list-item">
+              <strong :style="nameStyle(death.targetName)">{{ death.targetName }}</strong>
+              <span>Death @ {{ fmtTime(death.timestamp) }}</span>
+            </div>
+            <div v-for="cast in timelineInspectorCasts" :key="`ins-cast-${cast.t}-${cast.abilityName}`" class="bp-inspector-list-item">
+              <strong>{{ cast.abilityName }}</strong>
+              <span>{{ cast.target ? `→ ${cast.target}` : 'cast' }}</span>
+            </div>
+          </div>
+        </aside>
+      </div>
     </template>
 
-    <!-- ── DEATHS ── -->
     <template v-else-if="activeView === 'deaths'">
       <div v-if="sortedDeaths.length === 0" class="bp-waiting">No deaths recorded this pull.</div>
-      <div v-else class="dl-root">
-
-        <!-- Left: death list -->
-        <div class="dl-list">
+      <div v-else class="bp-workspace">
+        <aside class="bp-rail bp-rail--deaths">
+          <div class="bp-rail-title">Death List</div>
           <div
             v-for="(death, i) in sortedDeaths" :key="i"
             class="dl-death-row"
             :class="{ active: selectedDeathIndex === i }"
-            @click="selectedDeathIndex = selectedDeathIndex === i ? null : i"
+            @click="selectedDeathIndex = selectedDeathIndex === i ? null : i; selectActor(death.targetName)"
           >
             <div class="dl-death-info">
               <span class="dl-death-name" :style="nameStyle(death?.targetName ?? '')">{{ death?.targetName ?? 'Unknown' }}</span>
               <span class="dl-death-time">{{ fmtTime(death?.timestamp ?? 0) }}</span>
             </div>
             <div class="dl-spark">
-              <svg viewBox="0 0 120 28" preserveAspectRatio="none"
-                width="120" height="28" class="bp-spark-svg">
+              <svg viewBox="0 0 120 28" preserveAspectRatio="none" width="120" height="28" class="bp-spark-svg">
                 <line x1="0" y1="28" x2="120" y2="28" stroke="rgba(255,255,255,0.07)" stroke-width="1" />
                 <line x1="0" y1="14" x2="120" y2="14" stroke="rgba(255,255,255,0.04)" stroke-width="1" />
-
                 <template v-for="(bar, bi) in deathHpBars(death)" :key="'b-' + bi">
-                  <rect
-                    :x="bar.x"
-                    :y="28 - (bar.hp * 28)"
-                    :width="bar.width - 1"
-                    :height="bar.hp * 28"
-                    :fill="bar.hp > 0.5 ? 'rgba(5,136,55,0.5)' : (bar.hp > 0.25 ? 'rgba(180,150,50,0.5)' : 'rgba(180,50,50,0.5)')"
-                    opacity="0.7"
-                  />
-                  <rect
-                    v-if="bar.eventType === 'heal' || bar.eventType === 'dmg'"
-                    :x="bar.x"
-                    :y="bar.eventType === 'heal' ? (28 - (bar.hp * 28) - (bar.change * 28)) : 0"
-                    :width="bar.width - 1"
-                    :height="Math.abs(bar.change * 28)"
-                    :fill="bar.eventType === 'heal' ? '#ffffff' : '#000000'"
-                    opacity="0.35"
-                  />
+                  <rect :x="bar.x" :y="28 - (bar.hpBefore * 28)" :width="bar.width - 1" :height="bar.hpBefore * 28" :fill="bar.hpBefore > 0.5 ? 'rgba(5,136,55,0.5)' : (bar.hpBefore > 0.25 ? 'rgba(180,150,50,0.5)' : 'rgba(180,50,50,0.5)')" opacity="0.7" />
+                  <rect v-if="bar.type === 'heal' || bar.type === 'dmg'" :x="bar.x" :y="bar.type === 'heal' ? (28 - (bar.hpAfter * 28)) : (28 - (bar.hpBefore * 28))" :width="bar.width - 1" :height="Math.abs((bar.hpAfter - bar.hpBefore) * 28)" :fill="bar.type === 'heal' ? '#ffffff' : '#000000'" opacity="0.35" />
+                  <rect v-if="bar.type === 'death'" :x="bar.x" y="0" :width="Math.max(1, bar.width - 1)" height="28" fill="rgba(255,0,0,0.18)" />
                 </template>
-
                 <line x1="120" y1="0" x2="120" y2="28" stroke="#ff0000" stroke-width="2" />
                 <text x="115" y="8" fill="#ff0000" font-size="6">X</text>
               </svg>
               <span v-if="!deathHpBars(death).length" class="bp-spark-none">no HP data</span>
             </div>
           </div>
-        </div>
+        </aside>
 
-        <!-- Right: hit log for selected death -->
-        <div class="dl-detail">
+        <main class="bp-main">
           <div v-if="!selectedDeath" class="dl-detail-empty">Select a death to review</div>
           <template v-else>
             <div class="dl-detail-header">
               <span class="dl-detail-name" :style="nameStyle(selectedDeath.targetName)">{{ selectedDeath.targetName }}</span>
               <span class="dl-detail-time">died @ {{ fmtTime(selectedDeath?.timestamp ?? 0) }}</span>
-              <span class="dl-detail-sub">last 35s</span>
+              <span class="dl-detail-sub">window {{ selectedDeathWindow ? `${fmtTime(selectedDeathWindow.start)} → ${fmtTime(selectedDeathWindow.end)}` : '—' }}</span>
             </div>
             <div v-if="deathHitLog.length === 0" class="dl-detail-empty">No hit data recorded.</div>
             <div v-else class="dl-hit-scroll">
@@ -1412,53 +1729,253 @@ onUnmounted(() => { channel?.close(); channel = null })
                   <th class="dl-col-type"></th>
                   <th class="dl-col-ability">Ability</th>
                   <th class="dl-col-source">Source</th>
-                  <th class="dl-col-hpbar">HP</th>
+                  <th class="dl-col-hpbefore">HP Before</th>
+                  <th class="dl-col-hpbar">Trend</th>
                   <th class="dl-col-amount">Amount</th>
                 </tr></thead>
                 <tbody>
                   <tr
                     v-for="(hit, hi) in deathHitLog" :key="hi"
-                    :class="[
-                      hit.effectiveType === 'heal' ? 'dl-row-heal' : 'dl-row-dmg',
-                      hit.abilityName === 'Death' ? 'dl-row-death' : ''
-                    ]"
-                    :style="hit.abilityName !== 'Death' ? hitRowStyle(hit) : {}"
+                    :class="[hit.type === 'heal' ? 'dl-row-heal' : 'dl-row-dmg', hit.isDeathBlow ? 'dl-row-death' : '', selectedAbility === hit.abilityName ? 'bp-row-active' : '']"
+                    :style="!hit.isDeathBlow ? hitRowStyle(hit) : {}"
+                    @click="selectAbility(hit.abilityName)"
                   >
                     <td class="dl-col-time">{{ fmtTime(hit?.t ?? 0) }}</td>
                     <td class="dl-col-type">
-                      <span v-if="hit.abilityName === 'Death'" class="dl-badge-death">X</span>
-                      <span v-else :class="hit.effectiveType === 'heal' ? 'dl-badge-heal' : 'dl-badge-dmg'">
-                        {{ hit.effectiveType === 'heal' ? 'H' : 'D' }}
-                      </span>
+                      <span v-if="hit.isDeathBlow" class="dl-badge-death">X</span>
+                      <span v-else :class="hit.type === 'heal' ? 'dl-badge-heal' : 'dl-badge-dmg'">{{ hit.type === 'heal' ? 'H' : 'D' }}</span>
                     </td>
                     <td class="dl-col-ability">{{ hit.abilityName }}</td>
                     <td class="dl-col-source">{{ hit.sourceName }}</td>
+                    <td class="dl-col-hpbefore">
+                      <span>{{ formatHpBefore(hit) }}</span>
+                      <span v-if="hit.isEstimated" class="dl-hp-estimate">est.</span>
+                    </td>
                     <td class="dl-col-hpbar">
                       <div class="dl-hpbar-container">
+                        <div class="dl-hpbar-bg" :style="`width: ${hit.hpBefore * 100}%`"></div>
                         <div
-                          class="dl-hpbar-bg"
-                          :style="`width: ${(hit.hp ?? 1) * 100}%`"
-                        ></div>
-                        <div
-                          v-if="hit.changePct && Math.abs(hit.changePct) > 0.001"
+                          v-if="Math.abs(hit.hpAfter - hit.hpBefore) > 0.001"
                           class="dl-hpbar-change"
-                          :class="hit.effectiveType === 'heal' ? 'dl-hpbar-heal' : 'dl-hpbar-dmg'"
-                          :style="hit.effectiveType === 'heal' 
-                            ? `left: ${((hit.hp ?? 0) - hit.changePct) * 100}%; width: ${hit.changePct * 100}%`
-                            : `width: ${Math.abs(hit.changePct) * 100}%`"
+                          :class="hit.type === 'heal' ? 'dl-hpbar-heal' : 'dl-hpbar-dmg'"
+                          :style="hit.type === 'heal' ? `left: ${hit.hpBefore * 100}%; width: ${(hit.hpAfter - hit.hpBefore) * 100}%` : `left: ${hit.hpAfter * 100}%; width: ${(hit.hpBefore - hit.hpAfter) * 100}%`"
                         ></div>
                       </div>
                     </td>
-                    <td class="dl-col-amount" :class="hit.effectiveType === 'heal' ? 'dl-amount-heal-bold' : (hit.abilityName === 'Death' ? 'dl-amount-death' : 'dl-amount-dmg-bold')">
-                      {{ hit.abilityName === 'Death' ? 'KO' : (hit.effectiveType === 'heal' ? '+' : '-') + f(hit.amount) }}
+                    <td class="dl-col-amount" :class="hit.type === 'heal' ? 'dl-amount-heal-bold' : (hit.isDeathBlow ? 'dl-amount-death' : 'dl-amount-dmg-bold')">
+                      {{ hit.isDeathBlow ? 'KO' : (hit.type === 'heal' ? '+' : '-') + f(hit.amount) }}
                     </td>
                   </tr>
                 </tbody>
               </table>
             </div>
           </template>
-        </div>
+        </main>
 
+        <aside class="bp-inspector">
+          <div class="bp-inspector-title">Death Inspector</div>
+          <div class="bp-toolbar-group bp-toolbar-group--full">
+            <button class="bp-mode-btn" :class="{ active: deathInspectorTab === 'recap' }" @click="deathInspectorTab = 'recap'">Recap</button>
+            <button class="bp-mode-btn" :class="{ active: deathInspectorTab === 'context' }" @click="deathInspectorTab = 'context'">Context</button>
+            <button class="bp-mode-btn" :class="{ active: deathInspectorTab === 'related' }" @click="deathInspectorTab = 'related'">Related Damage</button>
+          </div>
+          <div v-if="!selectedDeath" class="bp-empty-panel">Pick a death to inspect it.</div>
+          <template v-else-if="deathInspectorTab === 'recap'">
+            <div class="bp-inspector-block">
+              <div class="bp-kv"><span>Target</span><strong :style="nameStyle(selectedDeath.targetName)">{{ selectedDeath.targetName }}</strong></div>
+              <div class="bp-kv"><span>Time</span><strong>{{ fmtTime(selectedDeath.timestamp) }}</strong></div>
+              <div class="bp-kv"><span>Raised</span><strong>{{ selectedDeath.resurrectTime ? fmtTime(selectedDeath.resurrectTime) : 'No' }}</strong></div>
+              <div class="bp-kv"><span>Window Length</span><strong>{{ selectedDeathWindow ? fmtTime(selectedDeathWindow.end - selectedDeathWindow.start) : '—' }}</strong></div>
+              <div class="bp-kv"><span>Estimated</span><strong>{{ deathHitLog.some(hit => hit.isEstimated) ? 'Yes' : 'No' }}</strong></div>
+            </div>
+          </template>
+          <template v-else-if="deathInspectorTab === 'context'">
+            <div class="bp-inspector-block">
+              <div class="bp-section-heading">Nearby casts</div>
+              <div v-if="selectedActorCastEvents.filter(event => selectedDeathWindow && event.t >= selectedDeathWindow.start && event.t <= selectedDeathWindow.end).length === 0" class="bp-empty-panel">No casts for this player inside the selected death window.</div>
+              <div
+                v-for="cast in selectedActorCastEvents.filter(event => selectedDeathWindow && event.t >= selectedDeathWindow.start && event.t <= selectedDeathWindow.end).slice(0, 8)"
+                :key="`death-cast-${cast.t}-${cast.abilityName}`"
+                class="bp-inspector-list-item"
+              >
+                <strong>{{ cast.abilityName }}</strong>
+                <span>{{ fmtTime(cast.t) }}</span>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div class="bp-inspector-block">
+              <div class="bp-section-heading">Related damage</div>
+              <div v-if="selectedDeathRelatedDamage.length === 0" class="bp-empty-panel">No incoming damage rows were captured in this recap.</div>
+              <div v-for="row in selectedDeathRelatedDamage" :key="row.ability" class="bp-inspector-list-item">
+                <strong>{{ row.ability }}</strong>
+                <span>{{ f(row.amount) }}</span>
+              </div>
+            </div>
+          </template>
+        </aside>
+      </div>
+    </template>
+
+    <template v-else-if="activeView === 'casts'">
+      <div class="bp-workspace">
+        <aside class="bp-rail">
+          <div class="bp-rail-title">Cast Rail</div>
+          <template v-for="group in castGroups" :key="group.label">
+            <div class="bp-group-header" @click="toggleGroup(group.label)">
+              <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
+              <span class="bp-group-label">{{ group.label }}</span>
+            </div>
+            <template v-if="!groupCollapsed.has(group.label)">
+              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: castSelectedPlayer === name }" @click="selectActor(name)">
+                <div class="bp-rail-fill bp-rail-fill--casts" :style="{ width: selectorFillWidth(name) }" />
+                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
+                <span class="bp-rail-meta">{{ castCountFor(name) }} casts</span>
+              </button>
+            </template>
+          </template>
+        </aside>
+
+        <main class="bp-main">
+          <div v-if="!castPlayerData" class="bp-waiting">Select a party member to view casts.</div>
+          <template v-else>
+            <div v-if="castHoverData" class="cast-hover-tooltip" :style="{ left: castHoverData.x + 'px', top: castHoverData.y + 'px' }">
+              <div class="cast-tooltip-time">{{ fmtTime(castHoverData.time * 1000) }}</div>
+              <div class="cast-tooltip-ability">{{ castHoverData.ability }}</div>
+              <div class="cast-tooltip-target" v-if="castHoverData.target">→ {{ castHoverData.target }}</div>
+            </div>
+
+            <div class="cast-list-header">{{ castPlayerData.abilities.length }} abilities · {{ castPlayerData.events.length }} total casts</div>
+            <div class="cast-scroll">
+              <div v-for="ab in castPlayerData.abilities" :key="ab.name" class="cast-row" :class="{ expanded: castSelectedAbility === ab.name || selectedAbility === ab.name }">
+                <div class="cast-row-main" @click="castSelectedAbility = castSelectedAbility === ab.name ? null : ab.name; selectAbility(ab.name)">
+                  <div class="cast-ability-info">
+                    <span class="cast-ability-name">{{ ab.name }}</span>
+                    <span class="cast-ability-casts">{{ ab.casts }}</span>
+                  </div>
+                  <div class="cast-row-timeline" @mousemove="onCastTimelineHover($event, ab.name, castPlayerData?.events ?? [])" @mouseleave="castHoverData = null">
+                    <div class="cast-mini-bucket" v-for="(bucket, i) in getAbilityBuckets(ab.name)" :key="i">
+                      <div v-for="(c, j) in bucket.casts" :key="j" class="cast-mini-segment" :class="{ 'cast-bar-tick': c.type === 'tick' }" :style="{ left: (c.time / CAST_BUCKET_SEC * 100) + '%' }" />
+                    </div>
+                    <div v-if="castPlayerDeathTime !== null && castPlayerResTime !== null" class="cast-death-range" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%', width: ((castPlayerResTime - castPlayerDeathTime) / castTimelineDuration * 100) + '%' }" />
+                    <div v-if="castPlayerDeathTime !== null" class="cast-death-overlay" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%' }">
+                      <div class="cast-death-line"></div>
+                      <div class="cast-death-label">DIED</div>
+                    </div>
+                    <div v-if="castPlayerResTime !== null" class="cast-ress-overlay" :style="{ left: (castPlayerResTime / castTimelineDuration * 100) + '%' }">
+                      <div class="cast-ress-line"></div>
+                      <div class="cast-ress-label">RAISE</div>
+                    </div>
+                    <div class="cast-timeline-ticks">
+                      <span v-for="tick in castTimeTicks" :key="tick" class="cast-tick-mark" :style="{ left: (tick / castTimelineDuration * 100) + '%' }">{{ tick }}s</span>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="castSelectedAbility === ab.name" class="cast-row-details">
+                  <div class="cast-detail-stats">
+                    <div class="cast-stat">
+                      <span class="cast-stat-label">Avg Interval</span>
+                      <span class="cast-stat-value">{{ ab.avgInterval }}s</span>
+                    </div>
+                    <div class="cast-stat" v-if="ab.topTargets.length > 0">
+                      <span class="cast-stat-label">Top Targets</span>
+                      <div class="cast-target-chips">
+                        <span v-for="t in ab.topTargets" :key="t[0]" class="cast-target-chip">{{ t[0] }} ({{ t[1] }})</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+        </main>
+
+        <aside class="bp-inspector">
+          <div class="bp-inspector-title">Cast Inspector</div>
+          <div v-if="!selectedCastAbility" class="bp-empty-panel">Select an ability to inspect its cadence and targets.</div>
+          <template v-else>
+            <div class="bp-inspector-block">
+              <div class="bp-kv"><span>Ability</span><strong>{{ selectedCastAbility.name }}</strong></div>
+              <div class="bp-kv"><span>Casts</span><strong>{{ selectedCastAbility.casts }}</strong></div>
+              <div class="bp-kv"><span>Avg Interval</span><strong>{{ selectedCastAbility.avgInterval }}s</strong></div>
+              <div class="bp-kv"><span>Top Targets</span><strong>{{ selectedCastAbility.topTargets.length }}</strong></div>
+            </div>
+          </template>
+        </aside>
+      </div>
+    </template>
+
+    <template v-else-if="activeView === 'events'">
+      <div class="bp-workspace">
+        <aside class="bp-rail">
+          <div class="bp-rail-title">Event Rail</div>
+          <template v-for="group in combatantGroups" :key="group.label">
+            <div class="bp-group-header" @click="toggleGroup(group.label)">
+              <span class="bp-group-toggle">{{ groupCollapsed.has(group.label) ? '▶' : '▼' }}</span>
+              <span class="bp-group-label">{{ group.label }}</span>
+            </div>
+            <template v-if="!groupCollapsed.has(group.label)">
+              <button v-for="name in group.names" :key="name" class="bp-rail-item" :class="{ active: resolvedSelected === name }" @click="selectActor(name)">
+                <div class="bp-rail-fill bp-rail-fill--events" :style="{ width: selectorFillWidth(name) }" />
+                <span class="bp-rail-name" :style="nameStyle(name)">{{ tabLabel(name) }}</span>
+                <span class="bp-rail-meta">{{ eventRowsRaw.filter(row => row.actor === name).length }} rows</span>
+              </button>
+            </template>
+          </template>
+        </aside>
+
+        <main class="bp-main">
+          <div class="bp-panel-toolbar">
+            <div class="bp-panel-title">Unified Events</div>
+            <div class="bp-toolbar-group">
+              <button v-for="filter in ['damage', 'healing', 'casts', 'deaths', 'raises']" :key="filter" class="bp-mode-btn" :class="{ active: eventFilters.has(filter as EventFilter) }" @click="toggleEventFilter(filter as EventFilter)">{{ filter }}</button>
+            </div>
+          </div>
+          <div v-if="eventRows.length === 0" class="bp-waiting">No event rows match the current filters. This v1 view combines casts and death-recap events until the full shared event stream lands.</div>
+          <div v-else class="bp-scroll">
+            <table class="bp-table">
+              <thead><tr>
+                <th class="col-num">Time</th>
+                <th class="col-name">Actor</th>
+                <th class="col-name">Event Type</th>
+                <th class="col-name">Ability</th>
+                <th class="col-name">Source</th>
+                <th class="col-name">Target</th>
+                <th class="col-num">Amount</th>
+                <th class="col-name">HP Before</th>
+                <th class="col-name">HP After</th>
+                <th class="col-name">Notes</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="row in eventRows" :key="row.key" :class="{ 'bp-row-active': selectedAbility === row.ability }" @click="selectAbility(row.ability)">
+                  <td class="col-num">{{ fmtTime(row.t) }}</td>
+                  <td class="col-name"><span class="aname" :style="nameStyle(row.actor)">{{ row.actor }}</span></td>
+                  <td class="col-name">{{ row.eventType }}</td>
+                  <td class="col-name">{{ row.ability }}</td>
+                  <td class="col-name">{{ row.source || '—' }}</td>
+                  <td class="col-name">{{ row.target || '—' }}</td>
+                  <td class="col-num">{{ row.amount === null ? '—' : f(row.amount) }}</td>
+                  <td class="col-name">{{ row.hpBefore }}</td>
+                  <td class="col-name">{{ row.hpAfter }}</td>
+                  <td class="col-name">{{ row.note }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </main>
+
+        <aside class="bp-inspector">
+          <div class="bp-inspector-title">Event Inspector</div>
+          <div class="bp-inspector-block">
+            <div class="bp-kv"><span>Rows</span><strong>{{ eventRows.length }}</strong></div>
+            <div class="bp-kv"><span>Selected Ability</span><strong>{{ selectedAbility || 'None' }}</strong></div>
+            <div class="bp-kv"><span>Window</span><strong>{{ eventWindowOnly && selectedDeathWindow ? 'Selected death' : 'Whole pull' }}</strong></div>
+          </div>
+          <div class="bp-inspector-block">
+            <div class="bp-section-heading">Scope</div>
+            <p class="bp-inspector-copy">This first pass merges cast rows, death recap rows, and raise detection into one table so we can keep cross-view continuity today while the shared event stream grows underneath it.</p>
+          </div>
+        </aside>
       </div>
     </template>
 
@@ -1863,7 +2380,9 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 .dl-col-type    { width: 20px; }
 .dl-col-ability { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
 .dl-col-source  { max-width: 100px; overflow: hidden; text-overflow: ellipsis; color: rgba(255,255,255,0.45) !important; }
+.dl-col-hpbefore { width: 138px; color: rgba(255,255,255,0.72) !important; white-space: nowrap; }
 .dl-col-hpbar   { width: 80px; padding: 0 4px !important; }
+.dl-hp-estimate { margin-left: 6px; font-size: 9px; color: rgba(255,215,128,0.85); text-transform: uppercase; letter-spacing: 0.04em; }
 
 .dl-hpbar-container { height: 12px; background: rgba(255,255,255,0.1); border-radius: 2px; position: relative; overflow: hidden; }
 .dl-hpbar-bg { position: absolute; left: 0; top: 0; height: 100%; background: rgba(100,200,100,0.25); border-radius: 2px; }
@@ -2079,5 +2598,361 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   background: rgba(255,255,255,0.08);
   border-radius: 3px;
   color: rgba(255,255,255,0.6);
+}
+
+.bp-analysis-header {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+}
+.bp-analysis-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bp-analysis-kicker {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(255,255,255,0.35);
+}
+.bp-analysis-title {
+  font-size: 18px;
+  color: rgba(255,255,255,0.92);
+  font-weight: 600;
+}
+.bp-analysis-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(90px, 1fr));
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.bp-analysis-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 6px;
+  min-width: 0;
+}
+.bp-analysis-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255,255,255,0.35);
+}
+.bp-analysis-value {
+  font-size: 11px;
+  color: rgba(255,255,255,0.82);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bp-filter-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.015);
+}
+.bp-filter-groups,
+.bp-chip-row,
+.bp-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.bp-filter-btn,
+.bp-chip {
+  font-size: 10px;
+  border-radius: 999px;
+  padding: 4px 9px;
+  letter-spacing: 0.04em;
+}
+.bp-filter-btn {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.45);
+  cursor: pointer;
+}
+.bp-filter-btn.active {
+  color: #b9e0ff;
+  border-color: rgba(116,185,255,0.35);
+  background: rgba(116,185,255,0.14);
+}
+.bp-chip {
+  background: rgba(255,210,80,0.08);
+  border: 1px solid rgba(255,210,80,0.18);
+  color: rgba(255,220,140,0.82);
+}
+.bp-workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 280px;
+  overflow: hidden;
+}
+.bp-rail,
+.bp-inspector {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: rgba(255,255,255,0.02);
+}
+.bp-rail {
+  border-right: 1px solid rgba(255,255,255,0.07);
+}
+.bp-inspector {
+  border-left: 1px solid rgba(255,255,255,0.07);
+}
+.bp-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.bp-rail-title,
+.bp-inspector-title,
+.bp-panel-title,
+.bp-section-heading {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.bp-rail-title,
+.bp-inspector-title {
+  padding: 10px 12px 8px;
+  color: rgba(255,255,255,0.35);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.bp-rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.bp-rail-item:hover { background: rgba(255,255,255,0.04); }
+.bp-rail-item.active { background: rgba(255,210,80,0.08); }
+.bp-rail-fill {
+  position: absolute;
+  inset: 0;
+  right: auto;
+  min-width: 2px;
+  background: rgba(116,185,255,0.12);
+  pointer-events: none;
+}
+.bp-rail-fill--taken { background: rgba(220,70,70,0.14); }
+.bp-rail-fill--timeline { background: rgba(255,210,80,0.12); }
+.bp-rail-fill--casts { background: rgba(162,155,254,0.14); }
+.bp-rail-fill--events { background: rgba(0,230,118,0.12); }
+.bp-rail-name,
+.bp-rail-meta {
+  position: relative;
+  z-index: 1;
+}
+.bp-rail-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255,255,255,0.82);
+}
+.bp-rail-meta {
+  font-size: 10px;
+  color: rgba(255,255,255,0.42);
+  white-space: nowrap;
+}
+.bp-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.bp-card {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bp-card--done { box-shadow: inset 0 0 0 1px rgba(116,185,255,0.08); }
+.bp-card--taken { box-shadow: inset 0 0 0 1px rgba(220,70,70,0.08); }
+.bp-card--deaths { box-shadow: inset 0 0 0 1px rgba(255,80,80,0.08); }
+.bp-card--casts { box-shadow: inset 0 0 0 1px rgba(162,155,254,0.08); }
+.bp-card-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255,255,255,0.4);
+}
+.bp-card-value {
+  font-size: 22px;
+  color: rgba(255,255,255,0.92);
+  font-weight: 600;
+}
+.bp-card-detail {
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+}
+.bp-overview-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  overflow: auto;
+}
+.bp-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+}
+.bp-panel-title {
+  padding: 10px 12px;
+  color: rgba(255,255,255,0.38);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.bp-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.bp-empty-panel,
+.bp-inspector-copy {
+  padding: 12px;
+  color: rgba(255,255,255,0.45);
+  line-height: 1.4;
+}
+.bp-mini-chart-shell {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bp-mini-chart-label {
+  color: rgba(255,255,255,0.5);
+  line-height: 1.4;
+}
+.bp-mini-chart-values {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.bp-mini-pill {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.68);
+}
+.bp-event-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.bp-event-item:hover { background: rgba(255,255,255,0.03); }
+.bp-event-name { color: rgba(255,255,255,0.82); }
+.bp-event-detail { color: rgba(255,255,255,0.48); font-size: 10px; }
+.bp-inspector-block {
+  padding: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bp-kv {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.bp-kv span {
+  color: rgba(255,255,255,0.42);
+}
+.bp-kv strong {
+  color: rgba(255,255,255,0.88);
+  text-align: right;
+}
+.bp-inspector-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+.bp-inspector-list-item:first-of-type { border-top: none; }
+.bp-row-active { background: rgba(255,210,80,0.08) !important; }
+.bp-toolbar-group--full {
+  padding: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+@media (max-width: 1180px) {
+  .bp-workspace {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .bp-inspector {
+    display: none;
+  }
+  .bp-analysis-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 820px) {
+  .bp-analysis-header,
+  .bp-filter-strip {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .bp-card-grid,
+  .bp-overview-grid,
+  .bp-workspace {
+    grid-template-columns: 1fr;
+  }
+  .bp-rail {
+    max-height: 220px;
+  }
 }
 </style>

@@ -489,8 +489,10 @@ export type DpsTimeline = Record<string, number[]>
 export const TIMELINE_BUCKET_SEC = 3
 
 export interface HpSample {
-  t: number  // ms since pull start
-  hp: number // 0–1 fraction
+  t: number        // ms since pull start
+  currentHp: number
+  maxHp: number
+  hp: number       // 0–1 fraction
 }
 
 export interface HitRecord {
@@ -499,6 +501,24 @@ export interface HitRecord {
   abilityName: string
   sourceName: string
   amount: number
+  currentHp?: number
+  maxHp?: number
+  hp?: number
+}
+
+export interface DeathEvent {
+  t: number
+  type: 'dmg' | 'heal' | 'death'
+  abilityName: string
+  sourceName: string
+  amount: number
+  hpBefore: number
+  hpAfter: number
+  hpBeforeRaw: number
+  hpAfterRaw: number
+  maxHp: number
+  isDeathBlow: boolean
+  isEstimated?: boolean
 }
 
 export interface CastEvent {
@@ -516,6 +536,7 @@ export interface DeathRecord {
   timestamp: number  // ms since pull start
   hpSamples: HpSample[]
   lastHits?: HitRecord[]  // damage/heals on this target in the 30s before death
+  events?: DeathEvent[]
   resurrectTime?: number  // ms since pull start, when raised (if applicable)
 }
 

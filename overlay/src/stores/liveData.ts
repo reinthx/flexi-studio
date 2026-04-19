@@ -42,6 +42,7 @@ import type {
 } from '@shared'
 import { TIMELINE_BUCKET_SEC } from '@shared'
 import { formatValue } from '@shared'
+import { buildDeathEvents } from '@shared/deathRecap'
 import { normalizeJob } from '@shared/jobMap'
 import { useOverlayConfig } from './overlayConfig'
 
@@ -449,10 +450,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const lastT = lastHpSampleTime.get(name) ?? 0
     if (t - lastT < 1000) return
     lastHpSampleTime.set(name, t)
-    const hp = Math.max(0, Math.min(1, currentHp / maxHp))
+    const safeCurrentHp = Math.max(0, Math.min(currentHp, maxHp))
+    const hp = Math.max(0, Math.min(1, safeCurrentHp / maxHp))
     if (!hpSampleBuffer.has(name)) hpSampleBuffer.set(name, [])
     const samples = hpSampleBuffer.get(name)!
-    samples.push({ t, hp })
+    samples.push({ t, currentHp: safeCurrentHp, maxHp, hp })
     if (samples.length > 200) samples.splice(0, samples.length - 200)
   }
 
@@ -463,12 +465,27 @@ export const useLiveDataStore = defineStore('liveData', () => {
     abilityName: string,
     sourceName: string,
     amount: number,
+    currentHp?: number,
+    maxHp?: number,
   ): void {
     if (!targetName || amount === 0) return
     const t = pullStartTime > 0 ? Date.now() - pullStartTime : 0
     if (!hitEventBuffer.has(targetName)) hitEventBuffer.set(targetName, [])
     const buf = hitEventBuffer.get(targetName)!
-    buf.push({ t, type, abilityName, sourceName, amount })
+    const safeMaxHp = Number.isFinite(maxHp) && (maxHp ?? 0) > 0 ? maxHp : undefined
+    const safeCurrentHp = safeMaxHp !== undefined && Number.isFinite(currentHp)
+      ? Math.max(0, Math.min(currentHp ?? 0, safeMaxHp))
+      : undefined
+    buf.push({
+      t,
+      type,
+      abilityName,
+      sourceName,
+      amount,
+      currentHp: safeCurrentHp,
+      maxHp: safeMaxHp,
+      hp: safeCurrentHp !== undefined && safeMaxHp !== undefined ? Math.max(0, Math.min(1, safeCurrentHp / safeMaxHp)) : undefined,
+    })
     if (buf.length > 800) buf.splice(0, buf.length - 800)
   }
 
@@ -538,7 +555,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         if (targetName) {
           recordDamageTaken(targetName, abilityId, abilityName, damage)
           recordTimelineBucket(currentDtakenTimeline.value, targetName, damage)
-          recordHitEvent(targetName, 'dmg', abilityName, effectiveName, damage)
+          recordHitEvent(targetName, 'dmg', abilityName, effectiveName, damage, tgtCurrentHp, tgtMaxHp)
         }
         scheduleBroadcast()
       } else if (flagByte === 0x04) {
@@ -547,7 +564,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         if (heal === 0 || !effectiveName) return
         recordTimelineBucket(currentHealTimeline.value, effectiveName, heal)
         recordCastEvent(effectiveName, abilityId, abilityName, targetName, 'instant')
-        if (targetName) recordHitEvent(targetName, 'heal', abilityName, effectiveName, heal)
+        if (targetName) recordHitEvent(targetName, 'heal', abilityName, effectiveName, heal, tgtCurrentHp, tgtMaxHp)
         scheduleBroadcast()
       }
 
@@ -580,7 +597,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         if (targetName) {
           recordDamageTaken(targetName, `dot:${effectId}`, `DoT (${effectId})`, damage)
           recordTimelineBucket(currentDtakenTimeline.value, targetName, damage)
-          recordHitEvent(targetName, 'dmg', `DoT (${effectId})`, sourceName, damage)
+          recordHitEvent(targetName, 'dmg', `DoT (${effectId})`, sourceName, damage, tgtCurrentHp, tgtMaxHp)
         }
         scheduleBroadcast()
       } else if (dotType === 'HoT') {
@@ -589,7 +606,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         if (heal === 0) return
         recordTimelineBucket(currentHealTimeline.value, sourceName, heal)
         recordCastEvent(sourceName, `dot:${effectId}`, `HoT (${effectId})`, targetName, 'tick')
-        if (targetName) recordHitEvent(targetName, 'heal', `HoT (${effectId})`, sourceName, heal)
+        if (targetName) recordHitEvent(targetName, 'heal', `HoT (${effectId})`, sourceName, heal, tgtCurrentHp, tgtMaxHp)
         scheduleBroadcast()
       }
 
@@ -606,15 +623,17 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const samples  = hpSampleBuffer.get(targetName) ?? []
       const hitsBuf  = hitEventBuffer.get(targetName)  ?? []
       // Include the death event as the final hit
-      const deathHit = { t, type: 'dmg' as const, abilityName: 'Death', sourceName: '---', amount: 0 }
+      const deathHit = { t, type: 'dmg' as const, abilityName: 'Death', sourceName: '---', amount: 0, currentHp: 0, maxHp: samples[samples.length - 1]?.maxHp, hp: 0 }
       const allHits = [...hitsBuf.filter(h => h.t >= cutoff), deathHit]
+      const recentSamples = samples.filter(s => s.t >= cutoff)
       const deathIndex = currentDeaths.value.length
       currentDeaths.value.push({
         targetName,
         targetId,
         timestamp: t,
-        hpSamples: samples.filter(s => s.t >= cutoff),
+        hpSamples: recentSamples,
         lastHits: allHits,
+        events: buildDeathEvents(recentSamples, allHits, t),
       })
       // Track this death for later resurrection update
       pendingDeathUpdates.set(targetName, deathIndex)
@@ -629,9 +648,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
       if (!targetId || !targetName) return
       // Only track player resurrections
       if (!targetId.startsWith('10')) return
-      // Check if this is a resurrection effect (Raise, Angel Whisper, etc.)
-      const raiseEffects = ['Raise', 'Angel Whisper', 'Resurrection', 'Swiftcast', 'Life Ascension', 'Reraise III']
-      const isRaise = raiseEffects.some(e => effectName && effectName.toLowerCase().includes(e.toLowerCase()))
+      // Match known resurrection effects exactly so unrelated buffs don't count as raises.
+      const normalizedEffectName = effectName?.trim().toLowerCase()
+      const raiseEffects = new Set(['raise', 'angel whisper', 'resurrection', 'life ascension', 'reraise iii'])
+      const isRaise = normalizedEffectName ? raiseEffects.has(normalizedEffectName) : false
       if (isRaise) {
         const rTime = pullStartTime > 0 ? Date.now() - pullStartTime : 0
         resurrectTimes.value[targetName] = rTime
@@ -818,7 +838,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
           const hpsTimeline     = idx === null ? deepClone(currentHealTimeline.value)       : deepClone(pull?.hpsTimeline      ?? {})
           const dtakenTimeline  = idx === null ? deepClone(currentDtakenTimeline.value)     : deepClone(pull?.dtakenTimeline   ?? {})
           const damageTakenData = idx === null ? deepClone(currentDtakenData.value)         : deepClone(pull?.damageTakenData  ?? {})
-          const deaths          = idx === null ? deepClone(currentDeaths.value)             : deepClone(pull?.deaths           ?? {})
+          const deaths          = idx === null ? deepClone(currentDeaths.value)             : deepClone(pull?.deaths           ?? [])
           const combatantIds    = idx === null ? deepClone(currentCombatantIds.value)       : deepClone(pull?.combatantIds     ?? {})
           const castData        = idx === null ? deepClone(currentCastData.value)           : deepClone(pull?.castData         ?? {})
           const partyDataHistorical = idx === null ? partyData.value : (pull?.partyData ?? [])
