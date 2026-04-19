@@ -172,6 +172,7 @@ function toggleHeaderPin() {
 .preview-meter {
   position: relative;
   height: 300px;
+  resize: both;
   overflow: hidden;
   min-width: 150px;
   border: 1px solid var(--border);

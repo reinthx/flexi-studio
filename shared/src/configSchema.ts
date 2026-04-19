@@ -569,6 +569,9 @@ export interface PullRecord {
   hpsTimeline?: DpsTimeline    // heals dealt per combatant over time
   dtakenTimeline?: DpsTimeline // damage received per combatant over time
   damageTakenData?: Record<string, CombatantAbilityData>  // target name → per-ability received damage
+  healingReceivedData?: Record<string, CombatantAbilityData> // target name → per-ability received healing
+  rdpsGiven?: Record<string, number> // combatant name -> DPS credited from that actor's raid buffs
+  rdpsTaken?: Record<string, number> // combatant name -> DPS removed from damage gained via others' buffs
   deaths?: DeathRecord[]
   combatantIds?: Record<string, string>  // combatant name → FFXIV object ID
   combatantJobs?: Record<string, string> // combatant name → normalized job abbreviation

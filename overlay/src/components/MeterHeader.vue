@@ -109,9 +109,9 @@ const isMergePets = computed(() => props.global?.mergePets ?? true)
         v-if="showSettings && onBreakdown"
         class="pill-btn"
         @click="onBreakdown"
-        title="Open Breakdown"
+        title="Open Pull Dashboard"
       >
-        Breakdown
+        Pulls
       </button>
       <button
         class="pill-btn pin-btn"

@@ -61,7 +61,7 @@ const containerStyle = computed(() => ({
   flexDirection: isHorizontal.value ? 'row' : 'column',
 }))
 
-function setCombatantFilter(filter: 'all' | 'party' | 'self') {
+function setCombatantFilter(filter: 'all' | 'alliance' | 'party' | 'self') {
   store.setCombatantFilter(filter)
 }
 
@@ -80,7 +80,24 @@ function toggleMergePets() {
 }
 
 const selectedCombatant = ref<string | null>(null)
+
+function openPullDashboard() {
+  localStorage.removeItem('flexi-breakdown-view')
+  const url = new URL(window.location.href)
+  url.hash = '/breakdown'
+  window.open(url.toString(), 'flexi-breakdown', 'width=1300,height=840,resizable=yes')
+  store.broadcastForCombatant(store.selfName ?? bars.value[0]?.name ?? '')
+  if (typeof BroadcastChannel !== 'undefined') {
+    const channel = new BroadcastChannel('flexi-breakdown')
+    setTimeout(() => {
+      channel.postMessage({ type: 'setView', view: 'overview' })
+      channel.close()
+    }, 100)
+  }
+}
+
 function openAbilityBreakdown(name?: string) {
+  localStorage.removeItem('flexi-breakdown-view')
   const initialName = name ?? store.selfName ?? bars.value[0]?.name ?? ''
   if (initialName) localStorage.setItem('flexi-breakdown-init', initialName)
   else localStorage.removeItem('flexi-breakdown-init')
@@ -209,7 +226,7 @@ onUnmounted(() => {
       :global="g"
       :show-settings="true"
       :on-settings="openEditor"
-      :on-breakdown="() => openAbilityBreakdown()"
+      :on-breakdown="openPullDashboard"
       :on-set-combatant-filter="setCombatantFilter"
       :on-toggle-blur-names="toggleBlurNames"
       :on-toggle-pin="togglePin"

@@ -1,7 +1,24 @@
 import type { CSSProperties } from 'vue'
 
-export interface PullEntry { index: number | null; encounterName: string; duration: string }
-export type BreakdownView = 'overview' | 'done' | 'taken' | 'timeline' | 'deaths' | 'casts' | 'events'
+export interface PullEntry {
+  index: number | null
+  encounterId?: string
+  encounterName: string
+  duration: string
+  pullNumber?: number
+  pullCount?: number
+  isFirstInEncounter?: boolean
+  dps?: number
+  rdps?: number
+  hps?: number
+  dtps?: number
+  deaths?: number
+  damageTaken?: number
+  bossPercent?: number
+  bossPercentLabel?: string
+}
+
+export type BreakdownView = 'overview' | 'pulls' | 'done' | 'taken' | 'timeline' | 'deaths' | 'casts' | 'events'
 export type TimelineOverlay = 'deaths' | 'raises' | 'casts' | 'spikes'
 export type EventFilter = 'damage' | 'healing' | 'casts' | 'deaths' | 'raises'
 export type EventActorScope = 'selected' | 'all'

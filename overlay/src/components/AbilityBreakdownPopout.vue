@@ -17,6 +17,9 @@ const allData             = ref<Record<string, CombatantAbilityData>>({})
 const dpsTimeline         = ref<DpsTimeline>({})
 const hpsTimeline         = ref<DpsTimeline>({})
 const dtakenTimeline      = ref<DpsTimeline>({})
+const rdpsByCombatant     = ref<Record<string, number>>({})
+const rdpsGiven           = ref<Record<string, number>>({})
+const rdpsTaken           = ref<Record<string, number>>({})
 const selfName            = ref('')
 const blurNames           = ref(false)
 const partyNames          = ref<string[]>([])
@@ -26,6 +29,7 @@ const activePull          = ref<number | null>(null)
 const encounterDurationSec = ref(0)
 const hiddenSeries        = ref<Set<string>>(new Set())
 const damageTakenData     = ref<Record<string, CombatantAbilityData>>({})
+const healingReceivedData = ref<Record<string, CombatantAbilityData>>({})
 const deaths              = ref<DeathRecord[]>([])
 const combatantIds        = ref<Record<string, string>>({})
 const combatantJobs       = ref<Record<string, string>>({})
@@ -54,6 +58,12 @@ const {
   toggleCastFilter,
   openTimelineAtBucket,
 } = useBreakdownViewState()
+
+const initialView = localStorage.getItem('flexi-breakdown-view')
+if (initialView === 'pulls') {
+  activeView.value = 'pulls'
+  localStorage.removeItem('flexi-breakdown-view')
+}
 
 // Cast timeline hover state
 const castHoverData = ref<{ time: number; ability: string; target: string; x: number; y: number } | null>(null)
@@ -253,6 +263,26 @@ const takenAbilities = computed(() =>
     }))
 )
 
+const healingRawData = computed(() => healingReceivedData.value[resolvedSelected.value] ?? {})
+
+const healingTotal = computed(() =>
+  Object.values(healingRawData.value).reduce((s, a) => s + a.totalDamage, 0)
+)
+
+const healingAbilities = computed(() =>
+  Object.values(healingRawData.value)
+    .sort((a, b) => b.totalDamage - a.totalDamage)
+    .map(a => ({
+      ...a,
+      pct:    healingTotal.value > 0 ? ((a.totalDamage / healingTotal.value) * 100).toFixed(1) : '0.0',
+      avg:    a.hits > 0 ? Math.round(a.totalDamage / a.hits) : 0,
+      dps:    encounterDurationSec.value > 0 ? Math.round(a.totalDamage / encounterDurationSec.value) : 0,
+      minHit: a.minHit === Infinity ? 0 : a.minHit,
+    }))
+)
+
+const incomingAbilities = computed(() => takenMode.value === 'healing' ? healingAbilities.value : takenAbilities.value)
+
 const activeTableRows  = computed(() => summaryMode.value === 'taken' ? takenAbilities.value  : abilities.value)
 const activeTableTotal = computed(() => summaryMode.value === 'taken' ? takenTotal.value      : playerTotal.value)
 
@@ -282,6 +312,16 @@ const selectedActorDeathAbilitySet = computed(() => {
   for (const death of selectedActorDeaths.value) {
     for (const event of deathEventsFor(death)) {
       if (event.type === 'dmg' && event.abilityName) set.add(event.abilityName)
+    }
+  }
+  return set
+})
+
+const selectedActorDeathHealingAbilitySet = computed(() => {
+  const set = new Set<string>()
+  for (const death of selectedActorDeaths.value) {
+    for (const event of deathEventsFor(death)) {
+      if (event.type === 'heal' && event.abilityName) set.add(event.abilityName)
     }
   }
   return set
@@ -328,8 +368,35 @@ function totalOutgoingFor(name: string): number {
   return Object.values(allData.value[name] ?? {}).reduce((sum, ability) => sum + ability.totalDamage, 0)
 }
 
+function rdpsFor(name: string): number {
+  return rdpsByCombatant.value[name] ?? (totalOutgoingFor(name) / Math.max(encounterDurationSec.value, 1))
+}
+
+function rdpsGivenFor(name: string): number {
+  return rdpsGiven.value[name] ?? 0
+}
+
+function rdpsTakenFor(name: string): number {
+  return rdpsTaken.value[name] ?? 0
+}
+
+function rdpsDeltaLabel(name: string): string {
+  const given = rdpsGivenFor(name)
+  const taken = rdpsTakenFor(name)
+  if (given === 0 && taken === 0) return 'no buff adj.'
+  return `+${f(given)} given / -${f(taken)} taken`
+}
+
 function totalTakenFor(name: string): number {
   return Object.values(damageTakenData.value[name] ?? {}).reduce((sum, ability) => sum + ability.totalDamage, 0)
+}
+
+function totalHealingReceivedFor(name: string): number {
+  return Object.values(healingReceivedData.value[name] ?? {}).reduce((sum, ability) => sum + ability.totalDamage, 0)
+}
+
+function totalIncomingFor(name: string): number {
+  return takenMode.value === 'healing' ? totalHealingReceivedFor(name) : totalTakenFor(name)
 }
 
 function deathCountFor(name: string): number {
@@ -341,10 +408,11 @@ function castCountFor(name: string): number {
 }
 
 function selectorValueFor(name: string): number {
-  if (activeView.value === 'taken') return totalTakenFor(name)
+  if (activeView.value === 'taken') return totalIncomingFor(name)
   if (activeView.value === 'deaths') return deathCountFor(name)
   if (activeView.value === 'casts') return castCountFor(name)
   if (activeView.value === 'timeline') {
+    if (chartMetric.value === 'rdps') return rdpsFor(name)
     const buckets = activeTimeline.value[name] ?? []
     return buckets.reduce((sum, value) => sum + value, 0)
   }
@@ -354,13 +422,14 @@ function selectorValueFor(name: string): number {
 function selectorBadgeFor(name: string): string {
   if (activeView.value === 'deaths') return `${deathCountFor(name)} deaths`
   if (activeView.value === 'casts') return `${castCountFor(name)} casts`
+  if (activeView.value === 'timeline' && chartMetric.value === 'rdps') return `${f(rdpsFor(name))} rDPS`
   if (activeView.value === 'timeline') return `${metricLabel.value}`
-  if (activeView.value === 'taken') return `${f(totalTakenFor(name))} in`
+  if (activeView.value === 'taken') return `${f(totalIncomingFor(name))} in`
   return `${f(totalOutgoingFor(name))} out`
 }
 
 function takenSelectorBadgeFor(name: string): string {
-  return f(totalTakenFor(name))
+  return f(totalIncomingFor(name))
 }
 
 function castSelectorBadgeFor(name: string): string {
@@ -854,7 +923,7 @@ watch(castTimelineRows, rows => {
 }, { immediate: true })
 
 function abilityIdForName(abilityName: string): string {
-  for (const source of [allData.value, damageTakenData.value]) {
+  for (const source of [allData.value, damageTakenData.value, healingReceivedData.value]) {
     for (const actorData of Object.values(source)) {
       for (const ability of Object.values(actorData)) {
         if (ability.abilityName === abilityName) return ability.abilityId
@@ -869,7 +938,7 @@ function abilityIdForName(abilityName: string): string {
 }
 
 function queueVisibleAbilityIcons(): void {
-  for (const row of [...abilities.value, ...takenAbilities.value]) {
+  for (const row of [...abilities.value, ...takenAbilities.value, ...healingAbilities.value]) {
     queueAbilityIcon(row.abilityId, row.abilityName)
   }
   for (const row of eventRows.value.slice(0, 80)) {
@@ -976,7 +1045,7 @@ const partyHighestHit = computed(() => {
 })
 
 const selectedTakenAbility = computed(() =>
-  takenAbilities.value.find(row => row.abilityName === selectedAbility.value) ?? takenAbilities.value[0] ?? null
+  incomingAbilities.value.find(row => row.abilityName === selectedAbility.value) ?? incomingAbilities.value[0] ?? null
 )
 
 const selectedCastAbility = computed(() =>
@@ -1108,12 +1177,24 @@ const CH = SVG_H - PT - PB
 const activeTimeline = computed<DpsTimeline>(() => {
   if (chartMetric.value === 'hps')  return hpsTimeline.value
   if (chartMetric.value === 'dtps') return dtakenTimeline.value
+  if (chartMetric.value === 'rdps') return rdpsTimeline.value
   return dpsTimeline.value
 })
 
 const metricLabel = computed(() =>
-  chartMetric.value === 'hps' ? 'HPS' : chartMetric.value === 'dtps' ? 'DTPS' : 'DPS'
+  chartMetric.value === 'hps' ? 'HPS' : chartMetric.value === 'dtps' ? 'DTPS' : chartMetric.value === 'rdps' ? 'rDPS' : 'DPS'
 )
+
+const rdpsTimeline = computed<DpsTimeline>(() => {
+  const result: DpsTimeline = {}
+  for (const [name, buckets] of Object.entries(dpsTimeline.value)) {
+    const personalRate = buckets.reduce((sum, value) => sum + value, 0) / Math.max(encounterDurationSec.value, 1)
+    const rdpsRate = rdpsByCombatant.value[name] ?? personalRate
+    const scale = personalRate > 0 ? rdpsRate / personalRate : 1
+    result[name] = buckets.map(value => value * scale)
+  }
+  return result
+})
 
 const chartLines = computed(() => {
   const timeline = activeTimeline.value
@@ -1221,7 +1302,14 @@ const hoverTooltip = computed(() => {
   const timeLabel = `${m}:${String(s).padStart(2, '0')}`
   const entries = chartLines.value.series
     .filter(s => !s.isGroup && !hiddenSeries.value.has(s.name))
-    .map(s => ({ name: s.name, label: tabLabel(s.name), color: s.color, value: s.values[b] ?? 0 }))
+    .map(s => ({
+      name: s.name,
+      label: tabLabel(s.name),
+      color: s.color,
+      value: s.values[b] ?? 0,
+      rdpsGiven: rdpsGivenFor(s.name),
+      rdpsTaken: rdpsTakenFor(s.name),
+    }))
     .sort((a, b) => b.value - a.value)
   const groupVal = entries.reduce((sum, e) => sum + e.value, 0)
   return { timeLabel, entries, groupVal }
@@ -1341,6 +1429,116 @@ const tooltipStyle = computed(() => {
 
 const f = (n: number) => formatValue(n, 'abbreviated')
 
+function entryPullLabel(entry: PullEntry): string {
+  if (entry.index === null) return 'Live'
+  return `Pull ${entry.pullNumber ?? 1}`
+}
+
+function parseEntryDuration(entry: PullEntry | null): number {
+  if (!entry?.duration) return 0
+  const parts = entry.duration.split(':').map(part => parseInt(part, 10))
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + (parts[2] || 0)
+  if (parts.length === 2) return parts[0] * 60 + (parts[1] || 0)
+  return parseInt(entry.duration, 10) || 0
+}
+
+function formatEntryDelta(value: number, formatter: (n: number) => string): string {
+  if (!value) return 'same'
+  return `${value > 0 ? '+' : '-'}${formatter(Math.abs(value))}`
+}
+
+const historicalPullEntries = computed(() =>
+  pullList.value.filter(entry => entry.index !== null)
+)
+
+const selectedEncounterPullEntries = computed(() => {
+  const selectedEncounter = selectedPullEntry.value?.encounterId
+  if (!selectedEncounter) return historicalPullEntries.value
+  return historicalPullEntries.value.filter(entry => entry.encounterId === selectedEncounter)
+})
+
+const selectedPullEntry = computed(() =>
+  pullList.value.find(entry => entry.index === activePull.value) ?? pullList.value[0] ?? null
+)
+
+const previousPullEntry = computed(() => {
+  const current = selectedPullEntry.value
+  if (!current || current.index === null) return null
+  return selectedEncounterPullEntries.value.find(entry => (entry.pullNumber ?? 0) === (current.pullNumber ?? 0) - 1) ?? null
+})
+
+const bestPullEntry = computed(() =>
+  selectedEncounterPullEntries.value.reduce((best, entry) =>
+    !best || parseEntryDuration(entry) > parseEntryDuration(best) ? entry : best, null as PullEntry | null)
+)
+
+const bestProgressPullEntry = computed(() =>
+  selectedEncounterPullEntries.value
+    .filter(entry => entry.bossPercent !== undefined)
+    .reduce((best, entry) =>
+      !best || (entry.bossPercent ?? 100) < (best.bossPercent ?? 100) ? entry : best, null as PullEntry | null)
+)
+
+const pullDashboardNotes = computed(() => {
+  const current = selectedPullEntry.value
+  if (!current) return ['No pull selected yet.']
+  const notes: string[] = []
+  const previous = previousPullEntry.value
+
+  if (bestPullEntry.value && current.index === bestPullEntry.value.index && selectedEncounterPullEntries.value.length > 1) {
+    notes.push('Longest pull for this encounter.')
+  } else if (bestPullEntry.value && current.index !== null) {
+    const delta = parseEntryDuration(current) - parseEntryDuration(bestPullEntry.value)
+    notes.push(`${formatEntryDelta(delta, seconds => fmtSeconds(Math.abs(seconds)))} from best pull duration.`)
+  }
+
+  if (bestProgressPullEntry.value && current.index === bestProgressPullEntry.value.index && selectedEncounterPullEntries.value.length > 1) {
+    notes.push('Best boss progress for this encounter.')
+  } else if (bestProgressPullEntry.value && current.bossPercent !== undefined) {
+    const delta = current.bossPercent - (bestProgressPullEntry.value.bossPercent ?? current.bossPercent)
+    notes.push(`${delta > 0 ? '+' : ''}${delta.toFixed(1)} boss HP points from best progress.`)
+  }
+
+  if (previous) {
+    const deathDelta = (current.deaths ?? 0) - (previous.deaths ?? 0)
+    if (deathDelta < 0) notes.push(`${Math.abs(deathDelta)} fewer deaths than previous pull.`)
+    if (deathDelta > 0) notes.push(`${deathDelta} more deaths than previous pull.`)
+
+    const dpsDelta = (current.dps ?? 0) - (previous.dps ?? 0)
+    if (Math.abs(dpsDelta) >= Math.max(1500, (previous.dps ?? 0) * 0.03)) {
+      notes.push(`${dpsDelta > 0 ? '+' : ''}${f(dpsDelta)} party DPS vs previous.`)
+    }
+  }
+
+  const firstCluster = deathClustersForCurrent.value[0]
+  if (firstCluster) {
+    notes.push(`${firstCluster.count} deaths clustered around ${fmtTime(firstCluster.start)}-${fmtTime(firstCluster.end)}.`)
+  }
+
+  if (notes.length === 0) notes.push('No obvious swing yet; use the drilldown tabs for details.')
+  return notes.slice(0, 5)
+})
+
+const deathClustersForCurrent = computed(() => {
+  const sorted = sortedDeaths.value.slice().sort((a, b) => a.timestamp - b.timestamp)
+  const clusters: Array<{ start: number; end: number; count: number }> = []
+  for (const death of sorted) {
+    const last = clusters[clusters.length - 1]
+    if (last && death.timestamp - last.end <= 15000) {
+      last.end = death.timestamp
+      last.count++
+    } else {
+      clusters.push({ start: death.timestamp, end: death.timestamp, count: 1 })
+    }
+  }
+  return clusters.filter(cluster => cluster.count >= 2)
+})
+
+function selectPullEntry(entry: PullEntry): void {
+  activePull.value = entry.index
+  channel?.postMessage({ type: 'loadPull', index: entry.index })
+}
+
 const { eventRowCountFor, eventRows } = useEventRows({
   eventActorScope,
   visibleCombatants,
@@ -1397,7 +1595,11 @@ onMounted(() => {
         dpsTimeline.value = {}
         hpsTimeline.value = {}
         dtakenTimeline.value = {}
+        rdpsByCombatant.value = {}
+        rdpsGiven.value = {}
+        rdpsTaken.value = {}
         damageTakenData.value = {}
+        healingReceivedData.value = {}
         deaths.value = []
         combatantIds.value = {}
         combatantJobs.value = {}
@@ -1410,7 +1612,11 @@ onMounted(() => {
       dpsTimeline.value          = e.data.dpsTimeline      ?? {}
       hpsTimeline.value          = e.data.hpsTimeline      ?? {}
       dtakenTimeline.value       = e.data.dtakenTimeline   ?? {}
+      rdpsByCombatant.value      = e.data.rdpsByCombatant  ?? {}
+      rdpsGiven.value            = e.data.rdpsGiven        ?? {}
+      rdpsTaken.value            = e.data.rdpsTaken        ?? {}
       damageTakenData.value      = e.data.damageTakenData  ?? {}
+      healingReceivedData.value  = e.data.healingReceivedData ?? {}
       deaths.value               = e.data.deaths           ?? []
       combatantIds.value         = e.data.combatantIds     ?? {}
       combatantJobs.value        = e.data.combatantJobs    ?? {}
@@ -1433,6 +1639,8 @@ onMounted(() => {
       }
     } else if (e.data?.type === 'selectCombatant') {
       selected.value = e.data.name ?? ''
+    } else if (e.data?.type === 'setView' && (e.data.view === 'overview' || e.data.view === 'pulls')) {
+      activeView.value = e.data.view
     }
   }
   channel.postMessage({ type: 'request' })
@@ -1637,15 +1845,19 @@ onUnmounted(() => { channel?.close(); channel = null })
 
         <aside class="bp-inspector">
           <div class="bp-inspector-title">Overview Inspector</div>
-          <div class="bp-inspector-block">
-            <div class="bp-kv"><span>Player</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected || 'None' }}</strong></div>
-            <div class="bp-kv"><span>Biggest Hit</span><strong>{{ selectedDoneHighestHitAbility ? `${selectedDoneHighestHitAbility.abilityName} · ${f(selectedDoneHighestHitAbility.maxHit)}` : '—' }}</strong></div>
+            <div class="bp-inspector-block">
+              <div class="bp-kv"><span>Player</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected || 'None' }}</strong></div>
+              <div class="bp-kv"><span>rDPS</span><strong :title="rdpsDeltaLabel(resolvedSelected)">{{ f(rdpsFor(resolvedSelected)) }}</strong></div>
+              <div class="bp-kv"><span>DPS Given</span><strong>{{ f(rdpsGivenFor(resolvedSelected)) }}</strong></div>
+              <div class="bp-kv"><span>DPS Taken</span><strong>{{ f(rdpsTakenFor(resolvedSelected)) }}</strong></div>
+              <div class="bp-kv"><span>Biggest Hit</span><strong>{{ selectedDoneHighestHitAbility ? `${selectedDoneHighestHitAbility.abilityName} · ${f(selectedDoneHighestHitAbility.maxHit)}` : '—' }}</strong></div>
             <div class="bp-kv"><span>Biggest Taken</span><strong>{{ selectedTakenAbility?.abilityName ?? '—' }}</strong></div>
             <div class="bp-kv"><span>Deaths</span><strong>{{ selectedActorDeaths.length }}</strong></div>
             <div class="bp-kv"><span>Casts</span><strong>{{ selectedActorCastCount }}</strong></div>
           </div>
           <div class="bp-inspector-block">
             <div class="bp-section-heading">Quick Actions</div>
+            <button class="bp-action-btn" @click="activeView = 'pulls'">Open pull summary</button>
             <button class="bp-action-btn" @click="openOverviewCard('done')">Open outgoing breakdown</button>
             <button class="bp-action-btn" @click="openOverviewCard('taken')">Open incoming breakdown</button>
             <button class="bp-action-btn" @click="openSelectedTimeline">Open timeline at spike</button>
@@ -1657,6 +1869,128 @@ onUnmounted(() => { channel?.close(); channel = null })
             </div>
           </div>
         </aside>
+      </div>
+    </template>
+
+    <template v-else-if="activeView === 'pulls'">
+      <div class="bp-pulls-workspace">
+        <aside class="bp-pull-list-panel">
+          <div class="bp-panel-title">Session Pulls</div>
+          <button
+            v-for="entry in pullList"
+            :key="String(entry.index)"
+            class="bp-pull-row"
+            :class="{ active: activePull === entry.index }"
+            @click="selectPullEntry(entry)"
+          >
+            <span v-if="entry.index !== null && entry.isFirstInEncounter" class="bp-pull-encounter-header">
+              {{ entry.encounterName }} · {{ entry.pullCount ?? 1 }} pull{{ (entry.pullCount ?? 1) === 1 ? '' : 's' }}
+            </span>
+            <span class="bp-pull-row-main">
+              <strong>{{ entryPullLabel(entry) }}</strong>
+              <span>{{ entry.encounterName }}</span>
+            </span>
+            <span class="bp-pull-row-stats">
+              <span>{{ entry.duration || '0:00' }}</span>
+              <span v-if="entry.bossPercentLabel">{{ entry.bossPercentLabel }} boss</span>
+              <span>{{ f(entry.dps ?? 0) }} DPS</span>
+              <span title="Raid-contributing DPS: raw DPS adjusted by buff credit">{{ f(entry.rdps ?? entry.dps ?? 0) }} rDPS</span>
+              <span :class="{ danger: (entry.deaths ?? 0) > 0 }">{{ entry.deaths ?? 0 }} deaths</span>
+            </span>
+          </button>
+        </aside>
+
+        <main class="bp-main">
+          <div class="bp-card-grid">
+            <div class="bp-card">
+              <div class="bp-card-label">Duration</div>
+              <div class="bp-card-value">{{ selectedPullEntry?.duration || encounterDurationLabel }}</div>
+              <div class="bp-card-detail">
+                <template v-if="previousPullEntry">
+                  {{ formatEntryDelta(parseEntryDuration(selectedPullEntry) - parseEntryDuration(previousPullEntry), fmtSeconds) }} vs previous
+                </template>
+                <template v-else>current pull context</template>
+              </div>
+            </div>
+            <div class="bp-card bp-card--taken">
+              <div class="bp-card-label">Boss HP</div>
+              <div class="bp-card-value">{{ selectedPullEntry?.bossPercentLabel ?? '—' }}</div>
+              <div class="bp-card-detail">
+                <template v-if="bestProgressPullEntry && selectedPullEntry?.bossPercent !== undefined">
+                  {{ selectedPullEntry.index === bestProgressPullEntry.index ? 'best progress' : `${((selectedPullEntry.bossPercent ?? 0) - (bestProgressPullEntry.bossPercent ?? 0)).toFixed(1)} pts from best` }}
+                </template>
+                <template v-else>needs enemy HP samples</template>
+              </div>
+            </div>
+            <div class="bp-card bp-card--done">
+              <div class="bp-card-label">Party rDPS</div>
+              <div class="bp-card-value">{{ f(selectedPullEntry?.rdps ?? selectedPullEntry?.dps ?? 0) }}</div>
+              <div class="bp-card-detail">
+                <template v-if="previousPullEntry">
+                  {{ formatEntryDelta((selectedPullEntry?.rdps ?? selectedPullEntry?.dps ?? 0) - (previousPullEntry.rdps ?? previousPullEntry.dps ?? 0), f) }} vs previous
+                </template>
+                <template v-else>{{ f(selectedPullEntry?.dps ?? 0) }} raw DPS</template>
+              </div>
+            </div>
+            <div class="bp-card bp-card--deaths">
+              <div class="bp-card-label">Deaths</div>
+              <div class="bp-card-value">{{ selectedPullEntry?.deaths ?? sortedDeaths.length }}</div>
+              <div class="bp-card-detail">{{ deathClustersForCurrent.length > 0 ? `${deathClustersForCurrent.length} death cluster${deathClustersForCurrent.length === 1 ? '' : 's'}` : 'no clustered deaths' }}</div>
+            </div>
+            <div class="bp-card bp-card--taken">
+              <div class="bp-card-label">Damage Taken</div>
+              <div class="bp-card-value">{{ f(selectedPullEntry?.damageTaken ?? 0) }}</div>
+              <div class="bp-card-detail">{{ f(selectedPullEntry?.dtps ?? 0) }} DTPS</div>
+            </div>
+          </div>
+
+          <div class="bp-pulls-grid">
+            <section class="bp-panel">
+              <div class="bp-panel-title">Quick Read</div>
+              <div class="bp-pull-note-list">
+                <div v-for="note in pullDashboardNotes" :key="note" class="bp-pull-note">{{ note }}</div>
+              </div>
+            </section>
+
+            <section class="bp-panel">
+              <div class="bp-panel-title">Death Windows</div>
+              <div v-if="sortedDeaths.length === 0" class="bp-empty-panel">No deaths recorded for this pull.</div>
+              <button
+                v-for="death in sortedDeaths.slice(0, 8)"
+                :key="`${death.targetName}-${death.timestamp}`"
+                class="bp-event-item"
+                @click="selectActor(death.targetName); selectedDeathIndex = sortedDeaths.findIndex(d => d === death); activeView = 'deaths'"
+              >
+                <span class="bp-event-name" :style="nameStyle(death.targetName)">{{ death.targetName }}</span>
+                <span class="bp-event-detail">
+                  {{ fmtTime(death.timestamp) }}{{ death.resurrectTime ? ` · raised ${fmtTime(death.resurrectTime)}` : ' · no raise seen' }}
+                </span>
+              </button>
+            </section>
+
+            <section class="bp-panel">
+              <div class="bp-panel-title">Top Incoming Sources</div>
+              <table class="bp-table">
+                <thead><tr><th class="col-name">Ability</th><th class="col-num">Total</th><th class="col-num">Hits</th></tr></thead>
+                <tbody>
+                  <tr v-for="row in takenAbilities.slice(0, 8)" :key="`pull-taken-${row.abilityId}`" @click="selectAbility(row.abilityName); activeView = 'taken'">
+                    <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
+                    <td class="col-num">{{ f(row.totalDamage) }}</td>
+                    <td class="col-num">{{ row.hits }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+
+            <section class="bp-panel">
+              <div class="bp-panel-title">Next Drilldowns</div>
+              <button class="bp-action-btn" @click="activeView = 'overview'">Open overview</button>
+              <button class="bp-action-btn" @click="activeView = 'timeline'">Open timeline</button>
+              <button class="bp-action-btn" :disabled="sortedDeaths.length === 0" @click="activeView = 'deaths'">Open deaths</button>
+              <button class="bp-action-btn" @click="activeView = 'events'">Open event rows</button>
+            </section>
+          </div>
+        </main>
       </div>
     </template>
 
@@ -1757,28 +2091,27 @@ onUnmounted(() => { channel?.close(); channel = null })
               <button class="bp-mode-btn" :class="{ active: takenMode === 'healing' }" @click="takenMode = 'healing'">Healing Received</button>
             </div>
           </div>
-          <div v-if="takenMode === 'healing'" class="bp-empty-panel">Healing-received needs the same unified event stream as the Events tab. Damage Taken is ready now and already correlates against death recaps.</div>
-          <div v-else-if="takenAbilities.length === 0" class="bp-waiting">No incoming damage data for this pull.</div>
+          <div v-if="incomingAbilities.length === 0" class="bp-waiting">No incoming {{ takenMode === 'healing' ? 'healing' : 'damage' }} data for this pull.</div>
           <div v-else class="bp-scroll">
             <table class="bp-table">
               <thead><tr>
                 <th class="col-name">Source Ability</th>
                 <th class="col-num">Total</th>
                 <th class="col-pct">%</th>
-                <th class="col-num">Hits</th>
+                <th class="col-num">{{ takenMode === 'healing' ? 'Heals' : 'Hits' }}</th>
                 <th class="col-num">Avg</th>
                 <th class="col-num">Max</th>
                 <th class="col-num">Near Deaths</th>
               </tr></thead>
               <tbody>
-                <tr v-for="row in takenAbilities" :key="row.abilityId" :class="{ 'bp-row-active': selectedTakenAbility?.abilityName === row.abilityName }" @click="selectAbility(row.abilityName)">
+                <tr v-for="row in incomingAbilities" :key="`${takenMode}-${row.abilityId}`" :class="{ 'bp-row-active': selectedTakenAbility?.abilityName === row.abilityName }" @click="selectAbility(row.abilityName)">
                   <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
                   <td class="col-num">{{ f(row.totalDamage) }}</td>
                   <td class="col-pct">{{ row.pct }}%</td>
                   <td class="col-num">{{ row.hits }}</td>
                   <td class="col-num">{{ f(row.avg) }}</td>
                   <td class="col-num">{{ f(row.maxHit) }}</td>
-                  <td class="col-num">{{ selectedActorDeathAbilitySet.has(row.abilityName) ? 'Yes' : '—' }}</td>
+                  <td class="col-num">{{ (takenMode === 'healing' ? selectedActorDeathHealingAbilitySet : selectedActorDeathAbilitySet).has(row.abilityName) ? 'Yes' : '—' }}</td>
                 </tr>
               </tbody>
             </table>
@@ -1786,15 +2119,16 @@ onUnmounted(() => { channel?.close(); channel = null })
         </main>
 
         <aside class="bp-inspector">
-          <div class="bp-inspector-title">Taken Inspector</div>
+          <div class="bp-inspector-title">{{ takenMode === 'healing' ? 'Healing Inspector' : 'Taken Inspector' }}</div>
           <div v-if="!selectedTakenAbility" class="bp-empty-panel">Select an incoming ability to inspect it.</div>
           <template v-else>
             <div class="bp-inspector-block">
               <div class="bp-kv"><span>Ability</span><strong>{{ selectedTakenAbility.abilityName }}</strong></div>
               <div class="bp-kv"><span>Total</span><strong>{{ f(selectedTakenAbility.totalDamage) }}</strong></div>
               <div class="bp-kv"><span>Share</span><strong>{{ selectedTakenAbility.pct }}%</strong></div>
-              <div class="bp-kv"><span>Hits</span><strong>{{ selectedTakenAbility.hits }}</strong></div>
-              <div class="bp-kv"><span>Near Deaths</span><strong>{{ selectedActorDeathAbilitySet.has(selectedTakenAbility.abilityName) ? 'Correlated' : 'None tracked' }}</strong></div>
+              <div class="bp-kv"><span>{{ takenMode === 'healing' ? 'Heals' : 'Hits' }}</span><strong>{{ selectedTakenAbility.hits }}</strong></div>
+              <div class="bp-kv"><span>Average</span><strong>{{ f(selectedTakenAbility.avg) }}</strong></div>
+              <div class="bp-kv"><span>Near Deaths</span><strong>{{ (takenMode === 'healing' ? selectedActorDeathHealingAbilitySet : selectedActorDeathAbilitySet).has(selectedTakenAbility.abilityName) ? 'Correlated' : 'None tracked' }}</strong></div>
             </div>
           </template>
         </aside>
@@ -1820,6 +2154,7 @@ onUnmounted(() => { channel?.close(); channel = null })
           <template #before-groups>
             <div class="bp-metric-tabs">
               <button class="bp-metric-tab" :class="{ active: chartMetric === 'dps' }"  @click="chartMetric = 'dps'">DPS</button>
+              <button class="bp-metric-tab" :class="{ active: chartMetric === 'rdps' }" @click="chartMetric = 'rdps'">rDPS</button>
               <button class="bp-metric-tab" :class="{ active: chartMetric === 'hps' }"  @click="chartMetric = 'hps'">HPS</button>
               <button class="bp-metric-tab" :class="{ active: chartMetric === 'dtps' }" @click="chartMetric = 'dtps'">DTPS</button>
             </div>
@@ -1923,6 +2258,7 @@ onUnmounted(() => { channel?.close(); channel = null })
                 <span class="bp-tooltip-dot" :style="{ background: entry.color }" />
                 <span class="bp-tooltip-name" :style="nameStyle(entry.name)">{{ entry.label }}</span>
                 <span class="bp-tooltip-val">{{ f(entry.value) }}</span>
+                <span v-if="chartMetric === 'rdps'" class="bp-tooltip-adj">+{{ f(entry.rdpsGiven) }} / -{{ f(entry.rdpsTaken) }}</span>
               </div>
               <div v-if="hoverTooltip.entries.length > 1" class="bp-tooltip-group">
                 <span class="bp-tooltip-name">Group</span>
@@ -1942,10 +2278,12 @@ onUnmounted(() => { channel?.close(); channel = null })
 
         <aside class="bp-inspector">
           <div class="bp-inspector-title">Timeline Inspector</div>
-          <div class="bp-inspector-block">
-            <div class="bp-kv"><span>Metric</span><strong>{{ metricLabel }}</strong></div>
-            <div class="bp-kv"><span>Selected Actor</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected }}</strong></div>
-            <div class="bp-kv"><span>Hover Window</span><strong>{{ hoverTooltip?.timeLabel ?? '—' }}</strong></div>
+            <div class="bp-inspector-block">
+              <div class="bp-kv"><span>Metric</span><strong>{{ metricLabel }}</strong></div>
+              <div class="bp-kv"><span>Selected Actor</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected }}</strong></div>
+              <div v-if="chartMetric === 'rdps'" class="bp-kv"><span>DPS Given</span><strong>{{ f(rdpsGivenFor(resolvedSelected)) }}</strong></div>
+              <div v-if="chartMetric === 'rdps'" class="bp-kv"><span>DPS Taken</span><strong>{{ f(rdpsTakenFor(resolvedSelected)) }}</strong></div>
+              <div class="bp-kv"><span>Hover Window</span><strong>{{ hoverTooltip?.timeLabel ?? '—' }}</strong></div>
             <div class="bp-kv"><span>Deaths</span><strong>{{ timelineInspectorDeaths.length }}</strong></div>
             <div class="bp-kv"><span>Casts</span><strong>{{ timelineInspectorCasts.length }}</strong></div>
           </div>
@@ -2546,6 +2884,12 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 .bp-tooltip-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .bp-tooltip-name { flex: 1; font-size: 10px; color: rgba(255,255,255,0.6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-tooltip-val { font-size: 10px; font-variant-numeric: tabular-nums; color: rgba(255,255,255,0.85); margin-left: auto; }
+.bp-tooltip-adj {
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(116,240,195,0.78);
+  white-space: nowrap;
+}
 
 /* ── Legend ── */
 .bp-chart-legend { display: flex; flex-wrap: wrap; gap: 3px 10px; flex-shrink: 0; padding-bottom: 2px; }
@@ -3420,6 +3764,100 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   grid-template-columns: 240px minmax(0, 1fr) 280px;
   overflow: hidden;
 }
+.bp-pulls-workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  overflow: hidden;
+}
+.bp-pull-list-panel {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  border-right: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.015);
+}
+.bp-pull-row {
+  width: 100%;
+  min-height: 70px;
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  color: rgba(255,255,255,0.78);
+  text-align: left;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.bp-pull-row:hover { background: rgba(255,255,255,0.07); }
+.bp-pull-row.active {
+  background: var(--flexi-accent-soft);
+  border-color: var(--flexi-accent-border);
+}
+.bp-pull-encounter-header {
+  margin: -3px -2px 2px;
+  padding-bottom: 6px;
+  color: rgba(255,255,255,0.42);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+.bp-pull-row-main,
+.bp-pull-row-stats {
+  display: flex;
+  gap: 6px;
+}
+.bp-pull-row-main {
+  min-width: 0;
+  flex-direction: column;
+}
+.bp-pull-row-main strong {
+  font-size: 12px;
+  color: rgba(255,255,255,0.9);
+}
+.bp-pull-row-main span {
+  overflow: hidden;
+  color: rgba(255,255,255,0.56);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bp-pull-row-stats {
+  flex-wrap: wrap;
+  color: rgba(255,255,255,0.48);
+  font-size: 10px;
+}
+.bp-pull-row-stats span {
+  padding: 2px 6px;
+  background: rgba(255,255,255,0.055);
+  border-radius: 4px;
+}
+.bp-pull-row-stats .danger { color: rgba(255,150,150,0.95); }
+.bp-pulls-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.bp-pull-note-list {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+}
+.bp-pull-note {
+  padding: 8px 10px;
+  color: rgba(255,255,255,0.76);
+  background: rgba(255,255,255,0.045);
+  border-left: 3px solid var(--flexi-accent);
+  border-radius: 5px;
+  font-size: 12px;
+}
 .bp-rail,
 .bp-inspector {
   min-width: 0;
@@ -3511,7 +3949,7 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 }
 .bp-card-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 10px;
   padding: 12px;
   border-bottom: 1px solid rgba(255,255,255,0.06);

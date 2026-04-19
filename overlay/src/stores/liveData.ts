@@ -75,6 +75,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   // Per-ability damage received by each target (for Summary "Taken" view).
   const currentDtakenData = ref<Record<string, CombatantAbilityData>>({})
+  // Per-ability healing received by each target (for Breakdown "Healing Received" view).
+  const currentHealingReceivedData = ref<Record<string, CombatantAbilityData>>({})
+  const currentRdpsByCombatant = ref<Record<string, number>>({})
   // FFXIV object IDs: name → ID (used to distinguish players vs enemies/pets).
   const currentCombatantIds = ref<Record<string, string>>({})
   // ACT job abbreviations: name → normalized job (used by Breakdown UI).
@@ -106,16 +109,124 @@ export const useLiveDataStore = defineStore('liveData', () => {
   // BroadcastChannel to push ability data to popout windows.
   let breakdownChannel: BroadcastChannel | null = null
   let broadcastTimer: ReturnType<typeof setTimeout> | null = null
+  type PullListEntry = {
+    index: number | null
+    encounterId?: string
+    encounterName: string
+    duration: string
+    pullNumber?: number
+    pullCount?: number
+    isFirstInEncounter?: boolean
+    dps?: number
+    rdps?: number
+    hps?: number
+    dtps?: number
+    deaths?: number
+    damageTaken?: number
+    bossPercent?: number
+    bossPercentLabel?: string
+  }
+  let cachedPullListKey = ''
+  let cachedHistoricalPullEntries: PullListEntry[] = []
 
   function buildPullList() {
-    const list: { index: number | null; encounterName: string; duration: string }[] = [
-      { index: null, encounterName: 'Live', duration: frame.value?.encounterDuration ?? '' },
+    const list: PullListEntry[] = [
+      {
+        index: null,
+        encounterId: frame.value?.encounterTitle ?? 'Live',
+        encounterName: 'Live',
+        duration: frame.value?.encounterDuration ?? '',
+        pullNumber: 0,
+        pullCount: 0,
+        isFirstInEncounter: true,
+        dps: parseFloat(frame.value?.totalDps ?? '0'),
+        rdps: parseFloat(frame.value?.totalRdps ?? '0'),
+        hps: parseFloat(frame.value?.totalHps ?? '0'),
+        dtps: parseFloat(frame.value?.totalDtps ?? '0'),
+        deaths: currentDeaths.value.length,
+        damageTaken: Object.values(currentDtakenData.value).reduce((sum, abilities) =>
+          sum + Object.values(abilities).reduce((s, ability) => s + ability.totalDamage, 0), 0),
+        ...estimateBossPercent(currentResourceData.value, currentCombatantIds.value),
+      },
     ]
+    return [...list, ...buildHistoricalPullList()]
+  }
+
+  function buildHistoricalPullList(): PullListEntry[] {
+    const cacheKey = sessionPulls.value.map(p => p.id).join('|')
+    if (cacheKey === cachedPullListKey) return cachedHistoricalPullEntries
+
+    cachedHistoricalPullEntries = []
+    const totalsByEncounter = new Map<string, number>()
+    for (const p of sessionPulls.value) {
+      const key = p.encounterName || 'Unknown'
+      totalsByEncounter.set(key, (totalsByEncounter.get(key) ?? 0) + 1)
+    }
+    const seenByEncounter = new Map<string, number>()
+    let previousEncounter = ''
     for (let i = 0; i < sessionPulls.value.length; i++) {
       const p = sessionPulls.value[i]
-      list.push({ index: i, encounterName: p.encounterName, duration: p.duration })
+      const encounterId = p.encounterName || 'Unknown'
+      const seen = (seenByEncounter.get(encounterId) ?? 0) + 1
+      seenByEncounter.set(encounterId, seen)
+      const total = totalsByEncounter.get(encounterId) ?? seen
+      const duration = parseFloat(p.encounter?.DURATION ?? '0') || 1
+      const damageTaken = p.combatants.reduce((sum, c) => sum + parseFloat(c.damagetaken ?? '0'), 0)
+      const rdps = p.combatants.reduce((sum, c) => sum + parseFloat(c.rdps ?? '0'), 0)
+      cachedHistoricalPullEntries.push({
+        index: i,
+        encounterId,
+        encounterName: p.encounterName,
+        duration: p.duration,
+        pullNumber: total - seen + 1,
+        pullCount: total,
+        isFirstInEncounter: encounterId !== previousEncounter,
+        dps: parseFloat(p.encounter?.ENCDPS ?? '0'),
+        rdps,
+        hps: parseFloat(p.encounter?.ENCHPS ?? '0'),
+        dtps: parseFloat(p.encounter?.DTRPS ?? '0') || damageTaken / duration,
+        deaths: p.deaths?.length ?? p.combatants.reduce((sum, c) => sum + parseFloat(c.deaths ?? '0'), 0),
+        damageTaken,
+        ...estimateBossPercent(p.resourceData ?? {}, p.combatantIds ?? {}),
+      })
+      previousEncounter = encounterId
     }
-    return list
+    cachedPullListKey = cacheKey
+    return cachedHistoricalPullEntries
+  }
+
+  function mapToRateRecord(map: Map<string, number>, durationSec: number): Record<string, number> {
+    const result: Record<string, number> = {}
+    const duration = Math.max(1, durationSec)
+    for (const [name, amount] of map) {
+      result[name] = amount / duration
+    }
+    return result
+  }
+
+  function estimateBossPercent(
+    resources: Record<string, ResourceSample[]>,
+    ids: Record<string, string>,
+  ): { bossPercent?: number; bossPercentLabel?: string } {
+    const enemies = Object.entries(resources)
+      .filter(([name]) => ids[name]?.startsWith('40'))
+      .map(([name, samples]) => {
+        const latest = samples[samples.length - 1]
+        return latest && latest.maxHp > 0
+          ? { name, percent: Math.max(0, Math.min(100, latest.hp * 100)), maxHp: latest.maxHp }
+          : null
+      })
+      .filter((item): item is { name: string; percent: number; maxHp: number } => !!item)
+      .sort((a, b) => b.maxHp - a.maxHp)
+
+    if (enemies.length === 0) return {}
+    const primary = enemies[0]
+    return {
+      bossPercent: primary.percent,
+      bossPercentLabel: enemies.length > 1
+        ? `${primary.percent.toFixed(1)}% ${primary.name}`
+        : `${primary.percent.toFixed(1)}%`,
+    }
   }
 
   function parseDurationToSec(s: string): number {
@@ -134,6 +245,17 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const hpsTimeline    = pullIndex === null ? deepClone(currentHealTimeline.value)      : deepClone(pull?.hpsTimeline      ?? {})
     const dtakenTimeline = pullIndex === null ? deepClone(currentDtakenTimeline.value)    : deepClone(pull?.dtakenTimeline   ?? {})
     const damageTakenData = pullIndex === null ? deepClone(currentDtakenData.value)       : deepClone(pull?.damageTakenData  ?? {})
+    const healingReceivedData = pullIndex === null ? deepClone(currentHealingReceivedData.value) : deepClone(pull?.healingReceivedData ?? {})
+    const rdpsByCombatant = pullIndex === null
+      ? deepClone(currentRdpsByCombatant.value)
+      : Object.fromEntries((pull?.combatants ?? []).map(c => [c.name, parseFloat(c.rdps ?? '0') || 0]))
+    const liveDuration = parseDurationToSec(frame.value?.encounterDuration ?? '')
+    const rdpsGiven = pullIndex === null
+      ? mapToRateRecord(rDpsContributed, liveDuration)
+      : deepClone(pull?.rdpsGiven ?? {})
+    const rdpsTaken = pullIndex === null
+      ? mapToRateRecord(rDpsReceived, liveDuration)
+      : deepClone(pull?.rdpsTaken ?? {})
     const deaths         = pullIndex === null ? deepClone(currentDeaths.value)            : deepClone(pull?.deaths           ?? [])
     const combatantIds   = pullIndex === null ? deepClone(currentCombatantIds.value)      : deepClone(pull?.combatantIds     ?? {})
     const combatantJobs  = pullIndex === null ? deepClone(currentCombatantJobs.value)     : deepClone(pull?.combatantJobs    ?? {})
@@ -150,7 +272,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       timestamp,
       abilityData,
       dpsTimeline, hpsTimeline, dtakenTimeline,
-      damageTakenData, deaths, combatantIds, combatantJobs, castData, resourceData,
+      damageTakenData, healingReceivedData, rdpsByCombatant, rdpsGiven, rdpsTaken, deaths, combatantIds, combatantJobs, castData, resourceData,
       selfName: selfName.value,
       blurNames: profile.value.global.blurNames ?? false,
       partyNames: Array.from(partyNamesHistorical),
@@ -241,13 +363,16 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
     // Inject synthetic rdps field: (personal damage + contributions given − boosts received) / duration
     const rDpsDuration = parseFloat(event.Encounter['DURATION'] ?? '0') || 1
+    const nextRdpsByCombatant: Record<string, number> = {}
     for (const c of combatants) {
       const baseDamage  = parseFloat(c['damage'] ?? '0')
       const contributed = rDpsContributed.get(c.name) ?? 0
       const received    = rDpsReceived.get(c.name) ?? 0
       const rdps = Math.max(0, (baseDamage + contributed - received) / rDpsDuration)
       c['rdps'] = String(Math.round(rdps))
+      nextRdpsByCombatant[c.name] = Math.round(rdps)
     }
+    currentRdpsByCombatant.value = nextRdpsByCombatant
 
     // Use combatantFilter if set, otherwise fall back to legacy selfOnly/partyOnly
     const filter = g.combatantFilter ?? (g.selfOnly ? 'self' : g.partyOnly ? 'party' : 'all')
@@ -658,6 +783,35 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (damage < stats.minHit) stats.minHit = damage
   }
 
+  // Record per-ability healing received by a target (for Breakdown "Healing Received" view).
+  function recordHealingReceived(
+    targetName: string,
+    abilityId: string,
+    abilityName: string,
+    healing: number,
+  ): void {
+    if (!targetName || !abilityId || healing === 0) return
+    if (!currentHealingReceivedData.value[targetName]) {
+      currentHealingReceivedData.value[targetName] = {}
+    }
+    const combatant = currentHealingReceivedData.value[targetName]
+    if (!combatant[abilityId]) {
+      combatant[abilityId] = {
+        abilityId,
+        abilityName,
+        totalDamage: 0,
+        hits: 0,
+        maxHit: 0,
+        minHit: Infinity,
+      }
+    }
+    const stats: AbilityStats = combatant[abilityId]
+    stats.totalDamage += healing
+    stats.hits++
+    if (healing > stats.maxHit) stats.maxHit = healing
+    if (healing < stats.minHit) stats.minHit = healing
+  }
+
   function onLogLine(event: LogLineEvent): void {
     const parts = event.rawLine.split('|')
     const lineType = parts[0]
@@ -722,7 +876,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const heal = decodeLogDamage(damageHex)
         if (heal === 0 || !effectiveName) return
         recordTimelineBucket(currentHealTimeline.value, effectiveName, heal)
-        if (targetName) recordHitEvent(targetName, 'heal', abilityName, effectiveName, heal, tgtCurrentHp, tgtMaxHp)
+        if (targetName) {
+          if (abilityId) recordHealingReceived(targetName, abilityId, abilityName, heal)
+          recordHitEvent(targetName, 'heal', abilityName, effectiveName, heal, tgtCurrentHp, tgtMaxHp)
+        }
         scheduleBroadcast()
       }
 
@@ -765,7 +922,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
         if (heal === 0) return
         recordTimelineBucket(currentHealTimeline.value, sourceName, heal)
         recordCastEvent(sourceName, `dot:${effectId}`, `HoT (${effectId})`, targetName, 'tick')
-        if (targetName) recordHitEvent(targetName, 'heal', `HoT (${effectId})`, sourceName, heal, tgtCurrentHp, tgtMaxHp)
+        if (targetName) {
+          recordHealingReceived(targetName, `hot:${effectId}`, `HoT (${effectId})`, heal)
+          recordHitEvent(targetName, 'heal', `HoT (${effectId})`, sourceName, heal, tgtCurrentHp, tgtMaxHp)
+        }
         scheduleBroadcast()
       }
 
@@ -863,6 +1023,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
     currentHealTimeline.value = {}
     currentDtakenTimeline.value = {}
     currentDtakenData.value = {}
+    currentHealingReceivedData.value = {}
+    currentRdpsByCombatant.value = {}
     currentCombatantIds.value = {}
     currentCombatantJobs.value = {}
     currentDeaths.value = []
@@ -924,6 +1086,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
       hpsTimeline:      deepClone(currentHealTimeline.value),
       dtakenTimeline:   deepClone(currentDtakenTimeline.value),
       damageTakenData:  deepClone(currentDtakenData.value),
+      healingReceivedData: deepClone(currentHealingReceivedData.value),
+      rdpsGiven:        mapToRateRecord(rDpsContributed, stashDuration),
+      rdpsTaken:        mapToRateRecord(rDpsReceived, stashDuration),
       deaths:           deepClone(currentDeaths.value),
       combatantIds:     deepClone(currentCombatantIds.value),
       combatantJobs:    deepClone(currentCombatantJobs.value),
@@ -1053,6 +1218,17 @@ export const useLiveDataStore = defineStore('liveData', () => {
           const hpsTimeline     = idx === null ? deepClone(currentHealTimeline.value)       : deepClone(pull?.hpsTimeline      ?? {})
           const dtakenTimeline  = idx === null ? deepClone(currentDtakenTimeline.value)     : deepClone(pull?.dtakenTimeline   ?? {})
           const damageTakenData = idx === null ? deepClone(currentDtakenData.value)         : deepClone(pull?.damageTakenData  ?? {})
+          const healingReceivedData = idx === null ? deepClone(currentHealingReceivedData.value) : deepClone(pull?.healingReceivedData ?? {})
+          const rdpsByCombatant = idx === null
+            ? deepClone(currentRdpsByCombatant.value)
+            : Object.fromEntries((pull?.combatants ?? []).map(c => [c.name, parseFloat(c.rdps ?? '0') || 0]))
+          const liveDuration = parseDurationToSec(frame.value?.encounterDuration ?? '')
+          const rdpsGiven = idx === null
+            ? mapToRateRecord(rDpsContributed, liveDuration)
+            : deepClone(pull?.rdpsGiven ?? {})
+          const rdpsTaken = idx === null
+            ? mapToRateRecord(rDpsReceived, liveDuration)
+            : deepClone(pull?.rdpsTaken ?? {})
           const deaths          = idx === null ? deepClone(currentDeaths.value)             : deepClone(pull?.deaths           ?? [])
           const combatantIds    = idx === null ? deepClone(currentCombatantIds.value)       : deepClone(pull?.combatantIds     ?? {})
           const combatantJobs   = idx === null ? deepClone(currentCombatantJobs.value)      : deepClone(pull?.combatantJobs    ?? {})
@@ -1069,7 +1245,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
             timestamp,
             abilityData,
             dpsTimeline, hpsTimeline, dtakenTimeline,
-            damageTakenData, deaths, combatantIds, combatantJobs, castData, resourceData,
+            damageTakenData, healingReceivedData, rdpsByCombatant, rdpsGiven, rdpsTaken, deaths, combatantIds, combatantJobs, castData, resourceData,
             selfName: selfName.value,
             blurNames: profile.value.global.blurNames ?? false,
             partyNames: Array.from(partyNamesHistorical),

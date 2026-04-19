@@ -3,7 +3,7 @@ import type { BreakdownView, CastFilter, EventActorScope, EventFilter, TimelineO
 
 export function useBreakdownViewState() {
   const activeView = ref<BreakdownView>('overview')
-  const chartMetric = ref<'dps' | 'hps' | 'dtps'>('dps')
+  const chartMetric = ref<'dps' | 'rdps' | 'hps' | 'dtps'>('dps')
   const selectedAbility = ref('')
   const doneDimension = ref<'ability' | 'targets' | 'sources'>('ability')
   const takenMode = ref<'damage' | 'healing'>('damage')
@@ -17,6 +17,7 @@ export function useBreakdownViewState() {
 
   const viewTabs: Array<{ id: BreakdownView; label: string }> = [
     { id: 'overview', label: 'Overview' },
+    { id: 'pulls', label: 'Pulls' },
     { id: 'done', label: 'Done' },
     { id: 'taken', label: 'Taken' },
     { id: 'timeline', label: 'Timeline' },
