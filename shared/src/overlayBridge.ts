@@ -270,8 +270,6 @@ const MOCK_COMBATANTS: Array<{ name: string; job: string; baseDps: number; baseH
   { name: 'Sammy Samface',     job: 'SAM', baseDps: 32400, baseHps: 500 },
 ]
 
-export const MOCK_NAMES = MOCK_COMBATANTS.map(c => c.name)
-
 function buildMockCombatData(): CombatDataEvent {
   const variance = () => 1 + (Math.random() - 0.5) * 0.05
 

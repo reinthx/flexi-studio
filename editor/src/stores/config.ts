@@ -58,13 +58,13 @@ export const useConfigStore = defineStore('config', () => {
 
   // ── Mutators — default bar style ───────────────────────────────────────────
   function patchDefault(patch: Partial<BarStyle>): void {
-    let current: BarStyle = JSON.parse(JSON.stringify(profile.value.default))
+    let current = JSON.parse(JSON.stringify(profile.value.default)) as BarStyle
     for (const key of Object.keys(patch) as (keyof BarStyle)[]) {
       const srcVal = patch[key]
       if (srcVal !== null && typeof srcVal === 'object' && !Array.isArray(srcVal)) {
-        (current as any)[key] = { ...(current as any)[key], ...srcVal }
+        current[key] = { ...current[key], ...srcVal } as BarStyle[keyof BarStyle]
       } else if (srcVal !== undefined) {
-        (current as any)[key] = srcVal
+        current[key] = srcVal
       }
     }
     profile.value.default = current

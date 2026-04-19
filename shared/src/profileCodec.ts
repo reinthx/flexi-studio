@@ -14,6 +14,7 @@
 import { BAR_TEXTURE_PRESETS } from './texturePresets'
 import { JOB_ICONS } from './jobIcons'
 import { CROWN_CUTE_SRC } from './crownAssets'
+import type { Profile, LabelField } from './configSchema'
 
 // ── JSON Key Minification ──────────────────────────────────────────────────────────
 
@@ -41,23 +42,6 @@ const SHORT_TO_KEY: Record<string, string> = Object.entries(KEY_TO_SHORT).reduce
   return acc
 }, {} as Record<string, string>)
 
-function minifyKeys(json: string): string {
-  let result = json
-  for (const [key, short] of Object.entries(KEY_TO_SHORT)) {
-    result = result.replaceAll(`"${key}":`, `"${short}":`)
-  }
-  return result
-}
-
-function minifyArrays(json: string): string {
-  let result = json
-  // Compact offset objects: {"ox":5,"oy":10} → {"os":[5,10]}
-  result = result.replace(/"ox":(\d+),"oy":(\d+)}/g, '"os":[$1,$2]')
-  // Compact thickness objects: {"top":0,"right":0,"bottom":0,"left":0} → {"th":[0,0,0,0]}
-  result = result.replace(/"top":(\d+),"right":(\d+),"bottom":(\d+),"left":(\d+)}/g, '"th":[$1,$2,$3,$4]')
-  return result
-}
-
 function expandArrays(json: string): string {
   let result = json
   // Expand offset arrays: {"os":[5,10]} → {"ox":5,"oy":10}
@@ -80,7 +64,8 @@ const HEADER = 'FLEXI1:'
 const LEGACY_HEADER = 'ACTFLEXI1:'
 
 // ── Export-time image optimization ──
-// Only reduce quality, never downscale — smaller dimensions can cause
+// JPEG quality (0.70 = 70%) for custom images in share strings.
+// Only reduce quality, never downscale - smaller dimensions can cause
 // textures to not fill bars at larger bar sizes.
 const EXPORT_QUALITY = 0.70
 
@@ -358,7 +343,7 @@ const DEFAULT_GLOBAL = {
   pets: { show: false, mergeWithOwner: true, petStyle: {} },
 }
 
-function cleanProfile(profile: any): any {
+function cleanProfile(profile: Profile): Profile {
   const cleaned = JSON.parse(JSON.stringify(profile))
 
   // Strip dead label fields
@@ -369,7 +354,7 @@ function cleanProfile(profile: any): any {
   }
 
   // Migrate label fields: colorMode 'self' → selfMode:true, strip dead selfColor
-  function migrateLabelFields(fields: any[]) {
+  function migrateLabelFields(fields: Partial<LabelField>[]) {
     for (const f of fields) {
       delete f.selfColor
       if (f.colorMode === 'self') {
@@ -560,7 +545,7 @@ function cleanProfile(profile: any): any {
   return cleaned
 }
 
-function restoreDefaults(profile: any): any {
+function restoreDefaults(profile: Profile): Profile {
   const restored = { ...profile }
   if (restored.overrides) {
     if (!restored.overrides.byJobEnabled) {
@@ -667,9 +652,6 @@ export async function encodeShareString(presets: Array<{ name: string; profile: 
   let json = tokenize(JSON.stringify(cleanedPresets))
   json = await optimizeCustomAssets(json)
   json = deduplicateAssets(json)
-  // Skip key minification and array compaction for now - causing decode issues
-  // json = minifyKeys(json)
-  // json = minifyArrays(json)
   const compressed = await deflate(new TextEncoder().encode(json))
   return HEADER + toBase64url(compressed)
 }

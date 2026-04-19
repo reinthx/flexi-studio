@@ -4,7 +4,16 @@
  * converts to WebP, and returns a base64 data URL.
  */
 
+/**
+ * Maximum dimension (px) for custom images. 512px balances quality vs
+ * share string size for Discord uploads. Must match texture sizing in config.
+ */
 const MAX_PX = 512
+
+/**
+ * WebP compression quality (0-1). 0.85 maintains visual quality
+ * while keeping share strings reasonably sized.
+ */
 const QUALITY = 0.85
 
 export async function processImageFile(file: File): Promise<string> {

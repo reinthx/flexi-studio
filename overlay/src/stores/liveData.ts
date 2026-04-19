@@ -45,6 +45,10 @@ import { formatValue } from '@shared'
 import { normalizeJob } from '@shared/jobMap'
 import { useOverlayConfig } from './overlayConfig'
 
+// Poll config from localStorage every 500ms as fallback
+// (storage events don't fire on same-origin in some browsers)
+const CONFIG_POLL_INTERVAL_MS = 500
+
 export const useLiveDataStore = defineStore('liveData', () => {
   // ─── State ───────────────────────────────────────────────────────────────────
   const overlayConfig = useOverlayConfig()
@@ -852,7 +856,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (typeof window !== 'undefined') {
       window.addEventListener('storage', onStorageEvent)
       // Poll as fallback (storage events don't fire on same-origin in some browsers)
-      pollInterval = setInterval(pollForConfig, 500)
+      pollInterval = setInterval(pollForConfig, CONFIG_POLL_INTERVAL_MS)
     }
 
     startEvents()

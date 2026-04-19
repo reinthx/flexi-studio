@@ -5,7 +5,6 @@ import { useBarStyles } from '@shared/useBarStyles'
 import type { BarData } from '@shared/useBarStyles'
 import { renderTemplate } from '../lib/templateRenderer'
 import { getJobIconSrc } from '@shared/jobMap'
-import { MOCK_NAMES } from '@shared/overlayBridge'
 import { formatValue } from '@shared/formatValue'
 import type { ValueFormat } from '@shared/configSchema'
 
@@ -62,13 +61,7 @@ const wrapperStyle = computed(() => {
   }
 })
 
-// â”€â”€ Blur names â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const displayName = computed(() => {
-  // if (props.blurName && MOCK_NAMES.length > 0) {
-  //   return MOCK_NAMES[Math.floor(Math.random() * MOCK_NAMES.length)]
-  // }
-  return props.bar.name
-})
+const displayName = computed(() => props.bar.name)
 
 const blurStyle = computed(() => {
   if (props.blurName) {
@@ -77,7 +70,6 @@ const blurStyle = computed(() => {
   return undefined
 })
 
-// â”€â”€ Tokens / labels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Parses "SkillName 23740" or just "23740" - splits into name + formatted value
 const maxHitName = computed(() => {
   const raw = props.bar.maxHit ?? ''
@@ -131,7 +123,7 @@ function fieldText(template: string): string {
 
 <template>
   <div v-if="isValid" :style="wrapperStyle" @click="emit('click')" style="cursor:pointer">
-    <!-- Shadow (z:0) â€” directional clip prevents opposite-direction bleed -->
+    <!-- Shadow (z:0) - directional clip prevents opposite-direction bleed -->
     <div :style="bgShadowDirectionalClip">
       <div :style="bgShadowStyle">
         <div v-if="isClipped" :style="bgShadowSourceStyle" />
@@ -178,7 +170,7 @@ function fieldText(template: string): string {
       </div>
     </template>
 
-    <!-- Icon inline — standalone absolutely positioned (not separateRow) -->
+    <!-- Icon inline - standalone absolutely positioned (not separateRow) -->
     <template v-if="showIcon && !iconConfig.separateRow">
       <div :style="iconInlineStyle">
         <template v-if="iconConfig.bgShape.enabled">

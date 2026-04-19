@@ -5,7 +5,7 @@
  * icon, outline) so both bar components stay in sync without copy-paste.
  */
 import { computed, useTemplateRef, onMounted, toValue, type MaybeRefOrGetter, watch } from 'vue'
-import type { BarStyle, LabelField, Orientation, GradientFill, Role, Profile } from './configSchema'
+import type { BarStyle, LabelField, Orientation, GradientFill, Role, Profile, StyleOverrides } from './configSchema'
 import { buildFillCss, buildShapeCss, buildOutlineCss, buildDropShadowFilter } from './cssBuilder'
 import { getJobIconSrc, getJobInfo } from './jobMap'
 import { resolveBarDimensions } from './barDimensions'
@@ -700,8 +700,8 @@ export function useBarStyles(
         const jobKey = job.toUpperCase() as keyof NonNullable<typeof overrides>['byJob']
         const jobOverride = overrides?.byJob?.[jobKey]
         const jobEnabled = overrides?.byJobEnabled?.[jobKey] ?? true
-        const c = (jobEnabled && (jobOverride as any)?.fill?.color)
-          ? (jobOverride as any).fill.color
+        const c = (jobEnabled && jobOverride?.fill?.color)
+          ? jobOverride.fill.color
           : (JOB_COLORS[job.toUpperCase()] ?? '#888888')
         style.color = c
         if (f.gradient !== undefined) {
@@ -713,8 +713,8 @@ export function useBarStyles(
         const roleKey = role as Role
         const roleOverride = overrides?.byRole?.[roleKey]
         const roleEnabled = overrides?.byRoleEnabled?.[roleKey] ?? true
-        const c = (roleEnabled && (roleOverride as any)?.fill?.color)
-          ? (roleOverride as any).fill.color
+        const c = (roleEnabled && roleOverride?.fill?.color)
+          ? roleOverride.fill.color
           : (FIELD_ROLE_COLORS[role] ?? '#888888')
         style.color = c
         if (f.gradient !== undefined) {
@@ -730,14 +730,14 @@ export function useBarStyles(
       // selfMode: post-process overlay — combinable with any colorMode
       // When selfMode is true and bar is self, override color with Self style override color
       if (f.selfMode && isSelf) {
-        const selfC = (overrides?.selfEnabled && (overrides?.self as any)?.fill?.color)
-          ? (overrides?.self as any).fill.color
+        const selfC = (overrides?.selfEnabled && overrides?.self?.fill?.color)
+          ? overrides.self.fill.color
           : undefined
         if (selfC) {
           style.color = selfC
           if (f.selfGradient !== undefined) {
-            const color2 = (f.selfGradient as any).stops?.[1]?.color ?? '#000000'
-            const angle = (f.selfGradient as any).angle ?? 90
+            const color2 = f.selfGradient.stops?.[1]?.color ?? '#000000'
+            const angle = f.selfGradient.angle ?? 90
             fieldGradientStyle = `linear-gradient(${angle}deg, ${selfC} 0%, ${color2} 100%)`
           } else {
             // selfMode without selfGradient clears any gradient set by colorMode
@@ -863,7 +863,7 @@ export function useBarStyles(
     if (cfg.shadow?.enabled) {
       filters.push(`drop-shadow(${cfg.shadow.offsetX}px ${cfg.shadow.offsetY}px ${cfg.shadow.blur}px ${cfg.shadow.color})`)
     }
-    const co = (cfg as any).classOutline
+    const co = cfg.classOutline
     if (co?.enabled && co.width > 0) {
       const w = co.width
       const c = co.color ?? JOB_COLORS[b().job.toUpperCase()] ?? '#888888'
