@@ -12,7 +12,7 @@ const wrapperStyle = computed(() => ({
   display: 'block',
   width: '100%',
   maxHeight: props.maxHeight ?? 'unset',
-  overflowY: 'auto',
+  overflowY: 'auto' as const,
 }))
 </script>
 

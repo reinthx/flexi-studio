@@ -7,8 +7,8 @@ import { getJobIconSrc, normalizeJob } from '@shared/jobMap'
 import { abilityInitials, resolveAbilityInfo } from '@shared/abilityIcons'
 import ActorRail from './AbilityBreakdown/ActorRail.vue'
 import AbilityCell from './AbilityBreakdown/AbilityCell.vue'
-import type { BreakdownView, CastFilter, CombatantGroup, EventActorScope, EventFilter, PartyMemberData, PullEntry, ResourceTrackKey, TimelineOverlay } from './AbilityBreakdown/types'
-import { deathEventsFor, deathHpBars as buildDeathHpBars, formatHpBefore as formatDeathHpBefore, formatHpValue as formatDeathHpValue, sortPlayerDeaths } from './AbilityBreakdown/deathTransforms'
+import type { BreakdownView, CastFilter, CombatantGroup, EventFilter, PartyMemberData, PullEntry, ResourceTrackKey, TimelineOverlay } from './AbilityBreakdown/types'
+import { deathEventsFor, deathHpBars as buildDeathHpBars, formatHpBefore as formatDeathHpBefore, sortPlayerDeaths } from './AbilityBreakdown/deathTransforms'
 import { useEventRows } from './AbilityBreakdown/eventRows'
 import { useBreakdownViewState } from './AbilityBreakdown/viewState'
 
@@ -34,10 +34,40 @@ const deaths              = ref<DeathRecord[]>([])
 const combatantIds        = ref<Record<string, string>>({})
 const combatantJobs       = ref<Record<string, string>>({})
 const showEnemies         = ref(false)
-const summaryMode         = ref<'done' | 'taken'>('done')
 const lastBroadcastTime   = ref(0)
 const castData            = ref<Record<string, CastEvent[]>>({})
 const resourceData        = ref<Record<string, ResourceSample[]>>({})
+
+type BreakdownPayload = {
+  type?: string
+  timestamp?: number
+  abilityData?: Record<string, CombatantAbilityData>
+  dpsTimeline?: DpsTimeline
+  hpsTimeline?: DpsTimeline
+  dtakenTimeline?: DpsTimeline
+  rdpsByCombatant?: Record<string, number>
+  rdpsGiven?: Record<string, number>
+  rdpsTaken?: Record<string, number>
+  damageTakenData?: Record<string, CombatantAbilityData>
+  healingReceivedData?: Record<string, CombatantAbilityData>
+  deaths?: DeathRecord[]
+  combatantIds?: Record<string, string>
+  combatantJobs?: Record<string, string>
+  castData?: Record<string, CastEvent[]>
+  resourceData?: Record<string, ResourceSample[]>
+  selfName?: string
+  blurNames?: boolean
+  partyNames?: string[]
+  partyData?: PartyMemberData[]
+  encounterDurationSec?: number
+  pullIndex?: number | null
+  selectedCombatant?: string
+  pullList?: PullEntry[]
+}
+
+const BREAKDOWN_SNAPSHOT_KEY = 'flexi-breakdown-snapshot'
+const BREAKDOWN_SNAPSHOT_MAX_AGE_MS = 30_000
+const BREAKDOWN_REQUEST_INTERVAL_MS = 5_000
 
 const {
   activeView,
@@ -100,6 +130,7 @@ const showFriendlyNPCs = ref(false)
 let lastAutoHidePull: number | null | undefined = undefined
 
 const initName = localStorage.getItem('flexi-breakdown-init') ?? ''
+localStorage.removeItem('flexi-breakdown-init')
 
 // ── Combatants / blur ─────────────────────────────────────────────────────────
 const combatants = computed(() => Object.keys(allData.value))
@@ -282,9 +313,6 @@ const healingAbilities = computed(() =>
 )
 
 const incomingAbilities = computed(() => takenMode.value === 'healing' ? healingAbilities.value : takenAbilities.value)
-
-const activeTableRows  = computed(() => summaryMode.value === 'taken' ? takenAbilities.value  : abilities.value)
-const activeTableTotal = computed(() => summaryMode.value === 'taken' ? takenTotal.value      : playerTotal.value)
 
 const currentPullEntry = computed(() =>
   pullList.value.find(entry => entry.index === activePull.value) ?? null
@@ -535,10 +563,6 @@ const castGroups = computed<CastGroup[]>(() => {
   return groups
 })
 
-const castGroupedMembers = computed(() => castGroups.value.flatMap(g => g.names))
-
-const partyMembers = computed(() => castGroupedMembers.value)
-
 // Get death time for selected player (if they died)
 const castPlayerDeathTime = computed(() => {
   if (!castSelectedPlayer.value) return null
@@ -599,8 +623,6 @@ const castPlayerData = computed(() => {
   return { abilities, maxDuration, events }
 })
 
-const CAST_BUCKET_SEC = 5
-
 const castTimelineDuration = computed(() => {
   if (!castPlayerData.value) return 0
   return Math.ceil((castPlayerData.value.maxDuration / 1000) / 10) * 10
@@ -612,57 +634,6 @@ const castTimeTicks = computed(() => {
   const ticks: number[] = []
   for (let t = 0; t <= dur; t += 30) ticks.push(t)
   return ticks
-})
-
-function onCastTimelineHover(event: MouseEvent, abilityName: string, events: CastEvent[]) {
-  const target = event.currentTarget as HTMLElement
-  const rect = target.getBoundingClientRect()
-  const x = event.clientX - rect.left
-  const pct = x / rect.width
-  const timeSec = pct * castTimelineDuration.value
-
-  // Find closest cast event to this time
-  const abilityEvents = events.filter(e => e.abilityName === abilityName)
-  if (abilityEvents.length === 0) return
-
-  const closest = abilityEvents.reduce((best, ev) => {
-    const evTime = (ev.t ?? 0) / 1000
-    return Math.abs(evTime - timeSec) < Math.abs(best.t / 1000 - timeSec) ? ev : best
-  })
-
-  if (closest) {
-    castHoverData.value = {
-      time: (closest.t ?? 0) / 1000,
-      ability: closest.abilityName,
-      target: closest.target ?? '',
-      x: event.clientX,
-      y: event.clientY,
-    }
-  }
-}
-
-const castTimelineBuckets = computed(() => {
-  if (!castPlayerData.value) return []
-  const events = castSelectedAbility.value
-    ? castPlayerData.value.events.filter(e => e.abilityName === castSelectedAbility.value)
-    : castPlayerData.value.events
-  const duration = castPlayerData.value.maxDuration / 1000
-  const numBuckets = Math.ceil(duration / CAST_BUCKET_SEC)
-  const buckets: { start: number; end: number; casts: { ability: string; target: string; time: number; type: string }[] }[] = []
-
-  for (let i = 0; i < numBuckets; i++) {
-    const start = i * CAST_BUCKET_SEC
-    const end = start + CAST_BUCKET_SEC
-    const castsInBucket = events
-      .filter(e => {
-        const t = e.t / 1000
-        return t >= start && t < end
-      })
-      .map(e => ({ ability: e.abilityName, target: e.target, time: e.t / 1000 - start, type: e.type }))
-    buckets.push({ start, end, casts: castsInBucket })
-  }
-
-  return buckets
 })
 
 const MITIGATION_PATTERNS = [
@@ -718,14 +689,6 @@ function castCategory(event: CastEvent): CastFilter {
   if (HEAL_PATTERNS.some(pattern => pattern.test(name))) return 'heals'
   return 'dps'
 }
-
-const filteredCastTimelineEvents = computed(() => {
-  if (!castPlayerData.value) return []
-  return castPlayerData.value.events
-    .map(event => ({ ...event, category: castCategory(event) }))
-    .filter(event => castFilters.value.has(event.category))
-    .sort((a, b) => a.t - b.t)
-})
 
 const castTimelineRows = computed(() => {
   if (!castPlayerData.value) return []
@@ -863,28 +826,6 @@ function castCooldownLabel(event: CastEvent): string {
   return cooldownMs ? `${Math.round(cooldownMs / 1000)}s cooldown` : ''
 }
 
-function getAbilityBuckets(abilityName: string) {
-  if (!castPlayerData.value) return []
-  const events = castPlayerData.value.events.filter(e => e.abilityName === abilityName)
-  const duration = castPlayerData.value.maxDuration / 1000
-  const numBuckets = Math.ceil(duration / CAST_BUCKET_SEC)
-  const buckets: { start: number; end: number; casts: { ability: string; target: string; time: number; type: string }[] }[] = []
-
-  for (let i = 0; i < numBuckets; i++) {
-    const start = i * CAST_BUCKET_SEC
-    const end = start + CAST_BUCKET_SEC
-    const castsInBucket = events
-      .filter(e => {
-        const t = e.t / 1000
-        return t >= start && t < end
-      })
-      .map(e => ({ ability: e.abilityName, target: e.target, time: e.t / 1000 - start, type: e.type }))
-    buckets.push({ start, end, casts: castsInBucket })
-  }
-
-  return buckets
-}
-
 function abilityIconKey(abilityId: string, abilityName: string): string {
   return `${abilityId || 'unknown'}:${abilityName}`
 }
@@ -961,60 +902,25 @@ watch(activePull, () => {
   deathInspectorTab.value = 'recap'
 })
 
-const dtakenPlayers = computed(() =>
-  Object.keys(damageTakenData.value)
-    .filter(n => !isEnemy(n))
-    .map(n => ({
-      name: n,
-      total: Object.values(damageTakenData.value[n] ?? {}).reduce((s, a) => s + a.totalDamage, 0),
-    }))
-    .filter(p => p.total > 0)
-    .sort((a, b) => b.total - a.total)
-)
-
-const dtakenPlayersMax = computed(() => dtakenPlayers.value[0]?.total ?? 1)
-
-const dtakenEnemies = computed(() => {
-  if (!showEnemies.value) return []
-  return Object.keys(damageTakenData.value)
-    .filter(n => isEnemy(n))
-    .map(n => ({
-      name: n,
-      total: Object.values(damageTakenData.value[n] ?? {}).reduce((s, a) => s + a.totalDamage, 0),
-    }))
-    .filter(e => e.total > 0)
-    .sort((a, b) => b.total - a.total)
-})
-
-const hasMultipleEnemies = computed(() => {
-  const ids = Object.values(combatantIds.value).filter(id => id.startsWith('40'))
-  return new Set(ids).size >= 2
-})
-
-const encSelectedResolved = computed(() =>
-  encounterSelectedPlayer.value && damageTakenData.value[encounterSelectedPlayer.value]
-    ? encounterSelectedPlayer.value
-    : ''
-)
-
-const encTakenRaw = computed(() => damageTakenData.value[encSelectedResolved.value] ?? {})
-const encTakenTotal = computed(() =>
-  Object.values(encTakenRaw.value).reduce((s, a) => s + a.totalDamage, 0)
-)
-const encTakenAbilities = computed(() =>
-  Object.values(encTakenRaw.value)
-    .sort((a, b) => b.totalDamage - a.totalDamage)
-    .map(a => ({
-      ...a,
-      pct:    encTakenTotal.value > 0 ? ((a.totalDamage / encTakenTotal.value) * 100).toFixed(1) : '0.0',
-      avg:    a.hits > 0 ? Math.round(a.totalDamage / a.hits) : 0,
-      minHit: a.minHit === Infinity ? 0 : a.minHit,
-    }))
-)
 
 const selectedDeathIndex = ref<number | null>(null)
 
-watch([activePull, deaths], () => { selectedDeathIndex.value = null })
+function deathSelectionKey(death: DeathRecord | null | undefined): string {
+  return death ? `${death.targetId}|${death.targetName}|${death.timestamp}` : ''
+}
+
+watch(activePull, () => { selectedDeathIndex.value = null })
+watch(deaths, () => {
+  if (selectedDeathIndex.value === null) return
+  const current = sortedDeaths.value[selectedDeathIndex.value]
+  const key = deathSelectionKey(current)
+  if (!key) {
+    selectedDeathIndex.value = null
+    return
+  }
+  const nextIndex = sortedDeaths.value.findIndex(death => deathSelectionKey(death) === key)
+  selectedDeathIndex.value = nextIndex >= 0 ? nextIndex : null
+})
 
 const selectedDeath = computed<DeathRecord | null>(() =>
   selectedDeathIndex.value !== null ? (sortedDeaths.value[selectedDeathIndex.value] ?? null) : null
@@ -1109,7 +1015,6 @@ function fmtSeconds(seconds: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`
 }
 
-const formatHpValue = (value: number) => formatDeathHpValue(value, f)
 const formatHpBefore = (event: DeathEvent) => formatDeathHpBefore(event, f)
 const deathHpBars = (death: DeathRecord) => buildDeathHpBars(death)
 
@@ -1568,85 +1473,134 @@ const activeFilterChips = computed(() => {
 
 // ── BroadcastChannel ──────────────────────────────────────────────────────────
 let channel: BroadcastChannel | null = null
+let requestRetryTimers: Array<ReturnType<typeof setTimeout>> = []
+let requestInterval: ReturnType<typeof setInterval> | null = null
+
+function clearBreakdownData() {
+  allData.value = {}
+  dpsTimeline.value = {}
+  hpsTimeline.value = {}
+  dtakenTimeline.value = {}
+  rdpsByCombatant.value = {}
+  rdpsGiven.value = {}
+  rdpsTaken.value = {}
+  damageTakenData.value = {}
+  healingReceivedData.value = {}
+  deaths.value = []
+  combatantIds.value = {}
+  combatantJobs.value = {}
+  castData.value = {}
+  resourceData.value = {}
+}
+
+function applyEncounterPayload(data: BreakdownPayload): boolean {
+  if (data.type !== 'encounterData') return false
+
+  const ts = data.timestamp ?? 0
+
+  // When viewing historical pull, validate by pullIndex, not timestamp.
+  // Historical data has pullIndex >= 0, live data has pullIndex === null.
+  const incomingPullIndex = 'pullIndex' in data ? data.pullIndex ?? null : null
+
+  // If viewing historical pull, accept only data for that specific pull.
+  if (activePull.value !== null) {
+    if (incomingPullIndex !== activePull.value) return false
+  } else {
+    // For live view, skip if timestamp is not newer.
+    if (lastBroadcastTime.value > 0 && ts <= lastBroadcastTime.value) return false
+  }
+
+  // Clear data if pull changed before updating with new data.
+  if (incomingPullIndex !== activePull.value) clearBreakdownData()
+
+  lastBroadcastTime.value = ts
+  allData.value              = data.abilityData      ?? {}
+  dpsTimeline.value          = data.dpsTimeline      ?? {}
+  hpsTimeline.value          = data.hpsTimeline      ?? {}
+  dtakenTimeline.value       = data.dtakenTimeline   ?? {}
+  rdpsByCombatant.value      = data.rdpsByCombatant  ?? {}
+  rdpsGiven.value            = data.rdpsGiven        ?? {}
+  rdpsTaken.value            = data.rdpsTaken        ?? {}
+  damageTakenData.value      = data.damageTakenData  ?? {}
+  healingReceivedData.value  = data.healingReceivedData ?? {}
+  deaths.value               = data.deaths           ?? []
+  combatantIds.value         = data.combatantIds     ?? {}
+  combatantJobs.value        = data.combatantJobs    ?? {}
+  castData.value             = data.castData         ?? {}
+  resourceData.value         = data.resourceData     ?? {}
+  selfName.value             = data.selfName         ?? ''
+  blurNames.value            = data.blurNames        ?? false
+  partyNames.value           = Array.isArray(data.partyNames) ? data.partyNames : []
+  partyData.value            = Array.isArray(data.partyData) ? data.partyData : []
+  encounterDurationSec.value = data.encounterDurationSec ?? 0
+  pullList.value             = Array.isArray(data.pullList) ? data.pullList : []
+  if ('pullIndex' in data) {
+    activePull.value = data.pullIndex ?? null
+    applyAutoHide(data.pullIndex ?? null, data.dpsTimeline ?? {})
+  }
+  if (data.selectedCombatant) {
+    selected.value = data.selectedCombatant
+  } else if (!selected.value && initName && allData.value[initName]) {
+    selected.value = initName
+  }
+  return true
+}
+
+function tryApplySnapshot(): boolean {
+  if (typeof localStorage === 'undefined') return false
+
+  try {
+    const raw = localStorage.getItem(BREAKDOWN_SNAPSHOT_KEY)
+    if (!raw) return false
+
+    const data = JSON.parse(raw) as BreakdownPayload
+    const ts = data.timestamp ?? 0
+    if (data.type !== 'encounterData' || !ts || Date.now() - ts > BREAKDOWN_SNAPSHOT_MAX_AGE_MS) {
+      localStorage.removeItem(BREAKDOWN_SNAPSHOT_KEY)
+      return false
+    }
+
+    return applyEncounterPayload(data)
+  } catch {
+    localStorage.removeItem(BREAKDOWN_SNAPSHOT_KEY)
+    return false
+  }
+}
+
+function requestEncounterData() {
+  channel?.postMessage({ type: 'request' })
+}
 
 onMounted(() => {
   document.title = 'Flexi Breakdown'
+  tryApplySnapshot()
   if (typeof BroadcastChannel === 'undefined') return
+
   channel = new BroadcastChannel('flexi-breakdown')
   channel.onmessage = (e) => {
     if (e.data?.type === 'encounterData') {
-      const ts = e.data.timestamp ?? 0
-
-      // When viewing historical pull, validate by pullIndex, not timestamp
-      // Historical data has pullIndex >= 0, live data has pullIndex === null
-      const incomingPullIndex = 'pullIndex' in e.data ? e.data.pullIndex : null
-
-      // If viewing historical pull, accept only data for that specific pull
-      if (activePull.value !== null) {
-        if (incomingPullIndex !== activePull.value) return
-      } else {
-        // For live view, skip if timestamp is not newer
-        if (lastBroadcastTime.value > 0 && ts <= lastBroadcastTime.value) return
-      }
-
-      // Clear data if pull changed (before updating with new data)
-      if (incomingPullIndex !== activePull.value) {
-        allData.value = {}
-        dpsTimeline.value = {}
-        hpsTimeline.value = {}
-        dtakenTimeline.value = {}
-        rdpsByCombatant.value = {}
-        rdpsGiven.value = {}
-        rdpsTaken.value = {}
-        damageTakenData.value = {}
-        healingReceivedData.value = {}
-        deaths.value = []
-        combatantIds.value = {}
-        combatantJobs.value = {}
-        castData.value = {}
-        resourceData.value = {}
-      }
-
-      lastBroadcastTime.value = ts
-      allData.value              = e.data.abilityData      ?? {}
-      dpsTimeline.value          = e.data.dpsTimeline      ?? {}
-      hpsTimeline.value          = e.data.hpsTimeline      ?? {}
-      dtakenTimeline.value       = e.data.dtakenTimeline   ?? {}
-      rdpsByCombatant.value      = e.data.rdpsByCombatant  ?? {}
-      rdpsGiven.value            = e.data.rdpsGiven        ?? {}
-      rdpsTaken.value            = e.data.rdpsTaken        ?? {}
-      damageTakenData.value      = e.data.damageTakenData  ?? {}
-      healingReceivedData.value  = e.data.healingReceivedData ?? {}
-      deaths.value               = e.data.deaths           ?? []
-      combatantIds.value         = e.data.combatantIds     ?? {}
-      combatantJobs.value        = e.data.combatantJobs    ?? {}
-      castData.value             = e.data.castData         ?? {}
-      resourceData.value         = e.data.resourceData     ?? {}
-      selfName.value             = e.data.selfName         ?? ''
-      blurNames.value            = e.data.blurNames        ?? false
-      partyNames.value           = Array.isArray(e.data.partyNames) ? e.data.partyNames : []
-      partyData.value             = Array.isArray(e.data.partyData) ? e.data.partyData : []
-      encounterDurationSec.value = e.data.encounterDurationSec ?? 0
-      pullList.value             = Array.isArray(e.data.pullList) ? e.data.pullList : []
-      if ('pullIndex' in e.data) {
-        activePull.value = e.data.pullIndex ?? null
-        applyAutoHide(e.data.pullIndex ?? null, e.data.dpsTimeline ?? {})
-      }
-      if (e.data.selectedCombatant) {
-        selected.value = e.data.selectedCombatant
-      } else if (!selected.value && initName && allData.value[initName]) {
-        selected.value = initName
-      }
+      applyEncounterPayload(e.data)
     } else if (e.data?.type === 'selectCombatant') {
       selected.value = e.data.name ?? ''
     } else if (e.data?.type === 'setView' && (e.data.view === 'overview' || e.data.view === 'pulls')) {
       activeView.value = e.data.view
     }
   }
-  channel.postMessage({ type: 'request' })
+  requestEncounterData()
+  requestRetryTimers = [150, 500, 1500].map(delay => setTimeout(requestEncounterData, delay))
+  requestInterval = setInterval(requestEncounterData, BREAKDOWN_REQUEST_INTERVAL_MS)
 })
 
-onUnmounted(() => { channel?.close(); channel = null })
+onUnmounted(() => {
+  for (const timer of requestRetryTimers) clearTimeout(timer)
+  requestRetryTimers = []
+  if (requestInterval) {
+    clearInterval(requestInterval)
+    requestInterval = null
+  }
+  channel?.close()
+  channel = null
+})
 </script>
 
 <template>

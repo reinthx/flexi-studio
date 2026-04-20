@@ -57,7 +57,7 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
 
     const maxVal = parseFloat(filtered[0]?.[g.dpsType] ?? '1') || 1
 
-    const bars: BarFrame[] = filtered.map((c, i) => {
+    const bars: BarFrame[] = filtered.map((c) => {
       const rawVal = parseFloat(c[g.dpsType] ?? '0')
       return {
         name: c.name,

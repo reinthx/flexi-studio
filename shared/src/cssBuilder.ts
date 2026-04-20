@@ -1,4 +1,4 @@
-import type { BarFill, BorderRadius, BarOutline, BarShape, CornerCuts, EdgeType, GradientFill, GradientAnimation, TextureFill, TexturePagination } from '@shared/configSchema'
+import type { BarFill, BorderRadius, BarOutline, BarShape, CornerCuts, EdgeType, GradientFill, TextureFill } from '@shared/configSchema'
 
 const ANIMATION_SPEED_MAP: Record<number, string> = {
   1: '10s', 2: '8s', 3: '6s', 4: '5s', 5: '4s',
@@ -62,7 +62,7 @@ export function buildDropShadowFilter(offsetX: number, offsetY: number, blur: nu
   return `drop-shadow(${offsetX}px ${offsetY}px ${effectiveBlur}px ${color})`
 }
 
-export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithGap: number = 30): Record<string, string> {
+export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithGap: number = 30): Record<string, any> {
   switch (fill.type) {
     case 'solid':
       return fill.opacity !== undefined && fill.opacity < 1
@@ -159,14 +159,12 @@ export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithG
   }
 }
 
-export function buildGradientAnimationCss(gradient: GradientFill): Record<string, string> {
+export function buildGradientAnimationCss(gradient: GradientFill): Record<string, any> {
   const anim = gradient.animation!
   if (!anim || anim.enabled === false) return {}
 
   const animations: string[] = []
   const customProps: Record<string, string> = {}
-
-  const stops = gradient.stops.map(s => `${s.color} ${(s.position * 100).toFixed(1)}%`).join(', ')
 
   if (anim.angleRotation !== 'none') {
     const duration = ANIMATION_SPEED_MAP[anim.angleRotationSpeed] ?? '4s'
@@ -198,7 +196,7 @@ export function buildGradientAnimationCss(gradient: GradientFill): Record<string
   return result
 }
 
-export function buildTexturePaginationCss(texture: TextureFill, barIndex: number = 0, barHeightWithGap: number = 30): Record<string, string> {
+export function buildTexturePaginationCss(texture: TextureFill, barIndex: number = 0, barHeightWithGap: number = 30): Record<string, any> {
   const pag = texture.pagination
   if (!pag?.enabled) return {}
 
@@ -323,7 +321,7 @@ export function buildCornerCutCss(cuts: CornerCuts, chamferMode: 'none'|'left'|'
  * IMPORTANT: apply clip-path only to the bg+fill inner div.
  * The label layer should be a sibling (no clip-path) so text is never cut off.
  */
-export function buildShapeCss(shape: BarShape): Record<string, string> {
+export function buildShapeCss(shape: BarShape): Record<string, any> {
   const result: Record<string, string> = {}
 
   const chamferMode = shape.chamferMode ?? 'none'
@@ -358,7 +356,7 @@ export function buildShapeCss(shape: BarShape): Record<string, string> {
   return result
 }
 
-export function buildOutlineCss(outline: BarOutline): Record<string, string> {
+export function buildOutlineCss(outline: BarOutline): Record<string, any> {
   const { color, thickness: t } = outline
   const shadows: string[] = []
   if (t.top    > 0) shadows.push(`inset 0 ${t.top}px 0 ${color}`)

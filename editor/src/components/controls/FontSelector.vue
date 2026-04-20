@@ -15,7 +15,7 @@ import {
   toggleFontFavorite,
 } from '@shared/googleFonts'
 
-const props = defineProps<{ modelValue: string }>()
+defineProps<{ modelValue: string }>()
 const emit  = defineEmits<{ 'update:modelValue': [v: string] }>()
 
 // Curated list of fonts reliably present on Windows (ACT is Windows-only)

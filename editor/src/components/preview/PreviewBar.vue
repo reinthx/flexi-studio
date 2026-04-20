@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useElementSize } from '@vueuse/core'
-import type { BarStyle, Orientation, BarLabel } from '@shared/configSchema'
+import type { BarStyle, Orientation, BarLabel, StyleOverrides } from '@shared/configSchema'
 import { useBarStyles } from '@shared/useBarStyles'
 import type { BarData } from '@shared/useBarStyles'
 import { getJobIconSrc } from '@shared/jobMap'
 import { renderTemplate } from '../../lib/templateRenderer'
 import { formatValue } from '@shared/formatValue'
-import type { FormatType } from '@shared/formatValue'
+import type { ValueFormat } from '@shared/configSchema'
 
 const props = defineProps<{
   bar: BarData
@@ -20,7 +20,7 @@ const props = defineProps<{
   valueFormat?: 'raw' | 'abbreviated' | 'formatted'
   tabLabelConfig?: BarLabel
   rank1Config?: { rank1HeightIncrease?: number; rank1Glow?: { enabled: boolean; color: string; blur: number }; rank1ShowCrown?: boolean; rank1Crown?: { enabled: boolean; icon: string; imageUrl?: string; size: number; offsetX: number; offsetY: number; rotation?: number; hAnchor: 'left' | 'right' | 'center'; vAnchor: 'top' | 'middle' | 'bottom' }; rank1NameStyle?: { enabled: boolean; gradient?: { type: 'linear' | 'radial'; angle: number; stops: Array<{ color: string; position: number }> } }; rank1IconStyle?: { enabled: boolean; glow?: { enabled: boolean; color: string; blur: number }; outline?: { enabled: boolean; color: string; width: number }; bgShape?: { enabled: boolean; shape: 'circle' | 'square' | 'rounded' | 'diamond'; color: string; size: number; opacity: number; offsetX: number; offsetY: number } } }
-  colorOverrides?: { byRole: Record<string, any>; byJob: Record<string, any>; byRoleEnabled?: Record<string, boolean>; byJobEnabled?: Record<string, boolean>; self?: { fill?: { color?: string } }; selfEnabled?: boolean }
+  colorOverrides?: StyleOverrides
 }>()
 
 const barEl = ref<HTMLElement | null>(null)
@@ -33,11 +33,11 @@ const {
   bgShadowDirectionalClip, bgShadowStyle, bgShadowSourceStyle,
   bgStyle, bgTextureInnerStyle,
   fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
-  label, labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
+  labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
   showDeath, deathText, deathStyle,
   iconConfig, showIcon, iconSize,
   iconContainerStyle, iconInlineStyle, iconImageStyle,
-  iconOutlineStyle, iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
+  iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
   iconFallback,
   rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, isRank1,
 } = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, () => props.colorOverrides, () => barWidth.value)
@@ -92,7 +92,7 @@ const maxHitValue = computed(() => {
   const baseNum = parseFloat(baseStr.replace(/,/g, ''))
   if (isNaN(baseNum)) return raw
   const num = multipliers[suffix] ? baseNum * multipliers[suffix] : baseNum
-  const fmt: FormatType = props.valueFormat ?? 'abbreviated'
+  const fmt: ValueFormat = props.valueFormat ?? 'abbreviated'
   return formatValue(num, fmt)
 })
 

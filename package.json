@@ -14,11 +14,15 @@
     "build:overlay": "pnpm --filter overlay build",
     "update-assets": "node scripts/update-assets.js",
     "preview": "cd dist/editor && npx http-server -p 3000",
-    "preview:overlay": "cd dist/overlay && npx http-server -p 3001"
+    "preview:overlay": "cd dist/overlay && npx http-server -p 3001",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
-    "pako": "^2.1.0"
+    "pako": "^2.1.0",
+    "vitest": "^2.1.0"
   },
   "packageManager": "pnpm@10.33.0"
 }

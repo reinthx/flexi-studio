@@ -67,11 +67,11 @@ function onThumbDown(e: MouseEvent) {
   }
   function onUp() {
     dragging.value = false
-    window.removeEventListener('mousemove', onMove, { passive: false })
-    window.removeEventListener('mouseup', onUp, { passive: false })
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
   }
-  window.addEventListener('mousemove', onMove, { passive: false })
-  window.addEventListener('mouseup', onUp, { passive: false })
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
 }
 </script>
 

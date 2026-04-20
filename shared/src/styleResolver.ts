@@ -7,7 +7,7 @@
  * Uses deep merge so partial overrides only replace specified fields.
  */
 
-import type { BarFill, BarStyle, Profile, Role, StyleOverrides } from './configSchema'
+import type { BarFill, BarStyle, Profile, Role, Job, StyleOverrides } from './configSchema'
 import { getRole } from './jobMap'
 
 type StyleOverrideWithGradient = Partial<BarStyle> & { gradientColor?: string }
@@ -97,7 +97,7 @@ function applyTintsToFill(fill: BarFill, overrides: Profile['overrides'], combat
   // Apply job tint if enabled
   if (applyJobColor) {
     const jobOverride = getJobOverride(combatantJob, overrides)
-    const jobEnabled = overrides.byJobEnabled?.[combatantJob.toUpperCase()] ?? true
+    const jobEnabled = overrides.byJobEnabled?.[combatantJob.toUpperCase() as Job] ?? true
     if (jobOverride && jobEnabled && jobOverride.fill?.type === 'solid') {
       const gradEnd = jobOverride.gradientColor ?? '#000000'
       fill = applyFillColor(fill, jobOverride.fill.color, gradEnd)

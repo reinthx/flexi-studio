@@ -57,7 +57,7 @@ export const DEFAULT_BAR_STYLE: BarStyle = {
       offsetX: 0,
       offsetY: 0,
       shadow: { enabled: false, color: '#000000', blur: 4, offsetX: 0, offsetY: 1 },
-      bgShape: { enabled: false, shape: 'circle', color: '#000000', size: 24, opacity: 0.5 },
+      bgShape: { enabled: false, shape: 'circle', color: '#000000', size: 24, opacity: 0.5, offsetX: 0, offsetY: 0 },
     },
     textTransform: 'none',
     padding: 4,

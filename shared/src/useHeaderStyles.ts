@@ -9,10 +9,10 @@ export function useHeaderStyles(
 ) {
   const style = computed(() => {
     const conf = config()
-    const glob = global() ?? {}
+    const glob = global()
     const isFooterVal = isFooter()
     const isTop = !isFooterVal
-    
+
     const borderRadius = conf.borderRadius ?? 0
     const windowBorder = glob?.windowBorder
     

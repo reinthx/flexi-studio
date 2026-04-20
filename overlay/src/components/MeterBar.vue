@@ -18,25 +18,25 @@ const props = defineProps<{
   blurName?: boolean
   valueFormat?: 'raw' | 'abbreviated' | 'formatted'
   barIndex?: number
+  barWidth?: number
   tabLabelConfig?: BarLabel
   rank1Config?: { rank1HeightIncrease?: number; rank1Glow?: { enabled: boolean; color: string; blur: number }; rank1ShowCrown?: boolean; rank1Crown?: { enabled: boolean; icon: string; imageUrl?: string; size: number; offsetX: number; offsetY: number; rotation?: number; hAnchor: 'left' | 'right' | 'center'; vAnchor: 'top' | 'middle' | 'bottom' }; rank1NameStyle?: { enabled: boolean; gradient?: { type: 'linear' | 'radial'; angle: number; stops: Array<{ color: string; position: number }> } }; rank1IconStyle?: { enabled: boolean; glow?: { enabled: boolean; color: string; blur: number }; shadow?: { enabled: boolean; color: string; blur: number }; bgShape?: { enabled: boolean; shape: 'circle' | 'square' | 'rounded' | 'diamond'; color: string; size: number; opacity: number; offsetX: number; offsetY: number } } }
 }>()
 
 const {
-  shapeCss, isClipped, dims, isHorizontal,
-  outlineTarget, outlineCss,
+  shapeCss, isClipped, dims,
   shapeLayerStyle,
   bgShadowDirectionalClip, bgShadowStyle, bgShadowSourceStyle,
   bgStyle, bgTextureInnerStyle,
   fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
-  label, labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
+  labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
   showDeath, deathText, deathStyle,
   iconConfig, iconSrc, showIcon, iconSize,
   iconContainerStyle, iconInlineStyle, iconImageStyle,
-  iconOutlineStyle, iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
+  iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
   iconFallback,
   rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, isRank1,
-} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, undefined, () => props.barWidth)
+} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, undefined, () => props.barWidth ?? 0)
 
 const isValid = computed(() => {
   const sc = props.styleConfig

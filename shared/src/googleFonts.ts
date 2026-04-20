@@ -1,4 +1,4 @@
-import type { Profile, BarLabel } from './configSchema'
+import type { Profile, BarLabel, Job, Role } from './configSchema'
 import CUSTOM_FONTS_MAP from 'virtual:custom-fonts'
 
 const GOOGLE_FONTS: Record<string, string> = {
@@ -331,14 +331,14 @@ export function loadAllConfiguredFonts(profile: Profile): void {
   }
 
   for (const role in profile.overrides.byRole) {
-    const font = profile.overrides.byRole[role].label?.font
+    const font = profile.overrides.byRole[role as Role]?.label?.font
     if (font) {
       if (isGoogleFont(font)) loadGoogleFont(font)
       else if (isCustomFont(font)) loadCustomFont(font)
     }
   }
   for (const job in profile.overrides.byJob) {
-    const font = profile.overrides.byJob[job].label?.font
+    const font = profile.overrides.byJob[job as Job]?.label?.font
     if (font) {
       if (isGoogleFont(font)) loadGoogleFont(font)
       else if (isCustomFont(font)) loadCustomFont(font)
@@ -362,14 +362,14 @@ export function loadFontBatch(profile: Profile, delayMs: number = 333): Promise<
   }
 
   collectLabelFonts(profile.default.label)
-  collectLabelFonts(profile.global.header as BarLabel)
-  collectLabelFonts(profile.global.footer as BarLabel)
+  collectFont(profile.global.header?.font)
+  collectFont(profile.global.footer?.font)
 
   for (const role in profile.overrides.byRole) {
-    collectLabelFonts(profile.overrides.byRole[role].label as BarLabel)
+    collectLabelFonts(profile.overrides.byRole[role as Role]?.label)
   }
   for (const job in profile.overrides.byJob) {
-    collectLabelFonts(profile.overrides.byJob[job].label as BarLabel)
+    collectLabelFonts(profile.overrides.byJob[job as Job]?.label)
   }
 
   const fontList = Array.from(fonts)

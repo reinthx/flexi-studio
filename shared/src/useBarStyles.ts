@@ -4,13 +4,13 @@
  * Extracts all the duplicated computed-style logic (shape, shadow, fill, label,
  * icon, outline) so both bar components stay in sync without copy-paste.
  */
-import { computed, useTemplateRef, onMounted, toValue, type MaybeRefOrGetter, watch } from 'vue'
-import type { BarStyle, LabelField, Orientation, GradientFill, Role, Profile, StyleOverrides } from './configSchema'
+import { computed, toValue, type MaybeRefOrGetter } from 'vue'
+import type { BarStyle, BarLabel, LabelField, Orientation, GradientFill, Role, Profile } from './configSchema'
 import { buildFillCss, buildShapeCss, buildOutlineCss, buildDropShadowFilter } from './cssBuilder'
 import { getJobIconSrc, getJobInfo } from './jobMap'
 import { resolveBarDimensions } from './barDimensions'
 import { JOB_COLORS } from './presets'
-import { useElementSize, useWindowSize } from '@vueuse/core'
+import { useWindowSize } from '@vueuse/core'
 
 /** Sample a color from a gradient at position t (0–1) by lerping between stops. */
 function sampleGradientColor(g: GradientFill, t: number): string {
@@ -86,7 +86,7 @@ const DEFAULT_ICON_CONFIG = {
   offsetY: 0,
   rotation: 0,
   shadow: { enabled: false, color: '#000000', blur: 4, offsetX: 0, offsetY: 1 },
-  bgShape: { enabled: false, shape: 'circle' as const, color: '#000000', size: 24, opacity: 0.5 },
+  bgShape: { enabled: false, shape: 'circle' as const, color: '#000000', size: 24, opacity: 0.5, offsetX: 0, offsetY: 0 },
 }
 
 const DEFAULT_FIELDS: LabelField[] = [
@@ -94,16 +94,23 @@ const DEFAULT_FIELDS: LabelField[] = [
   { id: 'f2', template: '{value} ({pct})', hAnchor: 'right', vAnchor: 'middle', offsetX: 0, offsetY: 0, enabled: true },
 ]
 
-const DEFAULT_LABEL = {
+const DEFAULT_LABEL: BarLabel = {
   font: 'Segoe UI',
   size: 12,
   color: '#ffffff',
   fields: DEFAULT_FIELDS,
   shadow: { enabled: true, color: '#000000', blur: 2, offsetX: 0, offsetY: 1, thickness: 1 },
-  outline: { enabled: false, color: '#000000', width: 1 },
+  outline: { enabled: false, color: '#000000', width: 1, gradient: null },
   iconConfig: DEFAULT_ICON_CONFIG,
+  textTransform: 'none',
   padding: 4,
   gap: 4,
+  gradient: null,
+  separateRowDeaths: false,
+  deathOffsetX: 0,
+  deathOffsetY: 0,
+  deathSize: 12,
+  deathOpacity: 1,
 }
 
 /** Compute the CSS position style for a single absolutely-positioned label field. */
@@ -201,60 +208,6 @@ const DEFAULT_STYLE: BarStyle = {
 
 export { DEFAULT_ICON_CONFIG, DEFAULT_LABEL, DEFAULT_SHAPE, DEFAULT_STYLE }
 
-
-/**
- * Generates a triangle shape mask using Start H and End H.
- * Creates a single right-angled triangle: left edge at startH, right edge at endH.
- */
-function buildTriangleMask(
-  segW: number, gap: number,
-  startH: number, endH: number,
-  barH: number,
-): { url: string } {
-  const s = Math.max(2, startH)
-  const e = Math.max(2, endH)
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 ${barH}" preserveAspectRatio="none"><polygon points="0,${barH} 100,${barH} 100,${barH - e} 0,${barH - s}"/></svg>`
-  return { url: `url("data:image/svg+xml;base64,${btoa(svg)}")` }
-}
-
-
-/**
- * Generates segment overlay for triangle bar.
- */
-function buildSegmentsMask(
-  segW: number, gap: number,
-  startH: number, endH: number,
-  barH: number,
-  angle: number = 90,
-  maxSegments: number = 40,
-): { url: string; totalWidth: number } {
-  const pitch = segW + gap
-  const clamp = (h: number) => Math.max(2, Math.min(h, barH - 2))
-  const s = clamp(startH)
-  const e = clamp(endH)
-  const rad = (angle * Math.PI) / 180
-  const cotA = angle === 90 ? 0 : Math.cos(rad) / Math.sin(rad)
-  const extraW = Math.ceil(Math.abs(e * cotA))
-
-  const n = maxSegments
-  const totalW = n * pitch + extraW
-
-  const shapes = Array.from({ length: n }, (_, i) => {
-    const t = n > 1 ? i / (n - 1) : 1
-    const h = s + (e - s) * t
-    const y = barH - h
-    const x0 = i * pitch
-    const x1 = x0 + segW
-    if (cotA === 0) {
-      return `<rect x="${x0}" y="${y}" width="${segW}" height="${h}"/>`
-    }
-    const skew = h * cotA
-    return `<polygon points="${x0},${barH} ${x1},${barH} ${x1 + skew},${y} ${x0 + skew},${y}"/>`
-  }).join('')
-
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalW} ${barH}" preserveAspectRatio="none"><g fill="white">${shapes}</g></svg>`
-  return { url: `url("data:image/svg+xml;base64,${btoa(svg)}")`, totalWidth: totalW }
-}
 
 export function useBarStyles(
   bar: MaybeRefOrGetter<BarData>,
@@ -512,7 +465,9 @@ export function useBarStyles(
   /** Inner div for texture backgrounds — for Paginate mode, ensures tiling works across bars. */
   const bgTextureInnerStyle = computed(() => {
     if (!isTextureBg.value) return undefined
-    const texture = sc().bg.texture
+    const bg = sc().bg
+    if (bg.type !== 'texture') return undefined
+    const texture = bg.texture
     const isPaginate = texture.repeat === 'paginate'
     const height = barHeightWithGap.value
     const base = buildFillCss(sc().bg, bi(), barHeightWithGap.value)
@@ -595,11 +550,7 @@ export function useBarStyles(
         const eh = sf.endHeight
         if (sh && eh) {
           const barH = sc().height ?? 28
-          const a = sf.angle ?? 90
-          const { url: maskUrl } = buildTriangleMask(w, g, sh, eh, barH)
-          const s = sh
-          const e = eh
-          const ePct = ((e * frac) / barH) * 100
+          const ePct = ((eh * frac) / barH) * 100
           const triClip = `polygon(0% 100%, 100% 100%, 100% ${100 - ePct}%)`
           const segMask = `repeating-linear-gradient(to right, black 0px, black ${w}px, transparent ${w}px, transparent ${w + g}px)`
           return {
@@ -701,8 +652,10 @@ export function useBarStyles(
         const jobKey = job.toUpperCase() as keyof NonNullable<typeof overrides>['byJob']
         const jobOverride = overrides?.byJob?.[jobKey]
         const jobEnabled = overrides?.byJobEnabled?.[jobKey] ?? true
-        const c = (jobEnabled && jobOverride?.fill?.color)
-          ? jobOverride.fill.color
+        const jobFill = jobOverride?.fill
+        const jobOverrideColor = (jobFill && jobFill.type === 'solid') ? jobFill.color : undefined
+        const c = (jobEnabled && jobOverrideColor)
+          ? jobOverrideColor
           : (JOB_COLORS[job.toUpperCase()] ?? '#888888')
         style.color = c
         if (f.gradient !== undefined) {
@@ -714,8 +667,10 @@ export function useBarStyles(
         const roleKey = role as Role
         const roleOverride = overrides?.byRole?.[roleKey]
         const roleEnabled = overrides?.byRoleEnabled?.[roleKey] ?? true
-        const c = (roleEnabled && roleOverride?.fill?.color)
-          ? roleOverride.fill.color
+        const roleFill = roleOverride?.fill
+        const roleOverrideColor = (roleFill && roleFill.type === 'solid') ? roleFill.color : undefined
+        const c = (roleEnabled && roleOverrideColor)
+          ? roleOverrideColor
           : (FIELD_ROLE_COLORS[role] ?? '#888888')
         style.color = c
         if (f.gradient !== undefined) {
@@ -731,8 +686,10 @@ export function useBarStyles(
       // selfMode: post-process overlay — combinable with any colorMode
       // When selfMode is true and bar is self, override color with Self style override color
       if (f.selfMode && isSelf) {
-        const selfC = (overrides?.selfEnabled && overrides?.self?.fill?.color)
-          ? overrides.self.fill.color
+        const selfFill = overrides?.self?.fill
+        const selfOverrideColor = (selfFill && selfFill.type === 'solid') ? selfFill.color : undefined
+        const selfC = (overrides?.selfEnabled && selfOverrideColor)
+          ? selfOverrideColor
           : undefined
         if (selfC) {
           style.color = selfC

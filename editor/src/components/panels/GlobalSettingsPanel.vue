@@ -5,7 +5,7 @@ import BarSlider from '../controls/BarSlider.vue'
 import DragNumber from '../controls/DragNumber.vue'
 import ColorPicker from '../controls/ColorPicker.vue'
 import TextureEditor from '../controls/TextureEditor.vue'
-import type { GradientFill, TextureFill, BarStyle } from '@shared/configSchema'
+import type { GradientFill, TextureFill } from '@shared/configSchema'
 import { RANK1_THEMES } from '@shared/presets'
 import { CROWN_CUTE_SRC as CROWN_CUTE_DEFAULT } from '@shared/crownAssets'
 import {
@@ -21,7 +21,7 @@ const open = ref({ window: true, layout: false, values: false, animation: false,
 function toggle(k: keyof typeof open.value) { open.value[k] = !open.value[k] }
 
 function applyRank1Theme(themeKey: string) {
-  const theme = RANK1_THEMES[themeKey as keyof typeof RANK1_THEMES]
+  const theme = RANK1_THEMES[themeKey as keyof typeof RANK1_THEMES] as any
   if (!theme) return
   patch({
     rankIndicator: {
@@ -41,10 +41,10 @@ function onRank1ThemeChange(e: Event) {
   if (value) applyRank1Theme(value)
 }
 
-const windowTexture = computed(() => {
+const windowTexture = computed<TextureFill>(() => {
   const wb = g.value.windowBackground
   if (wb?.type === 'texture' && wb?.texture) return wb.texture
-  return { src: '', repeat: 'repeat', opacity: 1, blendMode: 'normal' }
+  return { src: '', repeat: 'repeat' as const, opacity: 1, blendMode: 'normal' }
 })
 
 function updateTexture(t: TextureFill) {
@@ -105,7 +105,11 @@ function onRank1Color2Change(c: string) {
 function patchRank1NameGradient(p: Partial<{ type: string; angle: number; stops: any[] }>) {
   const ns = g.value.rankIndicator?.rank1NameStyle
   const grad = ns?.gradient
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { ...ns, gradient: { type: p.type ?? grad?.type ?? 'linear', angle: p.angle ?? grad?.angle ?? 90, stops: p.stops ?? grad?.stops ?? [] } } } })
+  patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { enabled: ns?.enabled ?? false, ...ns, gradient: { type: (p.type ?? grad?.type ?? 'linear') as 'linear' | 'radial', angle: p.angle ?? grad?.angle ?? 90, stops: p.stops ?? grad?.stops ?? [] } } } })
+}
+
+function patchRank1Style(fields: Record<string, any>) {
+  patch({ rankIndicator: { ...g.value.rankIndicator, rank1Style: { ...g.value.rankIndicator?.rank1Style, ...fields } as any } })
 }
 
 function patchCrown(fields: Record<string, any>) {
@@ -113,7 +117,7 @@ function patchCrown(fields: Record<string, any>) {
 }
 
 function patchR1Icon(fields: Record<string, any>) {
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1IconStyle: { ...g.value.rankIndicator?.rank1IconStyle, ...fields } } })
+  patch({ rankIndicator: { ...g.value.rankIndicator, rank1IconStyle: { enabled: false, ...g.value.rankIndicator?.rank1IconStyle, ...fields } } })
 }
 
 function onCrownImageUpload(e: Event) {
@@ -199,16 +203,18 @@ const windowOpacity = computed(() => g.value.windowOpacity ?? 1)
 function setWindowOpacity(v: number) { patch({ windowOpacity: v }) }
 
 function setWbType(t: string) {
-  const base = g.value.windowBackground ?? { type: 'solid' as const, color: g.value.windowBg }
+  const wb = g.value.windowBackground
+  const existingColor = (wb as any)?.color ?? g.value.windowBg ?? 'rgba(0,0,0,0.6)'
   if (t === 'solid') {
-    patch({ windowBackground: { ...base, type: 'solid' as const } })
+    patch({ windowBackground: { type: 'solid', color: existingColor } })
   } else if (t === 'gradient') {
     patch({ windowBackground: { type: 'gradient', gradient: { type: 'linear' as const, angle: 180, stops: [
       { position: 0, color: '#0d0d1a' },
       { position: 1, color: '#1a1a2e' },
     ]} } })
   } else if (t === 'texture') {
-    patch({ windowBackground: { ...base, type: 'texture' as const } })
+    const existingTex = (wb?.type === 'texture' ? wb.texture : undefined) ?? { src: '', repeat: 'stretch' as const, opacity: 1, blendMode: 'normal' }
+    patch({ windowBackground: { type: 'texture', texture: existingTex } })
   }
 }
 
@@ -736,7 +742,7 @@ function onBrowseChange(e: Event) {
           <div class="row" v-if="!g.rankIndicator?.rank1Crown?.imageUrl">
             <label class="ctrl-label">Emoji</label>
             <input class="ctrl-input" style="width:60px" :value="g.rankIndicator?.rank1Crown?.icon ?? '👑'"
-              @input="e => patchCrown({ icon: ($event.target as HTMLInputElement).value })" />
+              @input="e => patchCrown({ icon: (e.target as HTMLInputElement).value })" />
           </div>
           <div class="row">
             <label class="ctrl-label">Size</label>
@@ -763,7 +769,7 @@ function onBrowseChange(e: Event) {
           <div class="row">
             <label class="ctrl-label">H Anchor</label>
             <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1Crown?.hAnchor ?? 'left'"
-              @change="e => patchCrown({ hAnchor: ($event.target as HTMLSelectElement).value as any })">
+              @change="e => patchCrown({ hAnchor: (e.target as HTMLSelectElement).value as any })">
               <option value="left">Left</option>
               <option value="center">Center</option>
               <option value="right">Right</option>
@@ -772,7 +778,7 @@ function onBrowseChange(e: Event) {
           <div class="row">
             <label class="ctrl-label">V Anchor</label>
             <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1Crown?.vAnchor ?? 'middle'"
-              @change="e => patchCrown({ vAnchor: ($event.target as HTMLSelectElement).value as any })">
+              @change="e => patchCrown({ vAnchor: (e.target as HTMLSelectElement).value as any })">
               <option value="top">Top</option>
               <option value="middle">Middle</option>
               <option value="bottom">Bottom</option>
@@ -903,7 +909,7 @@ function onBrowseChange(e: Event) {
             <div class="row">
               <label class="ctrl-label">Shape</label>
               <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1IconStyle?.bgShape?.shape ?? 'circle'"
-                @change="e => patchR1Icon({ bgShape: { ...g.rankIndicator?.rank1IconStyle?.bgShape, shape: ($event.target as HTMLSelectElement).value as any } })">
+                @change="e => patchR1Icon({ bgShape: { ...g.rankIndicator?.rank1IconStyle?.bgShape, shape: (e.target as HTMLSelectElement).value as any } })">
                 <option value="circle">Circle</option>
                 <option value="square">Square</option>
                 <option value="rounded">Rounded</option>

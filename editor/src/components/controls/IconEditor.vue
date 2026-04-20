@@ -14,6 +14,7 @@ function patch(p: Partial<IconConfig>) {
 
 const DEFAULT_BG_SHAPE = { enabled: false, shape: 'circle' as const, color: '#000000', size: 24, opacity: 0.5 }
 const DEFAULT_SHADOW = { enabled: false, color: '#000000', blur: 4, offsetX: 0, offsetY: 1, thickness: 1 }
+const DEFAULT_OUTLINE = { enabled: false, color: '#ffffff', width: 1 }
 
 const bgShape = computed(() => ({ ...DEFAULT_BG_SHAPE, ...props.modelValue.bgShape }))
 const shadow = computed(() => ({ ...DEFAULT_SHADOW, ...props.modelValue.shadow }))
@@ -26,7 +27,7 @@ function patchBgShape(p: Partial<IconConfig['bgShape']>) {
   const newBg = { ...bgShape.value, ...p }
   // Clear outline when bgShape is disabled
   if (p.enabled === false || (!newBg.enabled && props.modelValue.outline?.enabled)) {
-    patch({ bgShape: newBg, outline: { ...props.modelValue.outline, enabled: false } })
+    patch({ bgShape: newBg, outline: { ...DEFAULT_OUTLINE, ...props.modelValue.outline, enabled: false } })
   } else {
     patch({ bgShape: newBg })
   }
@@ -234,12 +235,12 @@ const open = reactive({ bgShape: false, shadow: false, outline: false, classOutl
         <div class="row">
           <label class="ctrl-label">Color</label>
           <ColorPicker :model-value="modelValue.outline?.color ?? '#000000'" label="Color"
-            @update:model-value="c => patch({ outline: { ...(modelValue.outline ?? {}), color: c } })" />
+            @update:model-value="c => patch({ outline: { ...DEFAULT_OUTLINE, ...(modelValue.outline ?? {}), color: c } })" />
         </div>
         <div class="row">
           <label class="ctrl-label">Width</label>
           <DragNumber :model-value="modelValue.outline?.width ?? 1" :min="0" :max="8" :step="1" unit="px" :speed="1"
-            @update:model-value="v => patch({ outline: { ...(modelValue.outline ?? {}), width: v } })" />
+            @update:model-value="v => patch({ outline: { ...DEFAULT_OUTLINE, ...(modelValue.outline ?? {}), width: v } })" />
         </div>
       </div>
       <div v-if="!bgShape.enabled && open.outline" class="hint">

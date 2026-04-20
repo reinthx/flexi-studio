@@ -6,21 +6,13 @@ import { JOB_COLORS } from '@shared/presets'
 import ColorPicker from './ColorPicker.vue'
 
 const config = useConfigStore()
-const def = computed(() => config.profile.default)
 const overrides = computed(() => config.profile.overrides)
-
-const isGradient = computed(() => {
-  const fill = def.value.fill
-  if (fill?.type === 'gradient') return true
-  if (fill?.type === 'texture' && fill.texture?.tintGradient) return true
-  return false
-})
 
 const collapsed = ref({ self: true, roles: true, jobs: true })
 
 const ROLES: Role[] = ['tank', 'healer', 'melee', 'ranged', 'caster']
 const ROLE_LABELS: Record<Role, string> = {
-  tank: 'Tank', healer: 'Healer', melee: 'Melee', ranged: 'Ranged', caster: 'Caster'
+  tank: 'Tank', healer: 'Healer', melee: 'Melee', ranged: 'Ranged', caster: 'Caster', unknown: 'Unknown'
 }
 
 // Jobs grouped by role for display
@@ -33,12 +25,12 @@ const JOB_GROUPS: { role: Role; jobs: Job[] }[] = [
 ]
 
 const ROLE_COLORS: Record<Role, string> = {
-  tank: '#4a90d9', healer: '#52b788', melee: '#e63946', ranged: '#f4a261', caster: '#9b5de5'
+  tank: '#4a90d9', healer: '#52b788', melee: '#e63946', ranged: '#f4a261', caster: '#9b5de5', unknown: '#888888'
 }
 
 // Collapsed state for each job sub-group
 const jobGroupOpen = ref<Record<Role, boolean>>({
-  tank: false, healer: false, melee: false, ranged: false, caster: false,
+  tank: false, healer: false, melee: false, ranged: false, caster: false, unknown: false,
 })
 
 function getRoleColor(role: Role): string {

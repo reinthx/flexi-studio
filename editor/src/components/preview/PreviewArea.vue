@@ -55,7 +55,6 @@ const { height: winH } = useElementSize(meterRef)
 
 // Window background — from global config (falls back to default)
 const windowBg = computed(() => g.value.windowBg ?? 'rgba(0,0,0,0.6)')
-const barHeight = computed(() => profile.value.default.height)
 const windowFillStyle = computed(() => {
   const fill = g.value.windowBackground ?? { type:'solid', color: windowBg.value }
   return buildFillCss(fill)
@@ -109,7 +108,6 @@ function toggleHeaderPin() {
             :bar="bar" :style-config="bar.style"
             :orientation="g.orientation" :show-rank="g.rankIndicator.showNumbers"
             :container-height="winH"
-            :auto-scale="g.autoScale"
             :value-format="g.valueFormat"
             :bar-index="bar.barIndex"
             :tab-label-config="activeTabLabelConfig"

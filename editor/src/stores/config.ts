@@ -4,6 +4,7 @@ import { callHandler } from '@shared/overlayBridge'
 import { deepClone, deepMerge } from '@shared/index'
 import { DEFAULT_PROFILE } from '@shared/presets'
 import { loadFontBatch } from '@shared/googleFonts'
+import { parseProfileSafe } from '@shared/profileValidator'
 import type { Profile, BarStyle, GlobalConfig, StyleOverrides } from '@shared/configSchema'
 
 export const useConfigStore = defineStore('config', () => {
@@ -17,25 +18,30 @@ export const useConfigStore = defineStore('config', () => {
     try {
       const res = await callHandler({ call: 'loadData', key: 'act-flexi-profile' }) as { data?: string }
       if (res?.data) {
-        const saved = JSON.parse(res.data)
-        suppressNextDirty = true
-        profile.value = deepMerge(deepClone(DEFAULT_PROFILE), saved)
-        loadFontBatch(profile.value)
-        dirty.value = false
-        return true
+        const parsed = parseProfileSafe(res.data)
+        if (parsed) {
+          suppressNextDirty = true
+          profile.value = deepMerge(deepClone(DEFAULT_PROFILE), parsed as Profile)
+          loadFontBatch(profile.value)
+          dirty.value = false
+          return true
+        }
+        console.warn('[config] OverlayPlugin returned malformed profile, trying localStorage')
       }
     } catch { /* OverlayPlugin not available */ }
 
     // Fallback: localStorage
     const saved = localStorage.getItem('act-flexi-profile')
     if (saved) {
-      try {
+      const parsed = parseProfileSafe(saved)
+      if (parsed) {
         suppressNextDirty = true
-        profile.value = deepMerge(deepClone(DEFAULT_PROFILE), JSON.parse(saved))
+        profile.value = deepMerge(deepClone(DEFAULT_PROFILE), parsed as Profile)
         loadFontBatch(profile.value)
         dirty.value = false
         return true
-      } catch { /* keep default */ }
+      }
+      console.warn('[config] corrupt localStorage profile, using default')
     }
     return false
   }
@@ -68,16 +74,15 @@ export const useConfigStore = defineStore('config', () => {
 
   // ── Mutators — default bar style ───────────────────────────────────────────
   function patchDefault(patch: Partial<BarStyle>): void {
-    let current = JSON.parse(JSON.stringify(profile.value.default)) as BarStyle
-    for (const key of Object.keys(patch) as (keyof BarStyle)[]) {
-      const srcVal = patch[key]
+    let current = JSON.parse(JSON.stringify(profile.value.default)) as Record<string, any>
+    for (const [key, srcVal] of Object.entries(patch)) {
       if (srcVal !== null && typeof srcVal === 'object' && !Array.isArray(srcVal)) {
-        current[key] = { ...current[key], ...srcVal } as BarStyle[keyof BarStyle]
+        current[key] = { ...current[key], ...srcVal }
       } else if (srcVal !== undefined) {
         current[key] = srcVal
       }
     }
-    profile.value.default = current
+    profile.value.default = current as BarStyle
   }
 
   function setDefaultFill(fill: BarStyle['fill']): void {

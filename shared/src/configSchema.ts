@@ -163,6 +163,7 @@ export interface IconShadow {
   blur: number
   offsetX: number
   offsetY: number
+  thickness?: number
 }
 
 export interface IconConfig {

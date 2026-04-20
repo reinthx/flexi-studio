@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { usePresetsStore, type CustomPreset } from '../../stores/presets'
-import { useConfigStore } from '../../stores/config'
 
 const store = usePresetsStore()
-const config = useConfigStore()
 
 // ── Confirm modal ────────────────────────────────────────────────────────────
 const showConfirmModal = ref(false)

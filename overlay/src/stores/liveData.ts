@@ -21,12 +21,15 @@ import {
   deepClone,
   deepMerge,
   RAID_BUFFS,
+  isProfileLike,
+  parseProfileSafe,
 } from '@shared'
 import type {
   CombatDataEvent,
   ChangePrimaryPlayerEvent,
   ChangeZoneEvent,
   PartyChangedEvent,
+  PartyMember,
   BroadcastMessageEvent,
   LogLineEvent,
   Profile,
@@ -59,7 +62,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
   const selfName = ref('')
   const zone = ref('')
   const partyNames = ref<Set<string>>(new Set())
-  const partyData = ref<{ id: number; name: string; inParty: boolean; partyType?: string; job?: string }[]>([])
+  const partyData = ref<PartyMember[]>([])
   const frame = shallowRef<Frame | null>(null)
   const sessionPulls = ref<PullRecord[]>([])
   const viewingPull = ref<number | null>(null)  // null = live
@@ -92,6 +95,24 @@ export const useLiveDataStore = defineStore('liveData', () => {
   const currentCastData = ref<Record<string, CastEvent[]>>({})
   // HP/MP samples used by Breakdown Casts resource graphs.
   const currentResourceData = ref<Record<string, ResourceSample[]>>({})
+  // Status effect id -> latest human-readable effect name from GainsEffect lines.
+  const currentEffectNames = new Map<string, string>()
+  interface ActiveTickEffect { effectId: string; effectName: string; expiresAt: number }
+  const activeTickEffects = new Map<string, ActiveTickEffect[]>()
+
+  const JOB_TICK_FALLBACKS: Record<string, Partial<Record<'DoT' | 'HoT', string>>> = {
+    CNJ: { DoT: 'Aero II', HoT: 'Regen' },
+    WHM: { DoT: 'Dia', HoT: 'Regen' },
+    SCH: { DoT: 'Biolysis' },
+    AST: { DoT: 'Combust III' },
+    SGE: { DoT: 'Eukrasian Dosis' },
+    BLM: { DoT: 'Thunder' },
+    THM: { DoT: 'Thunder' },
+    MNK: { DoT: 'Demolish' },
+    DRG: { DoT: 'Chaotic Spring' },
+    SAM: { DoT: 'Higanbana' },
+    GNB: { DoT: 'Sonic Break' },
+  }
 
   // Track resurrection events: player name -> resurrection timestamp (ms since pull start)
   const resurrectTimes = ref<Record<string, number>>({})
@@ -99,14 +120,16 @@ export const useLiveDataStore = defineStore('liveData', () => {
   const pendingDeathUpdates = new Map<string, number>()  // targetName -> death index in currentDeaths
 
   // rDPS tracking — raid buff windows and damage contribution accumulators
-  interface ActiveRaidBuff { sourceName: string; multiplier: number }
-  const activeRaidBuffs  = new Map<string, ActiveRaidBuff[]>()  // targetName → active windows
+  interface ActiveRaidBuff { sourceName: string; effectName: string; multiplier: number; expiresAt: number }
+  const activeRaidBuffs  = new Map<string, ActiveRaidBuff[]>()  // buffed player/debuffed enemy name → active windows
   const rDpsContributed  = new Map<string, number>()  // sourceName → raw damage contributed via buffs
   const rDpsReceived     = new Map<string, number>()  // dealerName → raw damage boosted by others' buffs
 
   let pullStartTime = 0
+  const lastKnownHp = new Map<string, { currentHp: number; maxHp: number }>()
 
   // BroadcastChannel to push ability data to popout windows.
+  const BREAKDOWN_SNAPSHOT_KEY = 'flexi-breakdown-snapshot'
   let breakdownChannel: BroadcastChannel | null = null
   let broadcastTimer: ReturnType<typeof setTimeout> | null = null
   type PullListEntry = {
@@ -237,8 +260,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return parseInt(s, 10) || 0
   }
 
-  function broadcastEncounterData(selectedCombatant?: string): void {
-    const pullIndex = viewingPull.value
+  function buildBreakdownPayload(selectedCombatant?: string, requestedPullIndex = viewingPull.value) {
+    const pullIndex = requestedPullIndex
     const pull = pullIndex === null ? null : sessionPulls.value[pullIndex]
     const abilityData    = pullIndex === null ? deepClone(currentAbilityData.value)      : deepClone(pull?.abilityData      ?? {})
     const dpsTimeline    = pullIndex === null ? deepClone(currentTimeline.value)          : deepClone(pull?.dpsTimeline      ?? {})
@@ -267,7 +290,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       ? parseDurationToSec(frame.value?.encounterDuration ?? '')
       : parseInt(pull?.encounter?.['DURATION'] ?? '0', 10)
     const timestamp = Date.now()
-    breakdownChannel?.postMessage({
+    return {
       type: 'encounterData',
       timestamp,
       abilityData,
@@ -281,7 +304,22 @@ export const useLiveDataStore = defineStore('liveData', () => {
       pullIndex,
       selectedCombatant,
       pullList: buildPullList(),
-    })
+    }
+  }
+
+  function persistBreakdownPayload(payload: ReturnType<typeof buildBreakdownPayload>): void {
+    if (typeof localStorage === 'undefined') return
+    try {
+      localStorage.setItem(BREAKDOWN_SNAPSHOT_KEY, JSON.stringify(payload))
+    } catch {
+      // Best-effort handoff for new popout windows; BroadcastChannel remains primary.
+    }
+  }
+
+  function broadcastEncounterData(selectedCombatant?: string): void {
+    const payload = buildBreakdownPayload(selectedCombatant)
+    persistBreakdownPayload(payload)
+    breakdownChannel?.postMessage(payload)
   }
 
   // Debounced — LogLine events fire per-hit; we don't need a broadcast per hit.
@@ -425,7 +463,6 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const maxVal = parseFloat(filtered[0]?.[g.dpsType] ?? '1') || 1
 
     // For DTPS, we need to calculate from damagetaken / DURATION (integer seconds from ACT)
-    const encounterDuration = parseFloat(event.Encounter['DURATION'] ?? '0')
     const getDtpsValue = (c: Record<string, string>) => {
       if (g.dpsType !== 'dtps') return 0
       const dt = parseFloat(c['damagetaken'] ?? '0')
@@ -506,11 +543,46 @@ export const useLiveDataStore = defineStore('liveData', () => {
   // Upper 16 bits = base damage. If lower 16 bits have 0x4000 set, damage extends
   // past 65535: actual = upper | ((lower & 0x3FFF) + 1) << 16.
   // Reference: https://github.com/OverlayPlugin/cactbot/blob/main/docs/LogGuide.md
-  // Attribute a damage event to any raid buffs currently active on the target.
+  // Attribute player damage against enemies to buffs on the dealer and debuffs on the target.
   // Contribution = damage × (multiplier − 1) per active window. Skips self-buffs.
-  function attributeRaidBuffContribution(dealerName: string, targetName: string, damage: number): void {
+  function isPlayerId(id: string): boolean {
+    return id.startsWith('10')
+  }
+
+  function isEnemyId(id: string): boolean {
+    return id.startsWith('40')
+  }
+
+  function currentPullOffsetMs(): number {
+    return pullStartTime > 0 ? Date.now() - pullStartTime : 0
+  }
+
+  function activeBuffWindowsFor(name: string, nowMs: number): ActiveRaidBuff[] {
+    const windows = activeRaidBuffs.get(name)
+    if (!windows || windows.length === 0) return []
+    const active = windows.filter(window => window.expiresAt > nowMs)
+    if (active.length !== windows.length) {
+      if (active.length > 0) activeRaidBuffs.set(name, active)
+      else activeRaidBuffs.delete(name)
+    }
+    return active
+  }
+
+  function attributeRaidBuffContribution(
+    dealerName: string,
+    dealerId: string,
+    targetName: string,
+    targetId: string,
+    damage: number,
+  ): void {
     if (!dealerName || !targetName || damage <= 0) return
-    const windows = activeRaidBuffs.get(targetName)
+    if (!isPlayerId(dealerId) || !isEnemyId(targetId)) return
+
+    const nowMs = currentPullOffsetMs()
+    const windows = [
+      ...activeBuffWindowsFor(dealerName, nowMs),
+      ...activeBuffWindowsFor(targetName, nowMs),
+    ]
     if (!windows || windows.length === 0) return
     for (const w of windows) {
       if (w.sourceName === dealerName) continue
@@ -529,6 +601,92 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return lower & 0x4000
       ? upper | (((lower & 0x3FFF) + 1) << 16)
       : upper
+  }
+
+  function decodeTickAmount(hex: string, targetMaxHp?: number): number {
+    if (!hex || hex === '0') return 0
+    const n = parseInt(hex, 16)
+    if (!Number.isFinite(n)) return 0
+
+    const plausibleCeiling = Number.isFinite(targetMaxHp) && (targetMaxHp ?? 0) > 0
+      ? Math.max(targetMaxHp as number * 2, 1_000_000)
+      : 1_000_000
+    if (n <= plausibleCeiling) return n
+
+    const lower20 = n & 0xFFFFF
+    if (lower20 > 0 && lower20 <= plausibleCeiling) return lower20
+
+    const lower16 = n & 0xFFFF
+    return lower16 > 0 ? lower16 : n
+  }
+
+  function normalizeEffectId(effectId: string): string {
+    return (effectId || '').trim().toUpperCase()
+  }
+
+  function recordEffectName(effectId: string, effectName: string): void {
+    const key = normalizeEffectId(effectId)
+    const name = effectName?.trim()
+    if (!key || key === '0' || !name) return
+    currentEffectNames.set(key, name)
+  }
+
+  function tickEffectKey(sourceId: string, targetId: string): string {
+    return `${sourceId || ''}|${targetId || ''}`
+  }
+
+  function recordActiveTickEffect(sourceId: string, targetId: string, effectId: string, effectName: string, durationSec: number): void {
+    const name = effectName?.trim()
+    if (!sourceId || !targetId || !name || !Number.isFinite(durationSec) || durationSec <= 0) return
+    const key = tickEffectKey(sourceId, targetId)
+    const nowMs = currentPullOffsetMs()
+    const effects = (activeTickEffects.get(key) ?? []).filter(effect => effect.expiresAt > nowMs)
+    effects.push({
+      effectId: normalizeEffectId(effectId),
+      effectName: name,
+      expiresAt: nowMs + durationSec * 1000,
+    })
+    activeTickEffects.set(key, effects)
+  }
+
+  function activeTickEffectName(sourceId: string, targetId: string): string | undefined {
+    const key = tickEffectKey(sourceId, targetId)
+    const effects = activeTickEffects.get(key)
+    if (!effects || effects.length === 0) return undefined
+    const nowMs = currentPullOffsetMs()
+    const active = effects.filter(effect => effect.expiresAt > nowMs)
+    if (active.length !== effects.length) {
+      if (active.length > 0) activeTickEffects.set(key, active)
+      else activeTickEffects.delete(key)
+    }
+    const names = [...new Set(active.map(effect => effect.effectName))]
+    return names.length === 1 ? names[0] : undefined
+  }
+
+  function jobTickFallbackName(kind: 'DoT' | 'HoT', sourceName: string, targetId: string): string | undefined {
+    if (kind === 'HoT' && !isPlayerId(targetId)) return undefined
+    const job = normalizeJob(currentCombatantJobs.value[sourceName] ?? '')
+    return job ? JOB_TICK_FALLBACKS[job]?.[kind] : undefined
+  }
+
+  function removeActiveTickEffect(sourceId: string, targetId: string, effectId: string, effectName: string): void {
+    const key = tickEffectKey(sourceId, targetId)
+    const effects = activeTickEffects.get(key)
+    if (!effects) return
+    const normalizedId = normalizeEffectId(effectId)
+    const next = effects.filter(effect =>
+      effect.effectId !== normalizedId || effect.effectName !== effectName,
+    )
+    if (next.length > 0) activeTickEffects.set(key, next)
+    else activeTickEffects.delete(key)
+  }
+
+  function tickAbilityName(kind: 'DoT' | 'HoT', effectId: string, sourceId: string, sourceName: string, targetId: string): string {
+    const key = normalizeEffectId(effectId)
+    return currentEffectNames.get(key)
+      ?? activeTickEffectName(sourceId, targetId)
+      ?? jobTickFallbackName(kind, sourceName, targetId)
+      ?? `${kind} (${effectId || 'unknown'})`
   }
 
 
@@ -673,6 +831,27 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const samples = hpSampleBuffer.get(name)!
     samples.push({ t, currentHp: safeCurrentHp, maxHp, hp })
     if (samples.length > 200) samples.splice(0, samples.length - 200)
+  }
+
+  function recordKnownHp(name: string, currentHp: number, maxHp: number): void {
+    if (!name || !Number.isFinite(currentHp) || !Number.isFinite(maxHp) || maxHp <= 0) return
+    lastKnownHp.set(name, {
+      currentHp: Math.max(0, Math.min(currentHp, maxHp)),
+      maxHp,
+    })
+  }
+
+  function appliedHealingAmount(targetName: string, rawHeal: number, currentHp: number, maxHp: number): number {
+    if (rawHeal <= 0) return 0
+    if (!targetName || !Number.isFinite(currentHp) || !Number.isFinite(maxHp) || maxHp <= 0) return rawHeal
+
+    const safeCurrentHp = Math.max(0, Math.min(currentHp, maxHp))
+    const previous = lastKnownHp.get(targetName)
+    if (previous && previous.maxHp > 0) {
+      return Math.max(0, Math.min(rawHeal, safeCurrentHp - previous.currentHp))
+    }
+
+    return safeCurrentHp >= maxHp ? 0 : rawHeal
   }
 
   let lastResourceSampleTime = new Map<string, number>()
@@ -854,7 +1033,6 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
       recordCombatantId(sourceName, sourceId)
       recordCombatantId(targetName, targetId)
-      if (targetName) recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
       if (effectiveName && abilityId) {
         recordCastEvent(effectiveName, abilityId, abilityName, targetName, 'instant')
       }
@@ -868,17 +1046,22 @@ export const useLiveDataStore = defineStore('liveData', () => {
           recordDamageTaken(targetName, abilityId, abilityName, damage)
           recordTimelineBucket(currentDtakenTimeline.value, targetName, damage)
           recordHitEvent(targetName, 'dmg', abilityName, effectiveName, damage, tgtCurrentHp, tgtMaxHp)
-          attributeRaidBuffContribution(effectiveName, targetName, damage)
+          attributeRaidBuffContribution(effectiveName, petOwnerName ? parts[47] : sourceId, targetName, targetId, damage)
+          recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
+          recordKnownHp(targetName, tgtCurrentHp, tgtMaxHp)
         }
         scheduleBroadcast()
       } else if (flagByte === 0x04) {
         // Heal hit — attribute to source for HPS, to target for incoming heals
         const heal = decodeLogDamage(damageHex)
         if (heal === 0 || !effectiveName) return
-        recordTimelineBucket(currentHealTimeline.value, effectiveName, heal)
+        const appliedHeal = appliedHealingAmount(targetName, heal, tgtCurrentHp, tgtMaxHp)
+        if (appliedHeal > 0) recordTimelineBucket(currentHealTimeline.value, effectiveName, appliedHeal)
         if (targetName) {
-          if (abilityId) recordHealingReceived(targetName, abilityId, abilityName, heal)
-          recordHitEvent(targetName, 'heal', abilityName, effectiveName, heal, tgtCurrentHp, tgtMaxHp)
+          if (abilityId && appliedHeal > 0) recordHealingReceived(targetName, abilityId, abilityName, appliedHeal)
+          if (appliedHeal > 0) recordHitEvent(targetName, 'heal', abilityName, effectiveName, appliedHeal, tgtCurrentHp, tgtMaxHp)
+          recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
+          recordKnownHp(targetName, tgtCurrentHp, tgtMaxHp)
         }
         scheduleBroadcast()
       }
@@ -901,30 +1084,36 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
       recordCombatantId(sourceName, sourceId)
       recordCombatantId(targetName, targetId)
-      if (targetName) recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
 
       if (dotType === 'DoT') {
         if (!sourceName || !effectId) return
-        const damage = decodeLogDamage(damageHex)
+        const abilityName = tickAbilityName('DoT', effectId, sourceId, sourceName, targetId)
+        const damage = decodeTickAmount(damageHex, tgtMaxHp)
         if (damage === 0) return
-        recordAbilityHit(sourceName, `dot:${effectId}`, `DoT (${effectId})`, damage)
-        recordCastEvent(sourceName, `dot:${effectId}`, `DoT (${effectId})`, targetName, 'tick')
+        recordAbilityHit(sourceName, `dot:${effectId}`, abilityName, damage)
+        recordCastEvent(sourceName, `dot:${effectId}`, abilityName, targetName, 'tick')
         if (targetName) {
-          recordDamageTaken(targetName, `dot:${effectId}`, `DoT (${effectId})`, damage)
+          recordDamageTaken(targetName, `dot:${effectId}`, abilityName, damage)
           recordTimelineBucket(currentDtakenTimeline.value, targetName, damage)
-          recordHitEvent(targetName, 'dmg', `DoT (${effectId})`, sourceName, damage, tgtCurrentHp, tgtMaxHp)
-          attributeRaidBuffContribution(sourceName, targetName, damage)
+          recordHitEvent(targetName, 'dmg', abilityName, sourceName, damage, tgtCurrentHp, tgtMaxHp)
+          attributeRaidBuffContribution(sourceName, sourceId, targetName, targetId, damage)
+          recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
+          recordKnownHp(targetName, tgtCurrentHp, tgtMaxHp)
         }
         scheduleBroadcast()
       } else if (dotType === 'HoT') {
         if (!sourceName) return
-        const heal = decodeLogDamage(damageHex)
+        const abilityName = tickAbilityName('HoT', effectId, sourceId, sourceName, targetId)
+        const heal = decodeTickAmount(damageHex, tgtMaxHp)
         if (heal === 0) return
-        recordTimelineBucket(currentHealTimeline.value, sourceName, heal)
-        recordCastEvent(sourceName, `dot:${effectId}`, `HoT (${effectId})`, targetName, 'tick')
+        const appliedHeal = appliedHealingAmount(targetName, heal, tgtCurrentHp, tgtMaxHp)
+        if (appliedHeal > 0) recordTimelineBucket(currentHealTimeline.value, sourceName, appliedHeal)
+        recordCastEvent(sourceName, `hot:${effectId}`, abilityName, targetName, 'tick')
         if (targetName) {
-          recordHealingReceived(targetName, `hot:${effectId}`, `HoT (${effectId})`, heal)
-          recordHitEvent(targetName, 'heal', `HoT (${effectId})`, sourceName, heal, tgtCurrentHp, tgtMaxHp)
+          if (appliedHeal > 0) recordHealingReceived(targetName, `hot:${effectId}`, abilityName, appliedHeal)
+          if (appliedHeal > 0) recordHitEvent(targetName, 'heal', abilityName, sourceName, appliedHeal, tgtCurrentHp, tgtMaxHp)
+          recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
+          recordKnownHp(targetName, tgtCurrentHp, tgtMaxHp)
         }
         scheduleBroadcast()
       }
@@ -961,21 +1150,31 @@ export const useLiveDataStore = defineStore('liveData', () => {
       // NetworkGainsEffect
       // parts: [0]=type [1]=ts [2]=effectId [3]=effectName [4]=durationSec
       //        [5]=sourceId [6]=sourceName [7]=targetId [8]=targetName
+      const effectId = parts[2]
       const effectName = parts[3]
       const durationSec = parseFloat(parts[4])
+      const sourceId = parts[5]
       const sourceName = parts[6]
       const targetId = parts[7]
       const targetName = parts[8]
       if (!targetId || !targetName) return
+      recordEffectName(effectId, effectName)
+      recordActiveTickEffect(sourceId, targetId, effectId, effectName, durationSec)
       attachBuffDuration(sourceName, targetName, effectName, Math.round(durationSec * 1000))
 
       // rDPS: track raid buff windows (source must differ from target)
-      if (sourceName && targetName && sourceName !== targetName) {
+      if (isPlayerId(sourceId) && sourceName && targetName && sourceName !== targetName) {
         const buffKey = effectName?.trim().toLowerCase()
         const buff = buffKey ? RAID_BUFFS[buffKey] : undefined
         if (buff) {
           const windows = activeRaidBuffs.get(targetName) ?? []
-          windows.push({ sourceName, multiplier: buff.multiplier })
+          const durationMs = Number.isFinite(durationSec) ? Math.max(0, durationSec * 1000) : 0
+          windows.push({
+            sourceName,
+            effectName,
+            multiplier: buff.multiplier,
+            expiresAt: currentPullOffsetMs() + durationMs,
+          })
           activeRaidBuffs.set(targetName, windows)
         }
       }
@@ -1002,16 +1201,20 @@ export const useLiveDataStore = defineStore('liveData', () => {
       // parts: [0]=type [1]=ts [2]=effectId [3]=effectName [4]=duration
       //        [5]=sourceId [6]=sourceName [7]=targetId [8]=targetName
       const effectName = parts[3]
+      const effectId = parts[2]
+      const sourceId = parts[5]
       const sourceName = parts[6]
+      const targetId = parts[7]
       const targetName = parts[8]
       if (!effectName || !sourceName || !targetName) return
+      removeActiveTickEffect(sourceId, targetId, effectId, effectName)
       const buffKey = effectName.trim().toLowerCase()
       if (!RAID_BUFFS[buffKey]) return
       const windows = activeRaidBuffs.get(targetName)
       if (!windows) return
       let idx = -1
       for (let i = windows.length - 1; i >= 0; i--) {
-        if (windows[i].sourceName === sourceName) { idx = i; break }
+        if (windows[i].sourceName === sourceName && windows[i].effectName === effectName) { idx = i; break }
       }
       if (idx !== -1) windows.splice(idx, 1)
     }
@@ -1030,8 +1233,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
     currentDeaths.value = []
     hpSampleBuffer.clear()
     hitEventBuffer.clear()
+    lastKnownHp.clear()
     currentCastData.value = {}
     currentResourceData.value = {}
+    currentEffectNames.clear()
+    activeTickEffects.clear()
     resurrectTimes.value = {}
     pendingDeathUpdates.clear()
     lastResourceSampleTime.clear()
@@ -1124,7 +1330,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   function onPartyChanged(event: PartyChangedEvent): void {
     partyNames.value = new Set(event.party.map(p => p.name))
-    partyData.value = event.party.map(p => ({ id: p.id, name: p.name, inParty: p.inParty, partyType: p.partyType, job: normalizeJob(p.job ?? '') }))
+    partyData.value = event.party.map(p => ({ id: p.id, name: p.name, worldId: p.worldId, inParty: p.inParty, partyType: p.partyType, job: normalizeJob(p.job ?? '') }))
     for (const member of event.party) {
       const job = normalizeJob(member.job ?? '')
       if (member.name && job) currentCombatantJobs.value[member.name] = job
@@ -1141,10 +1347,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (event.key === 'act-flexi-github-sync' && event.newValue) {
       try {
         const message = JSON.parse(event.newValue)
-        if (message.source === 'act-flexi-editor') {
+        if (message?.source === 'act-flexi-editor' && isProfileLike(message.msg)) {
           applyConfig(message.msg as Profile)
         }
-      } catch (e) {
+      } catch {
         /* corrupt sync message */
       }
     }
@@ -1158,11 +1364,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (item) {
       try {
         const message = JSON.parse(item)
-        if (message.source === 'act-flexi-editor' && message.timestamp !== lastConfigTimestamp) {
+        if (message?.source === 'act-flexi-editor' && message.timestamp !== lastConfigTimestamp && isProfileLike(message.msg)) {
           lastConfigTimestamp = message.timestamp
           applyConfig(message.msg as Profile)
         }
-      } catch (e) {
+      } catch {
         /* corrupt sync message */
       }
     }
@@ -1171,10 +1377,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const persistent = localStorage.getItem('act-flexi-profile') || localStorage.getItem('act-flexi-overlay-config')
       if (persistent && !lastPersistentConfig) {
         lastPersistentConfig = persistent
-        try {
-          applyConfig(JSON.parse(persistent))
-        } catch (e) {
-          console.warn('Failed to parse persistent config:', e)
+        const parsed = parseProfileSafe(persistent)
+        if (parsed) {
+          applyConfig(parsed as Profile)
+        } else {
+          console.warn('[liveData] persistent config is malformed, skipping')
         }
       }
       pollCount++
@@ -1212,48 +1419,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
           broadcastEncounterData()
         } else if (e.data?.type === 'loadPull') {
           const idx: number | null = e.data.index ?? null
-          const pull = idx === null ? null : sessionPulls.value[idx]
-          const abilityData     = idx === null ? deepClone(currentAbilityData.value)       : deepClone(pull?.abilityData      ?? {})
-          const dpsTimeline     = idx === null ? deepClone(currentTimeline.value)           : deepClone(pull?.dpsTimeline      ?? {})
-          const hpsTimeline     = idx === null ? deepClone(currentHealTimeline.value)       : deepClone(pull?.hpsTimeline      ?? {})
-          const dtakenTimeline  = idx === null ? deepClone(currentDtakenTimeline.value)     : deepClone(pull?.dtakenTimeline   ?? {})
-          const damageTakenData = idx === null ? deepClone(currentDtakenData.value)         : deepClone(pull?.damageTakenData  ?? {})
-          const healingReceivedData = idx === null ? deepClone(currentHealingReceivedData.value) : deepClone(pull?.healingReceivedData ?? {})
-          const rdpsByCombatant = idx === null
-            ? deepClone(currentRdpsByCombatant.value)
-            : Object.fromEntries((pull?.combatants ?? []).map(c => [c.name, parseFloat(c.rdps ?? '0') || 0]))
-          const liveDuration = parseDurationToSec(frame.value?.encounterDuration ?? '')
-          const rdpsGiven = idx === null
-            ? mapToRateRecord(rDpsContributed, liveDuration)
-            : deepClone(pull?.rdpsGiven ?? {})
-          const rdpsTaken = idx === null
-            ? mapToRateRecord(rDpsReceived, liveDuration)
-            : deepClone(pull?.rdpsTaken ?? {})
-          const deaths          = idx === null ? deepClone(currentDeaths.value)             : deepClone(pull?.deaths           ?? [])
-          const combatantIds    = idx === null ? deepClone(currentCombatantIds.value)       : deepClone(pull?.combatantIds     ?? {})
-          const combatantJobs   = idx === null ? deepClone(currentCombatantJobs.value)      : deepClone(pull?.combatantJobs    ?? {})
-          const castData        = idx === null ? deepClone(currentCastData.value)           : deepClone(pull?.castData         ?? {})
-          const resourceData    = idx === null ? deepClone(currentResourceData.value)       : deepClone(pull?.resourceData     ?? {})
-          const partyDataHistorical = idx === null ? partyData.value : (pull?.partyData ?? [])
-          const partyNamesHistorical = idx === null ? partyNames.value : new Set((pull?.partyData ?? []).map(p => p.name))
-          const encounterDurationSec = idx === null
-            ? parseDurationToSec(frame.value?.encounterDuration ?? '')
-            : parseInt(pull?.encounter?.['DURATION'] ?? '0', 10)
-          const timestamp = Date.now()
-          breakdownChannel?.postMessage({
-            type: 'encounterData',
-            timestamp,
-            abilityData,
-            dpsTimeline, hpsTimeline, dtakenTimeline,
-            damageTakenData, healingReceivedData, rdpsByCombatant, rdpsGiven, rdpsTaken, deaths, combatantIds, combatantJobs, castData, resourceData,
-            selfName: selfName.value,
-            blurNames: profile.value.global.blurNames ?? false,
-            partyNames: Array.from(partyNamesHistorical),
-            partyData: partyDataHistorical.map(p => ({ id: p.id, name: p.name, inParty: p.inParty, partyType: p.partyType, job: p.job })),
-            encounterDurationSec,
-            pullIndex: idx,
-            pullList: buildPullList(),
-          })
+          const payload = buildBreakdownPayload(undefined, idx)
+          persistBreakdownPayload(payload)
+          breakdownChannel?.postMessage(payload)
         }
       }
     }

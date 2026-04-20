@@ -3,21 +3,15 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useLiveDataStore } from '../stores/liveData'
 import MeterBar from './MeterBar.vue'
 import MeterHeader from './MeterHeader.vue'
-import type { BarStyle, TabConfig } from '@shared/configSchema'
+import type { BarStyle } from '@shared/configSchema'
 import { resolveBarStyle } from '@shared/styleResolver'
 import { buildFillCss } from '@shared/cssBuilder'
 import { loadCustomFont } from '@shared/googleFonts'
-import { nextTick } from 'vue'
 import ScrollableBarsWrapper from '@shared/components/ScrollableBarsWrapper.vue'
 
 const store = useLiveDataStore()
 const g = computed(() => store.profile.global)
 const frame = computed(() => store.frame)
-
-const activeTabLabelConfig = computed(() => {
-  if (!g.value.tabsEnabled) return undefined
-  return g.value.tabs?.find((t: TabConfig) => t.id === g.value.activeTab)?.labelConfig
-})
 
 const openEditor = () => {
   const url = new URL(window.location.href)
@@ -36,6 +30,8 @@ interface ResolvedBar {
   directhit: string
   tohit: string
   enchps: string
+  rdps: string
+  maxHit: string
   alpha: number
   rank: number
   barIndex: number
@@ -46,7 +42,7 @@ interface ResolvedBar {
 
 const bars = computed<ResolvedBar[]>(() => {
   if (!frame.value) return []
-  return frame.value.bars.map((b, i) => ({
+  return frame.value.bars.map((b, i): ResolvedBar => ({
     ...b,
     rank: i + 1,
     barIndex: i,
@@ -58,7 +54,7 @@ const bars = computed<ResolvedBar[]>(() => {
 
 const isHorizontal = computed(() => g.value.orientation === 'horizontal')
 const containerStyle = computed(() => ({
-  flexDirection: isHorizontal.value ? 'row' : 'column',
+  flexDirection: (isHorizontal.value ? 'row' : 'column') as 'row' | 'column',
 }))
 
 function setCombatantFilter(filter: 'all' | 'alliance' | 'party' | 'self') {
@@ -83,17 +79,12 @@ const selectedCombatant = ref<string | null>(null)
 
 function openPullDashboard() {
   localStorage.removeItem('flexi-breakdown-view')
+  localStorage.removeItem('flexi-breakdown-init')
   const url = new URL(window.location.href)
   url.hash = '/breakdown'
-  window.open(url.toString(), 'flexi-breakdown', 'width=1300,height=840,resizable=yes')
   store.broadcastForCombatant(store.selfName ?? bars.value[0]?.name ?? '')
-  if (typeof BroadcastChannel !== 'undefined') {
-    const channel = new BroadcastChannel('flexi-breakdown')
-    setTimeout(() => {
-      channel.postMessage({ type: 'setView', view: 'overview' })
-      channel.close()
-    }, 100)
-  }
+  window.open(url.toString(), 'flexi-breakdown', 'width=1300,height=840,resizable=yes')
+  postBreakdownView('overview')
 }
 
 function openAbilityBreakdown(name?: string) {
@@ -103,9 +94,9 @@ function openAbilityBreakdown(name?: string) {
   else localStorage.removeItem('flexi-breakdown-init')
   const url = new URL(window.location.href)
   url.hash = '/breakdown'
-  window.open(url.toString(), 'flexi-breakdown', 'width=1300,height=840,resizable=yes')
   // Send encounter-aware data (respects viewingPull) with combatant pre-selected
   if (initialName) store.broadcastForCombatant(initialName)
+  window.open(url.toString(), 'flexi-breakdown', 'width=1300,height=840,resizable=yes')
   selectedCombatant.value = null
 }
 
@@ -156,26 +147,51 @@ const contentStyle = computed(() => {
 const barsMaxHeight = ref<string>('unset')
 const barWidth = ref<number>(typeof window !== 'undefined' ? window.innerWidth : 0)  // actual window width for auto-rotation angle
 let resizeObserver: ResizeObserver | null = null
+let breakdownViewChannel: BroadcastChannel | null = null
+let breakdownViewTimer: ReturnType<typeof setTimeout> | null = null
+const isDevMode = (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV === true
+
+function updateBarWidth() {
+  barWidth.value = window.innerWidth
+}
+
+function postBreakdownView(view: 'overview' | 'pulls') {
+  if (typeof BroadcastChannel === 'undefined') return
+
+  breakdownViewChannel?.close()
+  if (breakdownViewTimer) {
+    clearTimeout(breakdownViewTimer)
+    breakdownViewTimer = null
+  }
+
+  breakdownViewChannel = new BroadcastChannel('flexi-breakdown')
+  breakdownViewTimer = setTimeout(() => {
+    breakdownViewTimer = null
+    breakdownViewChannel?.postMessage({ type: 'setView', view })
+    breakdownViewChannel?.close()
+    breakdownViewChannel = null
+  }, 100)
+}
 
 onMounted(() => {
   store.start()
   loadCustomFont('redacted-script-bold')
   // Track window resize for auto-rotation
   barWidth.value = window.innerWidth
-  window.addEventListener('resize', () => {
-    barWidth.value = window.innerWidth
-  })
-  ;(window as any).actFlexiDebug = () => {
-    const root = document.querySelector('.meter-root') as HTMLElement
-    const app = document.getElementById('app')
-    const barsCont = document.querySelector('.bars-container') as HTMLElement
-    return {
-      appRect: app?.getBoundingClientRect(),
-      meterRootRect: root?.getBoundingClientRect(),
-      barsContainerRect: barsCont?.getBoundingClientRect(),
-      documentOpacity: document.documentElement.style.opacity,
-      frameBars: store.frame?.bars.length ?? 0,
-      profileGlobal: store.profile.global,
+  window.addEventListener('resize', updateBarWidth)
+  if (isDevMode) {
+    ;(window as any).actFlexiDebug = () => {
+      const root = document.querySelector('.meter-root') as HTMLElement
+      const app = document.getElementById('app')
+      const barsCont = document.querySelector('.bars-container') as HTMLElement
+      return {
+        appRect: app?.getBoundingClientRect(),
+        meterRootRect: root?.getBoundingClientRect(),
+        barsContainerRect: barsCont?.getBoundingClientRect(),
+        documentOpacity: document.documentElement.style.opacity,
+        frameBars: store.frame?.bars.length ?? 0,
+        profileGlobal: store.profile.global,
+      }
     }
   }
   // Compute available height for the bars area (header height taken into account)
@@ -199,9 +215,14 @@ onMounted(() => {
 
 onUnmounted(() => {
   store.stop()
-  window.removeEventListener('resize', () => {
-    barWidth.value = window.innerWidth
-  })
+  window.removeEventListener('resize', updateBarWidth)
+  if (isDevMode) delete (window as any).actFlexiDebug
+  if (breakdownViewTimer) {
+    clearTimeout(breakdownViewTimer)
+    breakdownViewTimer = null
+  }
+  breakdownViewChannel?.close()
+  breakdownViewChannel = null
   resizeObserver?.disconnect()
   resizeObserver = null
 })

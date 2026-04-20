@@ -14,7 +14,7 @@
 import { BAR_TEXTURE_PRESETS } from './texturePresets'
 import { JOB_ICONS } from './jobIcons'
 import { CROWN_CUTE_SRC } from './crownAssets'
-import type { Profile, LabelField } from './configSchema'
+import type { Profile, LabelField, BarShape, BarLabel, GlobalConfig, Job, Role } from './configSchema'
 
 // ── JSON Key Minification ──────────────────────────────────────────────────────────
 
@@ -58,8 +58,6 @@ function expandKeys(json: string): string {
   }
   return result
 }
-import { JOB_COLORS } from './presets'
-
 const HEADER = 'FLEXI1:'
 const LEGACY_HEADER = 'ACTFLEXI1:'
 
@@ -222,7 +220,7 @@ async function optimizeCustomAssets(json: string): Promise<string> {
 async function deflate(data: Uint8Array): Promise<Uint8Array> {
   const cs = new CompressionStream('deflate')
   const w = cs.writable.getWriter()
-  w.write(data)
+  w.write(data as unknown as BufferSource)
   w.close()
   const chunks: Uint8Array[] = []
   for (const r = cs.readable.getReader(); ;) {
@@ -236,7 +234,7 @@ async function deflate(data: Uint8Array): Promise<Uint8Array> {
 async function inflate(data: Uint8Array): Promise<Uint8Array> {
   const ds = new DecompressionStream('deflate')
   const w = ds.writable.getWriter()
-  w.write(data)
+  w.write(data as unknown as BufferSource)
   w.close()
   const chunks: Uint8Array[] = []
   for (const r = ds.readable.getReader(); ;) {
@@ -300,7 +298,7 @@ const DEFAULT_ROLE_COLORS: Record<string, string> = {
   tank: '#4a90d9', healer: '#52b788', melee: '#e63946', ranged: '#f4a261', caster: '#9b5de5',
 }
 
-const DEFAULT_SHAPE = {
+const DEFAULT_SHAPE: BarShape = {
   leftEdge: 'flat', rightEdge: 'flat', edgeDepth: 10, chamferMode: 'none',
   cornerCuts: { tl: { x: 0, y: 0 }, tr: { x: 0, y: 0 }, br: { x: 0, y: 0 }, bl: { x: 0, y: 0 } },
   borderRadius: { tl: 3, tr: 3, br: 3, bl: 3 },
@@ -309,7 +307,7 @@ const DEFAULT_SHAPE = {
   fillShadow: { enabled: false, color: '#000000', blur: 4, thickness: 0, offsetX: 0, offsetY: 1 },
 }
 
-const DEFAULT_LABEL = {
+const DEFAULT_LABEL: BarLabel = {
   font: 'Segoe UI', size: 12, color: '#ffffff',
   fields: [
     { id: 'f1', template: '{name}', hAnchor: 'left', vAnchor: 'middle', offsetX: 0, offsetY: 0, enabled: true },
@@ -320,13 +318,13 @@ const DEFAULT_LABEL = {
   iconConfig: {
     sizeOverride: 0, opacity: 1, show: true, separateRow: false, offsetX: 0, offsetY: 0,
     shadow: { enabled: false, color: '#000000', blur: 4, offsetX: 0, offsetY: 1 },
-    bgShape: { enabled: false, shape: 'circle', color: '#000000', size: 24, opacity: 0.5 },
+    bgShape: { enabled: false, shape: 'circle', color: '#000000', size: 24, opacity: 0.5, offsetX: 0, offsetY: 0 },
   },
   textTransform: 'none', padding: 4, gap: 4, gradient: null,
   separateRowDeaths: false, deathOffsetX: 0, deathOffsetY: 0, deathSize: 12, deathOpacity: 1,
 }
 
-const DEFAULT_GLOBAL = {
+const DEFAULT_GLOBAL: GlobalConfig = {
   dpsType: 'encdps', sortBy: 'encdps', maxCombatants: 72, showHeader: true,
   transitionDuration: 800, holdDuration: 12000, orientation: 'vertical', opacity: 1,
   outOfCombat: 'dim', outOfCombatOpacity: 0.4, valueFormat: 'abbreviated',
@@ -336,6 +334,7 @@ const DEFAULT_GLOBAL = {
   windowShadow: { enabled: false, color: 'rgba(0,0,0,0.5)', blur: 8, offsetX: 0, offsetY: 2 },
   windowBg: 'transparent', windowBackground: { type: 'solid', color: 'transparent' },
   mergePets: true,
+  tabsEnabled: false, tabs: [], activeTab: '', tabsPinned: false,
   header: { show: true, template: '{encounter}  {duration}', font: 'Segoe UI', size: 11, color: '#cccccc', background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
   footer: { show: false, template: 'Total: {totalDPS} DPS', font: 'Segoe UI', size: 11, color: '#cccccc', background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
   rankIndicator: { rank1Enabled: false, rank1Style: {}, showNumbers: false, rank1HeightIncrease: 0, rank1ShowCrown: false, rank1Crown: { enabled: false, icon: '👑', imageUrl: '$CRW:cute', size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' }, rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
@@ -356,8 +355,9 @@ function cleanProfile(profile: Profile): Profile {
   // Migrate label fields: colorMode 'self' → selfMode:true, strip dead selfColor
   function migrateLabelFields(fields: Partial<LabelField>[]) {
     for (const f of fields) {
-      delete f.selfColor
-      if (f.colorMode === 'self') {
+      const anyF = f as Record<string, unknown>
+      delete anyF.selfColor
+      if ((anyF.colorMode as string) === 'self') {
         f.selfMode = true
         delete f.colorMode
       }
@@ -412,9 +412,10 @@ function cleanProfile(profile: Profile): Profile {
 
   // Strip shape fields matching defaults
   if (cleaned.default?.shape) {
+    const shape = cleaned.default.shape as unknown as Record<string, unknown>
     for (const [key, value] of Object.entries(DEFAULT_SHAPE)) {
-      if (JSON.stringify(cleaned.default.shape[key]) === JSON.stringify(value)) {
-        delete cleaned.default.shape[key]
+      if (JSON.stringify(shape[key]) === JSON.stringify(value)) {
+        delete shape[key]
       }
     }
     if (Object.keys(cleaned.default.shape).length === 0) delete cleaned.default.shape
@@ -424,7 +425,7 @@ function cleanProfile(profile: Profile): Profile {
   if (cleaned.default?.label) {
     const labelDefaults = ['font', 'size', 'color', 'textTransform', 'padding', 'gap', 'gradient', 'separateRowDeaths', 'deathOffsetX', 'deathOffsetY', 'deathSize', 'deathOpacity']
     for (const key of labelDefaults) {
-      if (cleaned.default.label[key] === DEFAULT_LABEL[key]) delete cleaned.default.label[key]
+      if (cleaned.default.label[key] === (DEFAULT_LABEL as unknown as Record<string, unknown>)[key]) delete cleaned.default.label[key]
     }
     if (cleaned.default.label.fields) {
       const defFields = DEFAULT_LABEL.fields
@@ -506,17 +507,17 @@ function cleanProfile(profile: Profile): Profile {
   }
   if (cleaned.overrides?.byJobEnabled) {
     for (const [job, enabled] of Object.entries(cleaned.overrides.byJobEnabled)) {
-      if (enabled === true) delete cleaned.overrides.byJobEnabled[job]
+      if (enabled === true) delete cleaned.overrides.byJobEnabled[job as Job]
     }
   }
   if (cleaned.overrides?.byRoleEnabled) {
     for (const [role, enabled] of Object.entries(cleaned.overrides.byRoleEnabled)) {
-      if (enabled === true) delete cleaned.overrides.byRoleEnabled[role]
+      if (enabled === true) delete cleaned.overrides.byRoleEnabled[role as Role]
     }
   }
   if (cleaned.overrides?.byJob) {
     const byJobCompact: Record<string, any> = {}
-    for (const [job, config] of Object.entries(cleaned.overrides.byJob)) {
+    for (const [job, config] of Object.entries(cleaned.overrides.byJob as Record<string, any>)) {
       const c = config as any
       const color = c?.fill?.color
       if (color !== DEFAULT_JOB_COLORS[job] || c?.gradientColor) {
@@ -529,7 +530,7 @@ function cleanProfile(profile: Profile): Profile {
   }
   if (cleaned.overrides?.byRole) {
     const byRoleCompact: Record<string, any> = {}
-    for (const [role, config] of Object.entries(cleaned.overrides.byRole)) {
+    for (const [role, config] of Object.entries(cleaned.overrides.byRole as Record<string, any>)) {
       const c = config as any
       const color = c?.fill?.color
       if (color !== DEFAULT_ROLE_COLORS[role] || c?.gradientColor) {
@@ -552,8 +553,8 @@ function restoreDefaults(profile: Profile): Profile {
       restored.overrides.byJobEnabled = { ...DEFAULT_JOB_ENABLED }
     } else {
       for (const [job, enabled] of Object.entries(DEFAULT_JOB_ENABLED)) {
-        if (restored.overrides.byJobEnabled[job] === undefined) {
-          restored.overrides.byJobEnabled[job] = enabled
+        if (restored.overrides.byJobEnabled[job as Job] === undefined) {
+          restored.overrides.byJobEnabled[job as Job] = enabled
         }
       }
     }
@@ -561,14 +562,14 @@ function restoreDefaults(profile: Profile): Profile {
       restored.overrides.byRoleEnabled = { ...DEFAULT_ROLE_ENABLED }
     } else {
       for (const [role, enabled] of Object.entries(DEFAULT_ROLE_ENABLED)) {
-        if (restored.overrides.byRoleEnabled[role] === undefined) {
-          restored.overrides.byRoleEnabled[role] = enabled
+        if (restored.overrides.byRoleEnabled[role as Role] === undefined) {
+          restored.overrides.byRoleEnabled[role as Role] = enabled
         }
       }
     }
     const byJobFull: Record<string, any> = {}
     for (const job of Object.keys(DEFAULT_JOB_COLORS)) {
-      const config = restored.overrides.byJob?.[job]
+      const config = restored.overrides.byJob?.[job as Job] as any
       if (config) {
         const fillType = config.fill?.type || 'solid'
         byJobFull[job] = { fill: { type: fillType, color: config.fill?.color || config }, ...(config.gradientColor && { gradientColor: config.gradientColor }) }
@@ -579,7 +580,7 @@ function restoreDefaults(profile: Profile): Profile {
     restored.overrides.byJob = byJobFull
     const byRoleFull: Record<string, any> = {}
     for (const role of Object.keys(DEFAULT_ROLE_COLORS)) {
-      const config = restored.overrides.byRole?.[role]
+      const config = restored.overrides.byRole?.[role as Role] as any
       if (config) {
         const fillType = config.fill?.type || 'solid'
         byRoleFull[role] = { fill: { type: fillType, color: config.fill?.color || config }, ...(config.gradientColor && { gradientColor: config.gradientColor }) }
@@ -594,9 +595,10 @@ function restoreDefaults(profile: Profile): Profile {
   if (!restored.default?.shape) {
     restored.default.shape = { ...DEFAULT_SHAPE }
   } else {
+    const shape = restored.default.shape as unknown as Record<string, unknown>
     for (const [key, value] of Object.entries(DEFAULT_SHAPE)) {
-      if (restored.default.shape[key] === undefined) {
-        restored.default.shape[key] = value
+      if (shape[key] === undefined) {
+        shape[key] = value
       }
     }
   }

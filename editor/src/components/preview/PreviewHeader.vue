@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { HeaderConfig, Frame, GlobalConfig } from '@shared/configSchema'
+import type { HeaderConfig, GlobalConfig } from '@shared/configSchema'
+import type { Frame } from '@shared'
 import { renderTemplate } from '../../lib/templateRenderer'
 import HeaderBar from '@shared/HeaderBar.vue'
 
