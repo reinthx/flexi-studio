@@ -4,6 +4,10 @@ import { usePresetsStore, type CustomPreset } from '../../stores/presets'
 
 const store = usePresetsStore()
 
+function getOrientationIcon(profile: { global?: { orientation?: string } }) {
+  return profile.global?.orientation === 'horizontal' ? '↔' : '↕'
+}
+
 // ── Confirm modal ────────────────────────────────────────────────────────────
 const showConfirmModal = ref(false)
 const confirmMessage = ref('')
@@ -233,7 +237,9 @@ const categoryOptions = computed(() => [
             class="preset-btn full"
             :class="{ active: store.activePresetKey === `builtin:${p.name}` }"
             @click="store.applyBuiltIn(idx)"
-          >{{ p.name }}</button>
+          >{{ p.name }}
+            <span class="preset-orientation">{{ getOrientationIcon(p.profile) }}</span>
+          </button>
         </div>
       </div>
     </div>
@@ -286,6 +292,7 @@ const categoryOptions = computed(() => [
               @click="store.applyCustom(globalIndex)"
             >
               {{ preset.name }}
+              <span class="preset-orientation">{{ getOrientationIcon(preset.profile) }}</span>
               <span class="preset-exports" @click.stop="exportSingle(globalIndex)">Export</span>
             </button>
             <button class="preset-btn mini" @click="updatePreset(globalIndex)" title="Save">💾</button>
@@ -326,6 +333,7 @@ const categoryOptions = computed(() => [
               @click="store.applyCustom(globalIndex)"
             >
               {{ preset.name }}
+              <span class="preset-orientation">{{ getOrientationIcon(preset.profile) }}</span>
               <span class="preset-exports" @click.stop="exportSingle(globalIndex)">Export</span>
             </button>
             <button class="preset-btn mini" @click="updatePreset(globalIndex)" title="Save">💾</button>
@@ -345,14 +353,15 @@ const categoryOptions = computed(() => [
         :key="globalIndex"
         class="preset-row"
       >
-        <button
-          class="preset-btn full"
-          :class="{ active: store.activePresetKey === `custom:${preset.name}` }"
-          @click="store.applyCustom(globalIndex)"
-        >
-          {{ preset.name }}
-          <span class="preset-exports" @click.stop="exportSingle(globalIndex)">Export</span>
-        </button>
+<button
+              class="preset-btn full"
+              :class="{ active: store.activePresetKey === `custom:${preset.name}` }"
+              @click="store.applyCustom(globalIndex)"
+            >
+              {{ preset.name }}
+              <span class="preset-orientation">{{ getOrientationIcon(preset.profile) }}</span>
+              <span class="preset-exports" @click.stop="exportSingle(globalIndex)">Export</span>
+            </button>
         <button class="preset-btn mini" @click="updatePreset(globalIndex)" title="Save">💾</button>
         <button class="preset-btn mini" @click="deletePreset(globalIndex)" title="Delete">×</button>
       </div>
@@ -641,6 +650,15 @@ const categoryOptions = computed(() => [
   font-size: 9px;
   padding: 2px 6px;
   border-radius: 3px;
+}
+.preset-orientation {
+  position: absolute;
+  right: 50px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
 }
 .preset-exports:hover {
   background: var(--border);
