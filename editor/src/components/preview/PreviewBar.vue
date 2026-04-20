@@ -109,7 +109,7 @@ const maxHit = computed(() => {
 const tokens = computed(() => ({
   name: props.bar.name,
   job:  props.bar.job,
-  rank: props.showRank ? `#${props.bar.rank}` : '',
+  rank: props.showRank ? String(props.bar.rank) : '',
   value: props.bar.displayValue,
   pct:  `${props.bar.displayPct}%`,
   'crithit%': `${props.bar.crithit}%`,
