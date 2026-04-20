@@ -21,12 +21,13 @@ describe('profileCodec round-trip', () => {
   it('modified profile survives round-trip', async () => {
     const modified = {
       ...DEFAULT_PROFILE,
-      global: { ...DEFAULT_PROFILE.global, maxCombatants: 13, opacity: 0.42 },
+      global: { ...DEFAULT_PROFILE.global, maxCombatants: 13, opacity: 0.42, orientation: 'horizontal' as const },
     }
     const encoded = await encodeShareString([{ name: 'test', profile: modified }])
     const decoded = await decodeShareString(encoded)
     expect(decoded![0].profile.global.maxCombatants).toBe(13)
     expect(decoded![0].profile.global.opacity).toBe(0.42)
+    expect(decoded![0].profile.global.orientation).toBe('horizontal')
   })
 
   it('preserves multiple presets in one string', async () => {

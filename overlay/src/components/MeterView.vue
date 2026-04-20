@@ -226,10 +226,12 @@ onUnmounted(() => {
   resizeObserver?.disconnect()
   resizeObserver = null
 })
+
+const showResizeCorner = computed(() => g.value.header?.pinned === true)
 </script>
 
 <template>
-  <div class="meter-root">
+  <div class="meter-root" :class="{ 'is-horizontal': isHorizontal }">
     <div class="meter-border" :style="rootStyle" />
 
     <MeterHeader
@@ -256,11 +258,11 @@ onUnmounted(() => {
 
     <div class="meter-content" :style="contentStyle">
       <div class="meter-bg" :style="bgStyle" />
-      <div v-if="g.header?.pinned" class="resize-corner" />
+      <div v-if="showResizeCorner" class="resize-corner" />
 
     <div class="bars-container" :style="containerStyle">
       <div v-if="bars.length === 0" class="empty-state">Waiting for combat data…</div>
-      <ScrollableBarsWrapper :maxHeight="barsMaxHeight">
+      <ScrollableBarsWrapper :maxHeight="barsMaxHeight" :orientation="g.orientation">
         <MeterBar
           v-for="bar in bars"
           :key="bar.name"
@@ -308,6 +310,9 @@ onUnmounted(() => {
   overflow: auto;
   position: relative;
   resize: both;
+}
+.meter-root.is-horizontal {
+  min-height: 1px;
 }
 .meter-border {
   position: absolute;

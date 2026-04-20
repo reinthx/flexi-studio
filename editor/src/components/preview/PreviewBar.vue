@@ -28,10 +28,11 @@ const { width: barWidth } = useElementSize(barEl)
 
 const {
   shapeCss, isClipped, dims,
-  outlineTarget, outlineCss,
-  shapeLayerStyle,
+  shapeLayerStyle, shapeSvgLayerStyle, shapeSvgViewBox, shapeSvgPoints, shapeClipId,
+  shapeSvgBgStyle, shapeSvgFillBox, shapeSvgFillStyle, shapeSvgStrokeStyle,
   bgShadowDirectionalClip, bgShadowStyle, bgShadowSourceStyle,
-  bgStyle, bgTextureInnerStyle,
+  bgStyle, bgTextureInnerStyle, bgStrokePoints, bgStrokeViewBox, bgStrokeSvgStyle, bgStrokeMaskStyle, bgStrokePolygonStyle,
+  bgSegmentStrokePolygons,
   fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
   labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
   showDeath, deathText, deathStyle,
@@ -42,13 +43,16 @@ const {
   rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, isRank1,
 } = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, () => props.colorOverrides, () => barWidth.value)
 
-// â”€â”€ Wrapper (editor-specific: flex sizing, outline on wrapper) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const isHorizontal = computed(() => props.orientation === 'horizontal')
+// â”€â”€ Wrapper (editor-specific: flex sizing) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const wrapperStyle = computed(() => {
   const baseHeight = parseFloat(String(dims.value.height)) || 28
   const adjustedHeight = baseHeight + rank1HeightAdjustment.value
+  const baseWidth = parseFloat(String(dims.value.width)) || props.styleConfig.height
+  const adjustedWidth = baseWidth + rank1HeightAdjustment.value
   return {
-    height: `${adjustedHeight}px`,
-    width: dims.value.width,
+    height: isHorizontal.value ? dims.value.height : `${adjustedHeight}px`,
+    width: isHorizontal.value ? `${adjustedWidth}px` : dims.value.width,
     marginBottom: dims.value.marginBottom,
     marginRight: dims.value.marginRight,
     flex: dims.value.flex ?? '0 0 auto',
@@ -59,7 +63,6 @@ const wrapperStyle = computed(() => {
     zIndex: rank1ZIndex.value,
     ...(rank1GlowStyle.value ? rank1GlowStyle.value : {}),
     ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
-    ...((outlineTarget.value === 'bg' || outlineTarget.value === 'both') ? outlineCss.value : {}),
   }
 })
 
@@ -134,6 +137,40 @@ const tokens = computed(() => ({
         <div v-if="bgTextureInnerStyle" :style="bgTextureInnerStyle" />
       </div>
     </div>
+    <svg
+      v-if="shapeSvgLayerStyle"
+      :style="shapeSvgLayerStyle"
+      :viewBox="shapeSvgViewBox"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <defs>
+        <clipPath :id="shapeClipId" clipPathUnits="userSpaceOnUse">
+          <polygon :points="shapeSvgPoints" />
+        </clipPath>
+      </defs>
+      <foreignObject
+        v-if="shapeSvgBgStyle"
+        :x="0"
+        :y="0"
+        :width="shapeSvgViewBox.split(' ')[2]"
+        :height="shapeSvgViewBox.split(' ')[3]"
+        :clip-path="`url(#${shapeClipId})`"
+      >
+        <div xmlns="http://www.w3.org/1999/xhtml" :style="shapeSvgBgStyle" />
+      </foreignObject>
+      <foreignObject
+        v-if="shapeSvgFillBox && shapeSvgFillStyle"
+        :x="shapeSvgFillBox.x"
+        :y="shapeSvgFillBox.y"
+        :width="shapeSvgFillBox.width"
+        :height="shapeSvgFillBox.height"
+        :clip-path="`url(#${shapeClipId})`"
+      >
+        <div xmlns="http://www.w3.org/1999/xhtml" :style="shapeSvgFillStyle" />
+      </foreignObject>
+      <polygon v-if="shapeSvgStrokeStyle" :points="shapeSvgPoints" :style="shapeSvgStrokeStyle" />
+    </svg>
     <!-- Fill layer (z:1) -->
     <div :style="fillShadowBoundsStyle">
       <div :style="fillShadowWrapStyle">
@@ -142,6 +179,23 @@ const tokens = computed(() => ({
         </div>
       </div>
     </div>
+    <svg
+      v-if="bgStrokeSvgStyle && bgStrokePolygonStyle && (bgStrokePoints || bgSegmentStrokePolygons.length)"
+      :style="bgStrokeSvgStyle"
+      :viewBox="bgStrokeViewBox"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <g v-if="bgStrokePoints" :style="bgStrokeMaskStyle">
+        <polygon :points="bgStrokePoints" :style="bgStrokePolygonStyle" />
+      </g>
+      <polygon
+        v-for="segment in bgSegmentStrokePolygons"
+        :key="segment.key"
+        :points="segment.points"
+        :style="bgStrokePolygonStyle"
+      />
+    </svg>
 
     <!-- Icon on separate row above the bar -->
     <template v-if="showIcon && separateRow">
@@ -192,13 +246,17 @@ const tokens = computed(() => ({
         <div :style="field.style">
           <span v-if="labelOutlineShadow" :style="{
             position:'absolute', inset:0,
+            display:'block',
             color:'transparent',
             textShadow: labelOutlineShadow,
-            overflow:'visible', whiteSpace:'nowrap',
+            overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+            maxWidth:'100%',
             pointerEvents:'none',
           }">{{ renderTemplate(field.template, tokens) }}</span>
           <span :style="{
+            display:'block',
             minWidth: 0,
+            maxWidth:'100%',
             overflow:'hidden',
             textOverflow:'ellipsis',
             whiteSpace:'nowrap',

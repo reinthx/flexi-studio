@@ -1,4 +1,4 @@
-import type { BarFill, BorderRadius, BarOutline, BarShape, CornerCuts, EdgeType, GradientFill, TextureFill } from '@shared/configSchema'
+import type { BarFill, BorderRadius, BarOutline, BarShape, CornerCuts, EdgeType, GradientFill, TextureFill, Orientation } from '@shared/configSchema'
 
 const ANIMATION_SPEED_MAP: Record<number, string> = {
   1: '10s', 2: '8s', 3: '6s', 4: '5s', 5: '4s',
@@ -62,7 +62,7 @@ export function buildDropShadowFilter(offsetX: number, offsetY: number, blur: nu
   return `drop-shadow(${offsetX}px ${offsetY}px ${effectiveBlur}px ${color})`
 }
 
-export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithGap: number = 30): Record<string, any> {
+export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithGap: number = 30, orientation: Orientation = 'vertical'): Record<string, any> {
   switch (fill.type) {
     case 'solid':
       return fill.opacity !== undefined && fill.opacity < 1
@@ -117,8 +117,9 @@ export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithG
 
     case 'texture': {
       const { texture } = fill
-      const isStretch = texture.repeat === 'stretch'
-      const isPaginate = texture.repeat === 'paginate'
+      const isHorizontal = orientation === 'horizontal'
+      const isPaginate = texture.repeat === 'paginate' && !isHorizontal
+      const isStretch = texture.repeat === 'stretch' || (texture.repeat === 'paginate' && isHorizontal)
       // For paginate, use original size. For stretch, stretch to fill. For others, auto.
       const size = isPaginate ? 'auto' : (isStretch ? '100% 100%' : 'auto')
       const repeat = (texture.repeat === 'no-repeat' || isPaginate) ? 'no-repeat' : 'repeat'
@@ -145,7 +146,7 @@ export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithG
         result.backgroundColor = texture.tintColor
         result.backgroundBlendMode = 'multiply'
       }
-      if (texture.pagination?.enabled) {
+      if (isPaginate && texture.pagination?.enabled) {
         const paginationCss = buildTexturePaginationCss(texture, barIndex, barHeightWithGap)
         if (texture.tintGradient) {
           result.backgroundPosition = `0 0, ${paginationCss.backgroundPosition}`
@@ -236,7 +237,7 @@ export function buildEdgeClipPath(leftEdge: EdgeType, rightEdge: EdgeType, leftD
   const leftD = leftEdge === 'flat' ? 0 : Math.max(0, leftDepth)
   const rightD = rightEdge === 'flat' ? 0 : Math.max(0, rightDepth)
 
-  // Clamp each side proportionally so edges can't cross when combined depth > bar width.
+  // Clamp each side proportionally so edges can't cross or consume the whole bar.
   // With independent 50% caps, a 19px/39px split becomes 50%/50% — losing the angle ratio.
   // Proportional: 19/(19+39)=32.8% and 39/(19+39)=67.2% — preserves the configured steepness.
   const total = leftD + rightD

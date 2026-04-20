@@ -72,9 +72,12 @@ const windowBgLayer = computed(() => {
 const wrapperStyle = computed(() => ({
   left: `${x.value}px`,
   top:  `${y.value}px`,
+  width: isHorizontal.value ? '720px' : '350px',
 }))
 
-const meterStyle = computed(() => ({}))
+const meterStyle = computed(() => ({
+  height: isHorizontal.value ? '160px' : '300px',
+}))
 
 function toggleHeaderPin() {
   config.profile.global.header.pinned = !(config.profile.global.header.pinned ?? true)
@@ -83,6 +86,13 @@ function toggleHeaderPin() {
 
 <template>
   <div class="preview-area">
+    <div class="preview-condition-grid" aria-hidden="true">
+      <div class="condition-tile condition-tile--stone" />
+      <div class="condition-tile condition-tile--grass" />
+      <div class="condition-tile condition-tile--ice" />
+      <div class="condition-tile condition-tile--fire" />
+      <div class="condition-tile condition-tile--dark" />
+    </div>
     <!-- Outer wrapper: positioned + draggable -->
     <div ref="wrapperEl" class="preview-wrapper" :style="wrapperStyle">
       <!-- Drag handle — sits ABOVE the meter window -->
@@ -102,7 +112,7 @@ function toggleHeaderPin() {
       <div ref="meterEl" class="preview-meter" :style="meterStyle">
         <div class="meter-frame" :style="{ flexDirection: isHorizontal ? 'row' : 'column' }">
           <div class="preview-meter-bg" :style="windowBgLayer" />
-        <ScrollableBarsWrapper :maxHeight="`${winH}px`">
+        <ScrollableBarsWrapper :maxHeight="`${winH}px`" :orientation="g.orientation">
           <PreviewBar
             v-for="bar in bars" :key="bar.name"
             :bar="bar" :style-config="bar.style"
@@ -134,6 +144,49 @@ function toggleHeaderPin() {
   align-items: center;
   justify-content: center;
   background: repeating-conic-gradient(#1a1a2e 0% 25%, #0a0a14 0% 50%) 50% / 20px 20px;
+}
+
+.preview-condition-grid {
+  position: absolute;
+  inset: 10%;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(92px, 1fr));
+  gap: 10px;
+  pointer-events: none;
+  opacity: 0.82;
+}
+
+.condition-tile {
+  min-height: 100%;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.22), 0 10px 28px rgba(0,0,0,0.18);
+}
+
+.condition-tile--stone {
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.12), transparent 42%),
+    repeating-linear-gradient(28deg, #3c4147 0 18px, #2a2f35 18px 34px, #4b5156 34px 46px);
+}
+.condition-tile--grass {
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255,255,255,0.16), transparent 24%),
+    linear-gradient(135deg, #304c36, #102816 52%, #577046);
+}
+.condition-tile--ice {
+  background:
+    linear-gradient(160deg, rgba(255,255,255,0.35), transparent 32%),
+    linear-gradient(45deg, #8fb8c7, #263b4a 54%, #d3e5e9);
+}
+.condition-tile--fire {
+  background:
+    radial-gradient(circle at 70% 76%, rgba(255,222,120,0.4), transparent 34%),
+    linear-gradient(145deg, #5a1f22, #261217 48%, #876235);
+}
+.condition-tile--dark {
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.08), transparent 38%),
+    linear-gradient(45deg, #07090c, #1d1a28 48%, #10151f);
 }
 
 /* Outer draggable wrapper — holds titlebar + meter */

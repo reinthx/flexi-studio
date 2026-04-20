@@ -7,11 +7,16 @@ import LabelEditor from '../controls/LabelEditor.vue'
 import IconEditor from '../controls/IconEditor.vue'
 import ShadowEditor from '../controls/ShadowEditor.vue'
 import BarSlider from '../controls/BarSlider.vue'
+import ColorPicker from '../controls/ColorPicker.vue'
 import DragNumber from '../controls/DragNumber.vue'
 import type { BarFill, BarShape, BarLabel, BarShadow, IconConfig } from '@shared/configSchema'
 
 const config = useConfigStore()
 const def = computed(() => config.profile.default)
+const isHorizontal = computed(() => config.profile.global.orientation === 'horizontal')
+const sizeLabel = computed(() => isHorizontal.value ? 'Width' : 'Height')
+const sizeMax = computed(() => isHorizontal.value ? 480 : 200)
+const horizontalHeight = computed(() => def.value.horizontalHeight ?? 72)
 
 function setFill(fill: BarFill)    { config.setDefaultFill(fill) }
 function setBg(bg: BarFill)        { config.setDefaultBg(bg) }
@@ -19,6 +24,7 @@ function setShape(shape: BarShape) { config.patchDefault({ shape }) }
 function setLabel(label: BarLabel) { config.patchDefault({ label }) }
 function setIcon(icon: IconConfig) { config.patchDefault({ label: { ...def.value.label, iconConfig: icon } }) }
 function setHeight(v: number)      { config.patchDefault({ height: v }) }
+function setHorizontalHeight(v: number) { config.patchDefault({ horizontalHeight: v }) }
 function setGap(v: number)         { config.patchDefault({ gap: v }) }
 
 // Fill shadow
@@ -31,6 +37,11 @@ function setFillShadow(s: BarShadow) {
 const bgShadow = computed(() => def.value.shape.shadow ?? { enabled: true, color: 'rgba(0,0,0,0.6)', blur: 4, thickness: 0, offsetX: 0, offsetY: 2 })
 function setBgShadow(s: BarShadow) {
   config.patchDefault({ shape: { ...def.value.shape, shadow: s } })
+}
+
+const bgStroke = computed(() => def.value.shape.bgStroke ?? { enabled: false, color: '#ffffff', width: 1 })
+function patchBgStroke(p: Partial<NonNullable<BarShape['bgStroke']>>) {
+  config.patchDefault({ shape: { ...def.value.shape, bgStroke: { ...bgStroke.value, ...p } } })
 }
 
 // Preview fill color for ShapeEditor
@@ -86,7 +97,7 @@ const iconBadge = computed(() => {
 })
 
 const sizeBadge = computed(() => {
-  return `${def.value.height}px · ${def.value.gap}px gap`
+  return `${sizeLabel.value} ${def.value.height}px · ${def.value.gap}px gap`
 })
 </script>
 
@@ -101,7 +112,7 @@ const sizeBadge = computed(() => {
         <span class="chevron" :class="{ open: open.fill }">›</span>
       </div>
       <div v-if="open.fill" class="section-body">
-        <FillEditor :model-value="def.fill" @update:model-value="setFill" />
+        <FillEditor :model-value="def.fill" :orientation="config.profile.global.orientation" @update:model-value="setFill" />
         <div class="sub-divider">Position</div>
         <div class="row">
           <label class="ctrl-label">Offset Y</label>
@@ -120,10 +131,10 @@ const sizeBadge = computed(() => {
         <template v-if="def.shape.segmentFill?.enabled">
           <div class="row">
             <label class="ctrl-label">Width</label>
-            <BarSlider :model-value="def.shape.segmentFill?.segmentWidth ?? 8" :min="2" :max="40" :step="1" unit="px"
+            <BarSlider :model-value="def.shape.segmentFill?.segmentWidth ?? 8" :min="2" :max="80" :step="1" unit="px"
               track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
               @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, gap: 2, angle: 90 }), segmentWidth: v } } })" />
-            <DragNumber :model-value="def.shape.segmentFill?.segmentWidth ?? 8" :min="2" :max="40" :step="1" unit="px" :speed="1"
+            <DragNumber :model-value="def.shape.segmentFill?.segmentWidth ?? 8" :min="2" :max="80" :step="1" unit="px" :speed="1"
               @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, gap: 2, angle: 90 }), segmentWidth: v } } })" />
           </div>
           <div class="row">
@@ -173,7 +184,32 @@ const sizeBadge = computed(() => {
         <span class="chevron" :class="{ open: open.bg }">›</span>
       </div>
       <div v-if="open.bg" class="section-body">
-        <FillEditor :model-value="def.bg" @update:model-value="setBg" />
+        <FillEditor :model-value="def.bg" :orientation="config.profile.global.orientation" @update:model-value="setBg" />
+        <div class="sub-divider">Effects</div>
+        <div class="row">
+          <label class="ctrl-label">Outline</label>
+          <input
+            type="checkbox"
+            :checked="bgStroke.enabled"
+            @change="e => patchBgStroke({ enabled: (e.target as HTMLInputElement).checked })"
+          />
+          <template v-if="bgStroke.enabled">
+            <ColorPicker
+              :model-value="bgStroke.color"
+              label="Outline"
+              @update:model-value="c => patchBgStroke({ color: c })"
+            />
+            <DragNumber
+              :model-value="bgStroke.width"
+              :min="0"
+              :max="12"
+              :step="1"
+              unit="px"
+              :speed="1"
+              @update:model-value="v => patchBgStroke({ width: v })"
+            />
+          </template>
+        </div>
         <div class="sub-divider">Shadow</div>
         <ShadowEditor :model-value="bgShadow" enable-mode="opacity" @update:model-value="setBgShadow" />
       </div>
@@ -224,22 +260,30 @@ const sizeBadge = computed(() => {
       </div>
       <div v-if="open.size" class="section-body">
         <div class="row">
-          <label class="ctrl-label">Height</label>
-          <BarSlider :model-value="def.height" :min="1" :max="200" :step="1" unit="px"
+          <label class="ctrl-label">{{ sizeLabel }}</label>
+          <BarSlider :model-value="def.height" :min="1" :max="sizeMax" :step="1" unit="px"
             track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
             @update:model-value="setHeight" />
-          <DragNumber :model-value="def.height" :min="1" :max="200" :step="1" unit="px" :speed="1"
+          <DragNumber :model-value="def.height" :min="1" :max="sizeMax" :step="1" unit="px" :speed="1"
             @update:model-value="setHeight" />
+        </div>
+        <div v-if="isHorizontal" class="row">
+          <label class="ctrl-label">Height</label>
+          <BarSlider :model-value="horizontalHeight" :min="16" :max="240" :step="1" unit="px"
+            track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
+            @update:model-value="setHorizontalHeight" />
+          <DragNumber :model-value="horizontalHeight" :min="16" :max="240" :step="1" unit="px" :speed="1"
+            @update:model-value="setHorizontalHeight" />
         </div>
         <div class="row">
           <label class="ctrl-label">Gap</label>
-          <BarSlider :model-value="def.gap" :min="0" :max="16" :step="1" unit="px"
+          <BarSlider :model-value="def.gap" :min="-20" :max="20" :step="1" unit="px"
             track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
             @update:model-value="setGap" />
-          <DragNumber :model-value="def.gap" :min="0" :max="16" :step="1" unit="px" :speed="1"
+          <DragNumber :model-value="def.gap" :min="-20" :max="20" :step="1" unit="px" :speed="1"
             @update:model-value="setGap" />
         </div>
-        <p class="hint">Resize the live overlay window to set bar length (width/height).</p>
+        <p class="hint">{{ isHorizontal ? 'Width controls each column. Height controls the bar length inside the overlay window.' : 'Resize the live overlay window to set bar length.' }}</p>
       </div>
     </div>
 

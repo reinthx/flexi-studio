@@ -303,6 +303,7 @@ const DEFAULT_SHAPE: BarShape = {
   cornerCuts: { tl: { x: 0, y: 0 }, tr: { x: 0, y: 0 }, br: { x: 0, y: 0 }, bl: { x: 0, y: 0 } },
   borderRadius: { tl: 3, tr: 3, br: 3, bl: 3 },
   outline: { color: 'rgba(255,255,255,0.15)', thickness: { top: 0, right: 0, bottom: 1, left: 0 } },
+  bgStroke: { enabled: false, color: '#ffffff', width: 1 },
   shadow: { enabled: false, color: '#000000', blur: 4, thickness: 0, offsetX: 0, offsetY: 2 },
   fillShadow: { enabled: false, color: '#000000', blur: 4, thickness: 0, offsetX: 0, offsetY: 1 },
 }
@@ -341,6 +342,8 @@ const DEFAULT_GLOBAL: GlobalConfig = {
       rank1NameStyle: { enabled: false }, },
   pets: { show: false, mergeWithOwner: true, petStyle: {} },
 }
+
+const DEFAULT_HORIZONTAL_HEIGHT = 72
 
 function cleanProfile(profile: Profile): Profile {
   const cleaned = JSON.parse(JSON.stringify(profile))
@@ -403,6 +406,9 @@ function cleanProfile(profile: Profile): Profile {
   // iconConfig.classOutline enabled: false
   if (cleaned.default?.label?.iconConfig?.classOutline?.enabled === false) {
     delete cleaned.default.label.iconConfig.classOutline
+  }
+  if (cleaned.default?.label?.iconConfig && 'mode' in cleaned.default.label.iconConfig) {
+    delete (cleaned.default.label.iconConfig as unknown as Record<string, unknown>).mode
   }
   // shape.fillShadow enabled: false
   if (cleaned.default?.shape?.fillShadow?.enabled === false && 
@@ -591,6 +597,11 @@ function restoreDefaults(profile: Profile): Profile {
     restored.overrides.byRole = byRoleFull
   }
 
+  // Restore default bar fields added after older presets were encoded
+  if (restored.default && restored.default.horizontalHeight === undefined) {
+    restored.default.horizontalHeight = DEFAULT_HORIZONTAL_HEIGHT
+  }
+
   // Restore default shape
   if (!restored.default?.shape) {
     restored.default.shape = { ...DEFAULT_SHAPE }
@@ -611,6 +622,11 @@ function restoreDefaults(profile: Profile): Profile {
     if (!restored.default.label.fields) restored.default.label.fields = DEFAULT_LABEL.fields
     // Restore label.shadow if missing (default has enabled: true)
     if (!restored.default.label.shadow) restored.default.label.shadow = { ...DEFAULT_LABEL.shadow }
+    restored.default.label.iconConfig = {
+      ...DEFAULT_LABEL.iconConfig,
+      ...(restored.default.label.iconConfig ?? {}),
+    }
+    delete (restored.default.label.iconConfig as unknown as Record<string, unknown>).mode
   }
 
   // Restore default global

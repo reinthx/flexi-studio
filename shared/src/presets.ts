@@ -38,6 +38,7 @@ export const DEFAULT_BAR_STYLE: BarStyle = {
       color: 'rgba(255,255,255,0.15)',
       thickness: { top: 0, right: 0, bottom: 1, left: 0 },
     },
+    bgStroke: { enabled: false, color: '#ffffff', width: 1 },
   },
   label: {
     font: 'Segoe UI',
@@ -70,6 +71,7 @@ export const DEFAULT_BAR_STYLE: BarStyle = {
     deathOpacity: 1,
   },
   height: 28,
+  horizontalHeight: 72,
   gap: 2,
 }
 

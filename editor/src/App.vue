@@ -53,15 +53,8 @@ function openBreakdown() {
   window.open(url.toString(), 'flexi-breakdown', 'width=1300,height=840,resizable=yes')
 }
 
-function onBeforeUnload(event: BeforeUnloadEvent) {
-  if (!config.dirty) return
-  event.preventDefault()
-  event.returnValue = ''
-}
-
 onMounted(async () => {
   if (currentRoute.value !== 'editor') return
-  window.addEventListener('beforeunload', onBeforeUnload)
   liveData.setProfileGetter(() => config.profile)
   liveData.start()
   const hasData = await config.load()
@@ -74,7 +67,6 @@ onMounted(async () => {
 })
 onUnmounted(() => {
   if (currentRoute.value === 'editor') {
-    window.removeEventListener('beforeunload', onBeforeUnload)
     liveData.stop()
   }
 })

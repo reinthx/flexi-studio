@@ -482,7 +482,7 @@ function onBrowseChange(e: Event) {
 
       <!-- Texture -->
       <div v-if="wbType === 'texture'" class="texture-section">
-        <TextureEditor :model-value="windowTexture" @update:model-value="updateTexture" />
+        <TextureEditor :model-value="windowTexture" :orientation="g.orientation" @update:model-value="updateTexture" />
       </div>
 
       <div class="sub-label">Border</div>
@@ -586,6 +586,8 @@ function onBrowseChange(e: Event) {
         <div class="btn-group">
           <button :class="['tog', { active: g.orientation === 'vertical' }]"
             @click="patch({ orientation: 'vertical' })">Vertical</button>
+          <button :class="['tog', { active: g.orientation === 'horizontal' }]"
+            @click="patch({ orientation: 'horizontal' })">Horizontal</button>
         </div>
       </div>
       

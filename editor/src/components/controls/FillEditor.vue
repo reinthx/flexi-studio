@@ -4,14 +4,14 @@
  * v-model: BarFill
  */
 import { computed, inject } from 'vue'
-import type { BarFill, GradientFill, TextureFill } from '@shared/configSchema'
+import type { BarFill, GradientFill, TextureFill, Orientation } from '@shared/configSchema'
 import GradientEditor from './GradientEditor.vue'
 import TextureEditor from './TextureEditor.vue'
 import ColorPicker from './ColorPicker.vue'
 import BarSlider from './BarSlider.vue'
 import DragNumber from './DragNumber.vue'
 
-const props = defineProps<{ modelValue: BarFill; label?: string }>()
+const props = defineProps<{ modelValue: BarFill; label?: string; orientation?: Orientation }>()
 const emit  = defineEmits<{ 'update:modelValue': [v: BarFill] }>()
 
 const openColorsPanel = inject<(() => void) | null>('openColorsPanel', null)
@@ -232,6 +232,7 @@ function setTintGradientColor(stopIndex: number, color: string) {
       <template v-if="activeTab === 'texture'">
         <TextureEditor
           :model-value="(modelValue as Extract<BarFill, {type:'texture'}>).texture"
+          :orientation="orientation"
           @update:model-value="onTexture"
         />
       </template>

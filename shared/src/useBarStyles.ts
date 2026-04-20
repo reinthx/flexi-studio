@@ -5,12 +5,20 @@
  * icon, outline) so both bar components stay in sync without copy-paste.
  */
 import { computed, toValue, type MaybeRefOrGetter } from 'vue'
-import type { BarStyle, BarLabel, LabelField, Orientation, GradientFill, Role, Profile } from './configSchema'
-import { buildFillCss, buildShapeCss, buildOutlineCss, buildDropShadowFilter } from './cssBuilder'
+import type { BarStyle, BarLabel, LabelField, Orientation, GradientFill, Role, Profile, BarFill } from './configSchema'
+import { buildEdgeClipPath, buildFillCss, buildShapeCss, buildOutlineCss, buildDropShadowFilter } from './cssBuilder'
 import { getJobIconSrc, getJobInfo } from './jobMap'
 import { resolveBarDimensions } from './barDimensions'
 import { JOB_COLORS } from './presets'
 import { useWindowSize } from '@vueuse/core'
+import {
+  buildShapePoints,
+  clampDimension,
+  isNonRectShape,
+  pointsToCssPolygon,
+  pointsToString,
+  type ShapePoint,
+} from './shapeGeometry'
 
 /** Sample a color from a gradient at position t (0–1) by lerping between stops. */
 function sampleGradientColor(g: GradientFill, t: number): string {
@@ -125,7 +133,7 @@ function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number
     position: 'absolute',
     maxWidth: maxW,
     minWidth: 0,
-    overflow: 'visible',
+    overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
     lineHeight: '1.2',
@@ -193,6 +201,7 @@ const DEFAULT_SHAPE = {
   cornerCuts: { tl: { x: 0, y: 0 }, tr: { x: 0, y: 0 }, br: { x: 0, y: 0 }, bl: { x: 0, y: 0 } },
   borderRadius: { tl: 3, tr: 3, br: 3, bl: 3 },
   outline: { color: 'rgba(255,255,255,0.15)', thickness: { top: 0, right: 0, bottom: 1, left: 0 } },
+  bgStroke: { enabled: false, color: '#ffffff', width: 1 },
   shadow: { enabled: false, color: '#000000', blur: 4, thickness: 0, offsetX: 0, offsetY: 2 },
   fillShadow: { enabled: false, color: '#000000', blur: 4, thickness: 0, offsetX: 0, offsetY: 1 },
 }
@@ -203,10 +212,108 @@ const DEFAULT_STYLE: BarStyle = {
   shape: DEFAULT_SHAPE,
   label: DEFAULT_LABEL,
   height: 28,
+  horizontalHeight: 72,
   gap: 2,
 }
 
 export { DEFAULT_ICON_CONFIG, DEFAULT_LABEL, DEFAULT_SHAPE, DEFAULT_STYLE }
+
+function getFillOpacity(fill?: BarFill): number {
+  if (!fill) return 1
+  if (fill.type === 'texture') return fill.texture.opacity
+  return fill.opacity ?? 1
+}
+
+function buildShapeStrokePoints(shape: BarStyle['shape'], width: number, height: number): string | undefined {
+  if (!shape || !isNonRectShape(shape)) return undefined
+  return pointsToString(buildShapePoints(shape, width, height))
+}
+
+function parseSvgPoints(points: string): Array<[number, number]> {
+  return points
+    .split(' ')
+    .map(point => point.split(',').map(Number) as [number, number])
+    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+}
+
+function clipPolygonX(points: Array<[number, number]>, xLimit: number, keepGreater: boolean): Array<[number, number]> {
+  const result: Array<[number, number]> = []
+  for (let i = 0; i < points.length; i++) {
+    const current = points[i]
+    const previous = points[(i + points.length - 1) % points.length]
+    const currentInside = keepGreater ? current[0] >= xLimit : current[0] <= xLimit
+    const previousInside = keepGreater ? previous[0] >= xLimit : previous[0] <= xLimit
+    if (currentInside !== previousInside) {
+      const dx = current[0] - previous[0]
+      const t = dx === 0 ? 0 : (xLimit - previous[0]) / dx
+      result.push([xLimit, previous[1] + (current[1] - previous[1]) * t])
+    }
+    if (currentInside) result.push(current)
+  }
+  return result
+}
+
+function buildSegmentStrokePolygons(shape: BarStyle['shape'], width: number, height: number): Array<{ key: string; points: string }> {
+  const sf = shape?.segmentFill
+  if (!sf?.enabled) return []
+  const segmentWidth = sf.segmentWidth ?? 8
+  const gap = sf.gap ?? 2
+  const pitch = segmentWidth + gap
+  if (segmentWidth <= 0 || pitch <= 0) return []
+  if (sf.startHeight || sf.endHeight) return []
+
+  const w = clampDimension(width, 100)
+  const h = clampDimension(height, 28)
+  const shapePoints = buildShapeStrokePoints(shape, w, h)
+  const base = shapePoints ? parseSvgPoints(shapePoints) : [[0, 0], [w, 0], [w, h], [0, h]] as Array<[number, number]>
+
+  // CSS linear-gradient angle convention: 0deg = bottom→top, 90deg = left→right.
+  // Direction vector in screen coords (y-down): (sin(a), -cos(a)).
+  const angle = sf.angle ?? 90
+  const rad = angle * Math.PI / 180
+  const dx = Math.sin(rad)
+  const dy = -Math.cos(rad)
+
+  // CSS gradient line length for a WxH rect, centered on the element.
+  const lineLen = Math.abs(w * dx) + Math.abs(h * dy)
+  const sx = w / 2 - (lineLen / 2) * dx
+  const sy = h / 2 - (lineLen / 2) * dy
+
+  // Rotate into gradient-aligned frame where stripe direction is the Y axis
+  // and the gradient line maps to X ∈ [0, lineLen]. Clip by X-stripes, rotate back.
+  const rotate = ([x, y]: [number, number]): [number, number] => {
+    const px = x - sx
+    const py = y - sy
+    return [px * dx + py * dy, -px * dy + py * dx]
+  }
+  const unrotate = ([rx, ry]: [number, number]): [number, number] => [
+    sx + rx * dx - ry * dy,
+    sy + rx * dy + ry * dx,
+  ]
+
+  const rotated = base.map(rotate)
+  const xs = rotated.map(p => p[0])
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const polygons: Array<{ key: string; points: string }> = []
+
+  const startIdx = Math.floor(minX / pitch)
+  const endIdx = Math.ceil(maxX / pitch)
+  for (let i = startIdx; i <= endIdx; i++) {
+    const x1 = i * pitch
+    const x2 = x1 + segmentWidth
+    if (x2 <= minX || x1 >= maxX) continue
+    const clipped = clipPolygonX(clipPolygonX(rotated, x1, true), x2, false)
+    if (clipped.length < 3) continue
+    const pts = clipped.map(unrotate)
+    polygons.push({
+      key: `segment-${i}`,
+      points: pts.map(([x, y]) => `${x.toFixed(3)},${y.toFixed(3)}`).join(' '),
+    })
+  }
+
+  return polygons
+}
 
 
 export function useBarStyles(
@@ -234,7 +341,35 @@ export function useBarStyles(
   // ── Shape ─────────────────────────────────────────────────────────────────
   const shapeCss = computed(() => buildShapeCss(sc().shape ?? DEFAULT_SHAPE))
   const isClipped = computed(() => 'clipPath' in shapeCss.value)
+  const useSvgShape = computed(() => isNonRectShape(sc().shape ?? DEFAULT_SHAPE))
   const dims = computed(() => resolveBarDimensions(sc(), ori()))
+  const shapeInsetTop = computed(() => sc().shape?.fillInsetTop ?? 0)
+  const shapeWidthPx = computed(() => {
+    const w = dims.value.width
+    // '100%' (vertical mode) — use actual measured container width, not the literal 100.
+    if (typeof w === 'string' && w.trim().endsWith('%')) return getBarWidth() || 100
+    return parseFloat(String(w)) || getBarWidth() || 100
+  })
+  const shapeHeightPx = computed(() => Math.max(1, (parseFloat(String(dims.value.height)) || 28) - shapeInsetTop.value))
+  const shapePoints = computed<ShapePoint[]>(() => buildShapePoints(sc().shape ?? DEFAULT_SHAPE, shapeWidthPx.value, shapeHeightPx.value))
+  const shapeSvgPoints = computed(() => pointsToString(shapePoints.value))
+  const shapeClipPathPx = computed(() => {
+    if (!isClipped.value) return undefined
+    return `polygon(${pointsToCssPolygon(shapePoints.value)})`
+  })
+  const shapeSvgViewBox = computed(() => `0 0 ${shapeWidthPx.value} ${shapeHeightPx.value}`)
+  const shapeSvgLayerStyle = computed(() => {
+    if (!useSvgShape.value) return undefined
+    const insetTop = shapeInsetTop.value
+    return {
+      position: 'absolute' as const,
+      ...(insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }),
+      zIndex: 1,
+      pointerEvents: 'none' as const,
+      overflow: 'visible',
+    }
+  })
+  const shapeClipId = `flexi-shape-${Math.random().toString(36).slice(2)}`
   const r1c = () => toValue(rank1Config)
   const isRank1 = computed(() => b().rank === 1 && r1c())
 
@@ -379,14 +514,49 @@ export function useBarStyles(
 
   const outlineTarget = computed(() => sc().shape?.outline?.target ?? 'both')
   const outlineCss = computed(() => buildOutlineCss(sc().shape?.outline ?? DEFAULT_SHAPE.outline))
+  const bgStroke = computed(() => sc().shape?.bgStroke)
+  const clippedOutlineStroke = computed(() => {
+    if (!isClipped.value) return undefined
+    const outline = sc().shape?.outline ?? DEFAULT_SHAPE.outline
+    const t = outline.thickness
+    const width = Math.max(t.top ?? 0, t.right ?? 0, t.bottom ?? 0, t.left ?? 0)
+    return width > 0 ? { enabled: true, color: outline.color, width } : undefined
+  })
+  const shapeStroke = computed(() => {
+    const stroke = bgStroke.value
+    if (stroke?.enabled && (stroke.width ?? 0) > 0) return stroke
+    return clippedOutlineStroke.value
+  })
+  const showBgStroke = computed(() => !!shapeStroke.value?.enabled && (shapeStroke.value.width ?? 0) > 0)
+  const segmentMaskCss = computed(() => {
+    const sf = sc().shape?.segmentFill
+    if (!sf?.enabled) return {}
+    const w = sf.segmentWidth ?? 8
+    const g = sf.gap ?? 2
+    const a = sf.angle ?? 90
+    const mask = `repeating-linear-gradient(${a}deg, black 0px, black ${w}px, transparent ${w}px, transparent ${w + g}px)`
+    return { maskImage: mask, WebkitMaskImage: mask }
+  })
 
   // ── Shape layer ───────────────────────────────────────────────────────────
-  const shapeLayerStyle = computed(() => ({
-    position: 'absolute' as const, inset: '0', zIndex: 1,
-    ...(isClipped.value ? { clipPath: shapeCss.value.clipPath } : {}),
-    ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
-    ...((outlineTarget.value === 'bg' || outlineTarget.value === 'both') ? outlineCss.value : {}),
-  }))
+  const shapeLayerStyle = computed(() => {
+    const insetTop = shapeInsetTop.value
+    if (useSvgShape.value) {
+      return {
+        position: 'absolute' as const,
+        ...(insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }),
+        display: 'none',
+      }
+    }
+    return {
+      position: 'absolute' as const,
+      ...(insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }),
+      zIndex: 1,
+      ...(isClipped.value ? { clipPath: shapeCss.value.clipPath } : {}),
+      ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
+      ...(!showBgStroke.value && (outlineTarget.value === 'bg' || outlineTarget.value === 'both') ? outlineCss.value : {}),
+    }
+  })
 
   // ── Background shadow ─────────────────────────────────────────────────────
   const bgShadowDirectionalClip = computed(() => {
@@ -394,6 +564,7 @@ export function useBarStyles(
     const insetTop = sc().shape?.fillInsetTop ?? 0
     const baseInset = insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }
     const base = { position: 'absolute' as const, ...baseInset, zIndex: 0 }
+    if (useSvgShape.value) return { ...base, display: 'none' }
     if (!s?.enabled) return base
     const oX = s.offsetX, oY = s.offsetY
     const t = oY > 0 ? '0px' : oY < 0 ? '-9999px' : '0px'
@@ -410,7 +581,7 @@ export function useBarStyles(
     if (!s?.enabled) return base
 
     if (isClipped.value) {
-      const cp = shapeCss.value.clipPath!
+      const cp = shapeClipPathPx.value ?? shapeCss.value.clipPath!
       const innerPoints = cp.slice(8, -1)
       return {
         ...base,
@@ -429,21 +600,52 @@ export function useBarStyles(
   const bgShadowSourceStyle = computed(() => ({
     position: 'absolute' as const, inset: '0',
     background: '#000',
-    clipPath: shapeCss.value.clipPath,
+    clipPath: shapeClipPathPx.value ?? shapeCss.value.clipPath,
   }))
 
   // ── Background ────────────────────────────────────────────────────────────
   const isTextureBg = computed(() => sc().bg?.type === 'texture')
+  const isBgVisible = computed(() => getFillOpacity(sc().bg) > 0)
+  const bgStrokePoints = computed(() => {
+    if (useSvgShape.value || !showBgStroke.value || bgSegmentStrokePolygons.value.length > 0 || !isClipped.value) return undefined
+    return buildShapeStrokePoints(sc().shape ?? DEFAULT_SHAPE, shapeWidthPx.value, shapeHeightPx.value)
+  })
+  const bgStrokeViewBox = computed(() => `0 0 ${shapeWidthPx.value} ${shapeHeightPx.value}`)
+  const bgSegmentStrokePolygons = computed(() => {
+    if (!showBgStroke.value) return []
+    return buildSegmentStrokePolygons(sc().shape ?? DEFAULT_SHAPE, shapeWidthPx.value, shapeHeightPx.value)
+  })
+  const bgStrokeSvgStyle = computed(() => {
+    if (!bgStrokePoints.value && bgSegmentStrokePolygons.value.length === 0) return undefined
+    const insetTop = shapeInsetTop.value
+    // Do not set width/height:100% — they override right/bottom: 0 and break the
+    // element box when insetTop is non-zero, stretching the viewBox past the bar.
+    return {
+      position: 'absolute' as const,
+      ...(insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }),
+      zIndex: 2,
+      pointerEvents: 'none' as const,
+      overflow: 'visible',
+    }
+  })
+  const bgStrokeMaskStyle = computed(() => segmentMaskCss.value)
+  const bgStrokePolygonStyle = computed(() => {
+    const stroke = shapeStroke.value
+    if (!stroke?.enabled || !stroke.width) return undefined
+    return {
+      fill: 'none',
+      stroke: stroke.color,
+      strokeWidth: String(stroke.width),
+      vectorEffect: 'non-scaling-stroke' as const,
+      strokeLinejoin: 'round' as const,
+      strokeLinecap: 'round' as const,
+    }
+  })
 
   const bgStyle = computed(() => {
-    const insetTop = sc().shape?.fillInsetTop ?? 0
+    if (useSvgShape.value) return { display: 'none' }
+    if (!isBgVisible.value) return { display: 'none' }
     const sf = sc().shape?.segmentFill
-    const segMask = sf?.enabled ? (() => {
-      const w = sf.segmentWidth ?? 8
-      const g = sf.gap ?? 2
-      const a = sf.angle ?? 90
-      return { maskImage: `repeating-linear-gradient(${a}deg, black 0px, black ${w}px, transparent ${w}px, transparent ${w + g}px)`, WebkitMaskImage: `repeating-linear-gradient(${a}deg, black 0px, black ${w}px, transparent ${w}px, transparent ${w + g}px)` }
-    })() : {}
     const triClip = (() => {
       if (!sf?.enabled || !sf.startHeight || !sf.endHeight) return {}
       const barH = sc().height ?? 28
@@ -454,10 +656,13 @@ export function useBarStyles(
     })()
     return {
       position: 'absolute' as const,
-      ...(insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }),
-      ...(isTextureBg.value ? {} : buildFillCss(sc().bg, bi(), barHeightWithGap.value)),
+      inset: '0',
+      ...(isTextureBg.value ? {} : buildFillCss(sc().bg, bi(), barHeightWithGap.value, ori())),
       ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
-      ...segMask,
+      ...(showBgStroke.value && !isClipped.value && bgSegmentStrokePolygons.value.length === 0
+        ? { boxShadow: `inset 0 0 0 ${bgStroke.value!.width}px ${bgStroke.value!.color}` }
+        : {}),
+      ...segmentMaskCss.value,
       ...triClip,
     }
   })
@@ -468,9 +673,9 @@ export function useBarStyles(
     const bg = sc().bg
     if (bg.type !== 'texture') return undefined
     const texture = bg.texture
-    const isPaginate = texture.repeat === 'paginate'
+    const isPaginate = texture.repeat === 'paginate' && !isHorizontal.value
     const height = barHeightWithGap.value
-    const base = buildFillCss(sc().bg, bi(), barHeightWithGap.value)
+    const base = buildFillCss(sc().bg, bi(), barHeightWithGap.value, ori())
     
     // For Paginate mode, use repeat so it tiles across all expanded bars
     const repeat = isPaginate ? 'repeat' : base.backgroundRepeat
@@ -493,11 +698,14 @@ export function useBarStyles(
   })
 
   // ── Fill shadow + fill ────────────────────────────────────────────────────
+  const isFillVisible = computed(() => getFillOpacity(sc().fill) > 0 && b().fillFraction > 0)
+
   const fillShadowBoundsStyle = computed(() => {
     const insetTop = sc().shape?.fillInsetTop ?? 0
     const base = insetTop
       ? { position: 'absolute' as const, top: `${insetTop}px`, left: '0', right: '0', bottom: '0', zIndex: 1 }
       : { position: 'absolute' as const, inset: '0', zIndex: 1 }
+    if (useSvgShape.value || !isFillVisible.value) return { ...base, display: 'none' }
     if (isClipped.value) {
       return { ...base, clipPath: shapeCss.value.clipPath }
     } else if (shapeCss.value.borderRadius) {
@@ -524,12 +732,65 @@ export function useBarStyles(
   })
 
   const isTextureFill = computed(() => sc().fill?.type === 'texture')
+  const shapeSvgBgStyle = computed(() => {
+    if (!useSvgShape.value || !isBgVisible.value) return undefined
+    return {
+      width: '100%',
+      height: '100%',
+      ...buildFillCss(sc().bg, bi(), barHeightWithGap.value, ori()),
+      ...segmentMaskCss.value,
+    }
+  })
+  const shapeSvgFillBox = computed(() => {
+    if (!useSvgShape.value || !isFillVisible.value) return undefined
+    const frac = Math.max(0, Math.min(1, b().fillFraction))
+    if (isHorizontal.value) {
+      const height = shapeHeightPx.value * frac
+      return { x: 0, y: shapeHeightPx.value - height, width: shapeWidthPx.value, height }
+    }
+    return { x: 0, y: 0, width: shapeWidthPx.value * frac, height: shapeHeightPx.value }
+  })
+  const shapeSvgFillStyle = computed(() => {
+    if (!shapeSvgFillBox.value) return undefined
+    return {
+      width: '100%',
+      height: '100%',
+      ...buildFillCss(sc().fill, bi(), barHeightWithGap.value, ori()),
+      ...segmentMaskCss.value,
+    }
+  })
+  const shapeSvgStrokeStyle = computed(() => {
+    if (!useSvgShape.value) return undefined
+    if (bgSegmentStrokePolygons.value.length > 0) return undefined
+    const stroke = shapeStroke.value
+    if (!stroke?.enabled || !stroke.width) return undefined
+    return {
+      fill: 'none',
+      stroke: stroke.color,
+      strokeWidth: String(stroke.width),
+      vectorEffect: 'non-scaling-stroke' as const,
+      strokeLinejoin: 'round' as const,
+      strokeLinecap: 'round' as const,
+    }
+  })
+  const fillClipPath = computed(() => {
+    if (!isClipped.value) return undefined
+    if (isHorizontal.value || b().fillFraction >= 0.999) return shapeCss.value.clipPath
+    const shape = sc().shape ?? DEFAULT_SHAPE
+    const chamferMode = shape.chamferMode ?? 'none'
+    if (chamferMode !== 'none') return shapeCss.value.clipPath
+    const left = shape.leftEdge ?? 'flat'
+    const right = shape.rightEdge ?? 'flat'
+    if (left === 'flat' && right === 'flat') return undefined
+    return buildEdgeClipPath(left, 'flat', shape.edgeDepthLeft ?? shape.edgeDepth ?? 10, 0)
+  })
 
   const fillStyle = computed(() => {
     const frac = b().fillFraction
+    if (!isFillVisible.value) return { display: 'none' }
     const idx = bi()
     const bhg = barHeightWithGap.value
-    const fillCss = isTextureFill.value ? {} : buildFillCss(sc().fill, idx, bhg)
+    const fillCss = isTextureFill.value ? {} : buildFillCss(sc().fill, idx, bhg, ori())
     return {
       position: 'absolute' as const,
       ...(isHorizontal.value
@@ -538,9 +799,9 @@ export function useBarStyles(
       ...fillCss,
       // Texture fills use an inner div to avoid rubberband stretch in CEF
       ...(isTextureFill.value ? { overflow: 'hidden' as const } : {}),
-      ...(isClipped.value ? { clipPath: shapeCss.value.clipPath } : {}),
+      ...(fillClipPath.value ? { clipPath: fillClipPath.value } : {}),
       ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
-      ...((outlineTarget.value === 'fill' || outlineTarget.value === 'both') ? outlineCss.value : {}),
+      ...(!showBgStroke.value && (outlineTarget.value === 'fill' || outlineTarget.value === 'both') ? outlineCss.value : {}),
       ...(() => {
         const sf = sc().shape?.segmentFill
         if (!sf?.enabled) return {}
@@ -579,7 +840,7 @@ export function useBarStyles(
       ...(isHorizontal.value
         ? { width: '100%', height: frac > 0 ? `${(1 / frac) * 100}%` : '100%', bottom: '0' }
         : { height: '100%', width: frac > 0 ? `${(1 / frac) * 100}%` : '100%' }),
-      ...buildFillCss(sc().fill, idx, bhg),
+      ...buildFillCss(sc().fill, idx, bhg, ori()),
     }
   })
 
@@ -771,7 +1032,6 @@ export function useBarStyles(
   const iconConfig = computed(() => ({ ...DEFAULT_ICON_CONFIG, ...label.value.iconConfig }))
 
   const iconSrc = computed(() => getJobIconSrc(b().job))
-
   const showIcon = computed(() => iconConfig.value.show !== false)
 
   const iconSize = computed(() => {
@@ -934,13 +1194,15 @@ export function useBarStyles(
 
   return {
     // Shape
-    shapeCss, isClipped, dims, isHorizontal,
+    shapeCss, isClipped, dims, isHorizontal, useSvgShape,
     outlineTarget, outlineCss,
-    shapeLayerStyle,
+    shapeLayerStyle, shapeSvgLayerStyle, shapeSvgViewBox, shapeSvgPoints, shapeClipId,
+    shapeSvgBgStyle, shapeSvgFillBox, shapeSvgFillStyle, shapeSvgStrokeStyle,
     // Shadow
     bgShadowDirectionalClip, bgShadowStyle, bgShadowSourceStyle,
     // Background + fill
-    bgStyle, bgTextureInnerStyle,
+    bgStyle, bgTextureInnerStyle, bgStrokePoints, bgStrokeViewBox, bgStrokeSvgStyle, bgStrokeMaskStyle, bgStrokePolygonStyle,
+    bgSegmentStrokePolygons,
     fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
     // Label
     label, labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,

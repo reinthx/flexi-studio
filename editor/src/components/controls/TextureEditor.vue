@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { TextureFill, TexturePagination } from '@shared/configSchema'
+import type { TextureFill, TexturePagination, Orientation } from '@shared/configSchema'
 import { BAR_TEXTURE_PRESETS } from '@shared/texturePresets'
 import { processImageFile } from '../../lib/imageProcessor'
 import BarSlider from './BarSlider.vue'
 
-const props = defineProps<{ modelValue: TextureFill }>()
+const props = defineProps<{ modelValue: TextureFill; orientation?: Orientation }>()
 const emit  = defineEmits<{ 'update:modelValue': [v: TextureFill] }>()
 
 const loading = ref(false)
@@ -13,6 +13,7 @@ const error   = ref('')
 
 // Ensure repeat value is always defined and matches type
 const repeatValue = computed(() => props.modelValue?.repeat ?? 'stretch')
+const isHorizontal = computed(() => props.orientation === 'horizontal')
 
 function patch(p: Partial<TextureFill>) {
   emit('update:modelValue', { ...props.modelValue, ...p })
@@ -141,6 +142,7 @@ function setTintMode(mode: 'none' | 'solid' | 'gradient') {
               const val = (e.target as HTMLInputElement).value
               const currentPag = props.modelValue.pagination ?? { enabled: false, startOffsetX: 0, startOffsetY: 0 }
               if (val === 'paginate') {
+                if (isHorizontal) return
                 patch({ repeat: 'paginate', pagination: { ...currentPag, enabled: true } })
               } else {
                 patch({ repeat: val as 'repeat' | 'no-repeat' | 'stretch', pagination: { ...currentPag, enabled: false } })
@@ -149,9 +151,12 @@ function setTintMode(mode: 'none' | 'solid' | 'gradient') {
             <option value="repeat">Tile</option>
             <option value="no-repeat">No repeat</option>
             <option value="stretch">Stretch</option>
-            <option value="paginate">Paginate</option>
+            <option value="paginate" :disabled="isHorizontal">Paginate{{ isHorizontal ? ' (Vertical only)' : '' }}</option>
           </select>
         </div>
+        <p v-if="isHorizontal && repeatValue === 'paginate'" class="hint">
+          Paginated textures use Vertical row offsets, so Horizontal previews and overlays fall back to stretch.
+        </p>
 
         <div class="options-spacer" />
 

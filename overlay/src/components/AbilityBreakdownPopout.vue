@@ -826,6 +826,24 @@ function castCooldownLabel(event: CastEvent): string {
   return cooldownMs ? `${Math.round(cooldownMs / 1000)}s cooldown` : ''
 }
 
+function scrollElementHorizontallyByWheel(el: HTMLElement, e: WheelEvent): boolean {
+  const maxScroll = el.scrollWidth - el.clientWidth
+  if (maxScroll <= 0) return false
+  const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+  if (!delta) return false
+  el.scrollLeft += delta
+  return true
+}
+
+function onCastTimelineWheel(e: WheelEvent): void {
+  const target = e.target as HTMLElement | null
+  const inLabelColumn = !!target?.closest('.cast-analysis-label, .cast-analysis-label-head, .cast-analysis-section:not(.cast-analysis-section--timeline)')
+  if (inLabelColumn && !e.shiftKey) return
+  if (scrollElementHorizontallyByWheel(e.currentTarget as HTMLElement, e)) {
+    e.preventDefault()
+  }
+}
+
 function abilityIconKey(abilityId: string, abilityName: string): string {
   return `${abilityId || 'unknown'}:${abilityName}`
 }
@@ -2434,7 +2452,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="cast-analysis-shell">
-              <div class="cast-analysis-scroll">
+              <div class="cast-analysis-scroll" @wheel="onCastTimelineWheel">
                 <div class="cast-analysis-table" :style="{ width: (castTimelinePixelWidth + 170) + 'px' }">
                   <div class="cast-analysis-label-head">
                     <span>Timeline</span>
@@ -3181,6 +3199,7 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   width: 100%;
   height: 100%;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .cast-analysis-table {
   min-width: 100%;

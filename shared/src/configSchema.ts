@@ -70,6 +70,12 @@ export interface BarOutline {
   target?: 'bg' | 'fill' | 'both'  // default 'both'
 }
 
+export interface BarBackgroundStroke {
+  enabled: boolean
+  color: string
+  width: number
+}
+
 export interface BarShadow {
   enabled: boolean
   color: string
@@ -126,6 +132,7 @@ export interface BarShape {
   borderRadius: BorderRadius  // used only when both edges are flat (no chamfer)
   cornerCuts: CornerCuts      // chamfer — when any corner has both x+y > 0, overrides polygon
   outline: BarOutline
+  bgStroke?: BarBackgroundStroke
   shadow?: BarShadow          // background bar shadow
   fillShadow?: BarShadow      // fill bar shadow (polish effect)
   fillInsetTop?: number       // px — push fill down from top (name-above-bar layout)
@@ -263,6 +270,7 @@ export interface BarStyle {
   shape: BarShape
   label: BarLabel
   height: number   // px — bar height in vertical mode, bar width in horizontal mode
+  horizontalHeight?: number  // px — bar height/length in horizontal mode
   gap: number      // px — spacing between bars
 }
 
