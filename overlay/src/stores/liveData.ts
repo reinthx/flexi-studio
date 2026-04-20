@@ -695,6 +695,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     abilityId: string,
     abilityName: string,
     damage: number,
+    hitSeverity = 0,
   ): void {
     if (!currentAbilityData.value[effectiveName]) {
       currentAbilityData.value[effectiveName] = {}
@@ -708,6 +709,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
         hits: 0,
         maxHit: 0,
         minHit: Infinity,
+        critHits: 0,
+        directHits: 0,
+        critDirectHits: 0,
       }
     }
     const stats: AbilityStats = combatant[abilityId]
@@ -715,8 +719,29 @@ export const useLiveDataStore = defineStore('liveData', () => {
     stats.hits += 1
     if (damage > stats.maxHit) stats.maxHit = damage
     if (damage < stats.minHit) stats.minHit = damage
+    if (hitSeverity === 0x20 || hitSeverity === 0x60) {
+      stats.critHits = (stats.critHits ?? 0) + 1
+      stats.critMinHit = Math.min(stats.critMinHit ?? Infinity, damage)
+      stats.critMaxHit = Math.max(stats.critMaxHit ?? 0, damage)
+    }
+    if (hitSeverity === 0x40 || hitSeverity === 0x60) {
+      stats.directHits = (stats.directHits ?? 0) + 1
+      stats.directMinHit = Math.min(stats.directMinHit ?? Infinity, damage)
+      stats.directMaxHit = Math.max(stats.directMaxHit ?? 0, damage)
+    }
+    if (hitSeverity === 0x60) {
+      stats.critDirectHits = (stats.critDirectHits ?? 0) + 1
+      stats.critDirectMinHit = Math.min(stats.critDirectMinHit ?? Infinity, damage)
+      stats.critDirectMaxHit = Math.max(stats.critDirectMaxHit ?? 0, damage)
+    }
 
     recordTimelineBucket(currentTimeline.value, effectiveName, damage)
+  }
+
+  function actionEffectSeverity(flags: string): number {
+    const parsed = parseInt(flags, 16)
+    if (!Number.isFinite(parsed)) return 0
+    return Math.floor(parsed / 0x100) & 0xFF
   }
 
   // Check if combatant is the player's own chocobo (should exclude from casts)
@@ -1041,7 +1066,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         // Damage hit — attribute to source for DPS, to target for DTPS
         const damage = decodeLogDamage(damageHex)
         if (damage === 0 || !effectiveName || !abilityId) return
-        recordAbilityHit(effectiveName, abilityId, abilityName, damage)
+        recordAbilityHit(effectiveName, abilityId, abilityName, damage, actionEffectSeverity(flags))
         if (targetName) {
           recordDamageTaken(targetName, abilityId, abilityName, damage)
           recordTimelineBucket(currentDtakenTimeline.value, targetName, damage)
@@ -1192,6 +1217,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const deathIdx = pendingDeathUpdates.get(targetName)
         if (deathIdx !== undefined && currentDeaths.value[deathIdx]) {
           currentDeaths.value[deathIdx].resurrectTime = rTime
+          currentDeaths.value[deathIdx].resurrectSourceName = sourceName
         }
         pendingDeathUpdates.delete(targetName)
         scheduleBroadcast()

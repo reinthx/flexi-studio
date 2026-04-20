@@ -11,7 +11,7 @@ export function useBreakdownViewState() {
   const eventWindowOnly = ref(false)
   const eventActorScope = ref<EventActorScope>('selected')
   const eventFilters = ref<Set<EventFilter>>(new Set(['damage', 'healing', 'casts', 'deaths', 'raises']))
-  const timelineOverlays = ref<Set<TimelineOverlay>>(new Set(['deaths', 'raises', 'spikes']))
+  const timelineOverlays = ref<Set<TimelineOverlay>>(new Set(['buffs', 'deaths', 'raises', 'spikes']))
   const timelineFocusBucket = ref<number | null>(null)
   const castFilters = ref<Set<CastFilter>>(new Set(['cooldowns', 'mitigations', 'dps', 'heals']))
 

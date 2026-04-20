@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { formatValue } from '@shared/formatValue'
 import type { CombatantAbilityData, DpsTimeline, DeathRecord, DeathEvent, CastEvent, ResourceSample } from '@shared/configSchema'
 import { TIMELINE_BUCKET_SEC } from '@shared/configSchema'
+import { RAID_BUFFS } from '@shared/raidBuffs'
 import { getJobIconSrc, normalizeJob } from '@shared/jobMap'
 import { abilityInitials, resolveAbilityInfo } from '@shared/abilityIcons'
 import ActorRail from './AbilityBreakdown/ActorRail.vue'
@@ -274,6 +275,30 @@ const abilities = computed(() =>
       minHit: a.minHit === Infinity ? 0 : a.minHit,
     }))
 )
+
+type AbilityRow = (typeof abilities.value)[number]
+
+function pctOf(count: number | undefined, total: number | undefined): string {
+  if (!count || !total) return '-'
+  return `${((count / total) * 100).toFixed(1)}%`
+}
+
+function hitRange(minHit: number | undefined, maxHit: number | undefined): string {
+  if (!minHit || minHit === Infinity || !maxHit) return '-'
+  return `${f(minHit)} - ${f(maxHit)}`
+}
+
+function critPct(row: AbilityRow): string {
+  return pctOf(row.critHits, row.hits)
+}
+
+function directPct(row: AbilityRow): string {
+  return pctOf(row.directHits, row.hits)
+}
+
+function critDirectPct(row: AbilityRow): string {
+  return pctOf(row.critDirectHits, row.hits)
+}
 
 // ── Damage Taken (Summary "Taken" mode) ──────────────────────────────────────
 const takenRawData = computed(() => damageTakenData.value[resolvedSelected.value] ?? {})
@@ -797,7 +822,7 @@ function castEventLeft(event: CastEvent): string {
 function castEventWidth(event: CastEvent): string {
   if (event.buffDurationMs && castTimelineDuration.value > 0) {
     const pct = (event.buffDurationMs / 1000) / castTimelineDuration.value * 100
-    return `${Math.max(22, pct)}%`
+    return `max(22px, ${Math.max(0, pct)}%)`
   }
   return '22px'
 }
@@ -1235,21 +1260,60 @@ const hoverTooltip = computed(() => {
     }))
     .sort((a, b) => b.value - a.value)
   const groupVal = entries.reduce((sum, e) => sum + e.value, 0)
-  return { timeLabel, entries, groupVal }
+  const windowStart = secs
+  const windowEnd = secs + TIMELINE_BUCKET_SEC
+  const activeBuffs = timelineRaidBuffWindows.value
+    .filter(buff => buff.start < windowEnd && buff.end >= windowStart)
+    .slice(0, 8)
+  const deaths = timelineDeathMarkers.value
+    .filter(marker => marker.time >= windowStart && marker.time < windowEnd)
+  const raises = timelineRaiseMarkers.value
+    .filter(marker => marker.time >= windowStart && marker.time < windowEnd)
+  return { timeLabel, entries, groupVal, activeBuffs, deaths, raises }
+})
+
+const timelineRaidBuffWindows = computed(() => {
+  const windows: Array<{ key: string; start: number; end: number; source: string; target: string; name: string }> = []
+  for (const [source, events] of Object.entries(castData.value)) {
+    for (const event of events) {
+      if (!event.buffDurationMs) continue
+      const buffName = event.effectName || event.abilityName
+      const buffKey = buffName.trim().toLowerCase()
+      if (!RAID_BUFFS[buffKey]) continue
+      windows.push({
+        key: `${source}-${event.target}-${buffName}-${event.t}`,
+        start: event.t / 1000,
+        end: (event.t + event.buffDurationMs) / 1000,
+        source,
+        target: event.target,
+        name: buffName,
+      })
+    }
+  }
+  return windows.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name))
 })
 
 const timelineDeathMarkers = computed(() =>
   sortedDeaths.value
-    .filter(death => death.targetName === resolvedSelected.value)
-    .map(death => death.timestamp / 1000)
-    .filter(time => time >= 0)
+    .map(death => ({
+      key: `death-${death.targetId}-${death.timestamp}`,
+      time: death.timestamp / 1000,
+      label: `${death.targetName} died at ${fmtTime(death.timestamp)}`,
+      death,
+    }))
+    .filter(marker => marker.time >= 0)
 )
 
 const timelineRaiseMarkers = computed(() =>
   sortedDeaths.value
-    .filter(death => death.targetName === resolvedSelected.value && death.resurrectTime)
-    .map(death => (death.resurrectTime ?? 0) / 1000)
-    .filter(time => time >= 0)
+    .filter(death => death.resurrectTime)
+    .map(death => ({
+      key: `raise-${death.targetId}-${death.resurrectTime}`,
+      time: (death.resurrectTime ?? 0) / 1000,
+      label: `${death.targetName} Raised by ${death.resurrectSourceName || 'Unknown'} at ${fmtTime(death.resurrectTime ?? 0)}`,
+      death,
+    }))
+    .filter(marker => marker.time >= 0)
 )
 
 const timelineCastMarkers = computed(() =>
@@ -1626,6 +1690,7 @@ onUnmounted(() => {
     <div class="bp-topbar">
       <span class="bp-app-title">Flexi Breakdown</span>
       <span v-if="encounterTotal > 0" class="bp-total">{{ f(encounterTotal) }} tracked</span>
+      <a class="bp-topbar-link" href="#/editor" target="_blank" rel="noreferrer">Editor</a>
     </div>
 
     <div class="bp-analysis-header">
@@ -1672,7 +1737,7 @@ onUnmounted(() => {
         <button class="bp-filter-btn" :class="{ active: showFriendlyNPCs }" @click="showFriendlyNPCs = !showFriendlyNPCs">NPCs</button>
         <button
           v-if="activeView === 'timeline'"
-          v-for="overlay in ['deaths', 'raises', 'casts', 'spikes']"
+          v-for="overlay in ['buffs', 'deaths', 'raises', 'casts', 'spikes']"
           :key="overlay"
           class="bp-filter-btn"
           :class="{ active: timelineOverlays.has(overlay as TimelineOverlay) }"
@@ -1999,9 +2064,8 @@ onUnmounted(() => {
                 <th class="col-name">Ability</th>
                 <th class="col-num">Total</th>
                 <th class="col-pct">%</th>
-                <th class="col-num">Rate</th>
-                <th class="col-num">Hits/Casts</th>
-                <th class="col-num">Avg</th>
+                <th class="col-num">DPS</th>
+                <th class="col-num">Casts</th>
                 <th class="col-num">Max</th>
               </tr></thead>
               <tbody>
@@ -2011,7 +2075,6 @@ onUnmounted(() => {
                   <td class="col-pct">{{ row.pct }}%</td>
                   <td class="col-num">{{ encounterDurationSec > 0 ? f(row.dps) : '—' }}</td>
                   <td class="col-num">{{ row.hits }}</td>
-                  <td class="col-num">{{ f(row.avg) }}</td>
                   <td class="col-num">{{ f(row.maxHit) }}</td>
                 </tr>
               </tbody>
@@ -2026,12 +2089,15 @@ onUnmounted(() => {
             <div class="bp-inspector-block">
               <div class="bp-kv"><span>Ability</span><strong>{{ selectedDoneAbility.abilityName }}</strong></div>
               <div class="bp-kv"><span>Total</span><strong>{{ f(selectedDoneAbility.totalDamage) }}</strong></div>
-              <div class="bp-kv"><span>Share</span><strong>{{ selectedDoneAbility.pct }}%</strong></div>
-              <div class="bp-kv"><span>Rate</span><strong>{{ encounterDurationSec > 0 ? f(selectedDoneAbility.dps) : '—' }}</strong></div>
-              <div class="bp-kv"><span>Hits</span><strong>{{ selectedDoneAbility.hits }}</strong></div>
-              <div class="bp-kv"><span>Range</span><strong>{{ f(selectedDoneAbility.minHit) }} → {{ f(selectedDoneAbility.maxHit) }}</strong></div>
-              <div class="bp-kv"><span>Crit Avg</span><strong>Not captured yet</strong></div>
-              <div class="bp-kv"><span>Direct Hit Avg</span><strong>Not captured yet</strong></div>
+              <div class="bp-kv"><span>DPS</span><strong>{{ encounterDurationSec > 0 ? f(selectedDoneAbility.dps) : '—' }}</strong></div>
+              <div class="bp-kv"><span>Rate</span><strong>{{ selectedDoneAbility.pct }}%</strong></div>
+              <div class="bp-kv"><span>Range</span><strong>{{ f(selectedDoneAbility.minHit) }} - {{ f(selectedDoneAbility.maxHit) }}</strong></div>
+              <div class="bp-kv"><span>Crit %</span><strong>{{ critPct(selectedDoneAbility) }}</strong></div>
+              <div class="bp-kv"><span>Crit Range</span><strong>{{ hitRange(selectedDoneAbility.critMinHit, selectedDoneAbility.critMaxHit) }}</strong></div>
+              <div class="bp-kv"><span>Direct Hit %</span><strong>{{ directPct(selectedDoneAbility) }}</strong></div>
+              <div class="bp-kv"><span>Direct Hit Range</span><strong>{{ hitRange(selectedDoneAbility.directMinHit, selectedDoneAbility.directMaxHit) }}</strong></div>
+              <div class="bp-kv"><span>Crit Direct Hit %</span><strong>{{ critDirectPct(selectedDoneAbility) }}</strong></div>
+              <div class="bp-kv"><span>Crit Direct Hit Range</span><strong>{{ hitRange(selectedDoneAbility.critDirectMinHit, selectedDoneAbility.critDirectMaxHit) }}</strong></div>
             </div>
           </template>
         </aside>
@@ -2151,6 +2217,21 @@ onUnmounted(() => {
               </g>
               <rect :x="PL" :y="PT" :width="CW" :height="CH" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1" />
 
+              <rect
+                v-if="timelineOverlays.has('buffs')"
+                v-for="buff in timelineRaidBuffWindows"
+                :key="`raidbuff-${buff.key}`"
+                :x="markerXForTime(buff.start, chartLines.maxBuckets)"
+                :y="PT"
+                :width="Math.max(2, markerXForTime(buff.end, chartLines.maxBuckets) - markerXForTime(buff.start, chartLines.maxBuckets))"
+                :height="CH"
+                fill="rgba(116,185,255,0.12)"
+                stroke="rgba(116,185,255,0.18)"
+                stroke-width="0.5"
+              >
+                <title>{{ `${buff.name} active (${fmtSeconds(buff.start)}-${fmtSeconds(buff.end)})${buff.source ? ` from ${buff.source}` : ''}${buff.target ? ` on ${buff.target}` : ''}` }}</title>
+              </rect>
+
               <polyline
                 v-for="s in chartLines.series"
                 v-show="!hiddenSeries.has(s.name)"
@@ -2180,27 +2261,31 @@ onUnmounted(() => {
 
               <line
                 v-if="timelineOverlays.has('deaths')"
-                v-for="time in timelineDeathMarkers"
-                :key="`death-marker-${time}`"
-                :x1="markerXForTime(time, chartLines.maxBuckets)"
+                v-for="marker in timelineDeathMarkers"
+                :key="marker.key"
+                :x1="markerXForTime(marker.time, chartLines.maxBuckets)"
                 :y1="PT"
-                :x2="markerXForTime(time, chartLines.maxBuckets)"
+                :x2="markerXForTime(marker.time, chartLines.maxBuckets)"
                 :y2="PT + CH"
                 stroke="rgba(255,70,70,0.55)"
                 stroke-width="1.5"
-              />
+              >
+                <title>{{ marker.label }}</title>
+              </line>
 
               <line
                 v-if="timelineOverlays.has('raises')"
-                v-for="time in timelineRaiseMarkers"
-                :key="`raise-marker-${time}`"
-                :x1="markerXForTime(time, chartLines.maxBuckets)"
+                v-for="marker in timelineRaiseMarkers"
+                :key="marker.key"
+                :x1="markerXForTime(marker.time, chartLines.maxBuckets)"
                 :y1="PT"
-                :x2="markerXForTime(time, chartLines.maxBuckets)"
+                :x2="markerXForTime(marker.time, chartLines.maxBuckets)"
                 :y2="PT + CH"
-                stroke="rgba(90,220,120,0.55)"
+                stroke="rgba(255,255,255,0.72)"
                 stroke-width="1.5"
-              />
+              >
+                <title>{{ marker.label }}</title>
+              </line>
 
               <circle
                 v-if="timelineOverlays.has('casts')"
@@ -2235,6 +2320,24 @@ onUnmounted(() => {
               <div v-if="hoverTooltip.entries.length > 1" class="bp-tooltip-group">
                 <span class="bp-tooltip-name">Group</span>
                 <span class="bp-tooltip-val">{{ f(hoverTooltip.groupVal) }}</span>
+              </div>
+              <div v-if="hoverTooltip.activeBuffs.length > 0" class="bp-tooltip-section">
+                <div class="bp-tooltip-section-title">Raid Buffs</div>
+                <div v-for="buff in hoverTooltip.activeBuffs" :key="`tip-${buff.key}`" class="bp-tooltip-row">
+                  <span class="bp-tooltip-name">{{ buff.name }}</span>
+                  <span class="bp-tooltip-val">{{ buff.source }}</span>
+                </div>
+              </div>
+              <div v-if="hoverTooltip.deaths.length > 0 || hoverTooltip.raises.length > 0" class="bp-tooltip-section">
+                <div class="bp-tooltip-section-title">Events</div>
+                <div v-for="marker in hoverTooltip.deaths" :key="`tip-${marker.key}`" class="bp-tooltip-row">
+                  <span class="bp-tooltip-name" :style="nameStyle(marker.death.targetName)">{{ marker.death.targetName }}</span>
+                  <span class="bp-tooltip-val">Died</span>
+                </div>
+                <div v-for="marker in hoverTooltip.raises" :key="`tip-${marker.key}`" class="bp-tooltip-row">
+                  <span class="bp-tooltip-name" :style="nameStyle(marker.death.targetName)">{{ marker.death.targetName }}</span>
+                  <span class="bp-tooltip-val">Raised by {{ marker.death.resurrectSourceName || 'Unknown' }}</span>
+                </div>
               </div>
             </div>
 
@@ -2549,8 +2652,8 @@ onUnmounted(() => {
                         :title="`${fmtTime(event.t)} · ${event.abilityName}${event.durationMs ? ` · ${(event.durationMs / 1000).toFixed(1)}s cast` : ''}${event.buffDurationMs ? ` · ${(event.buffDurationMs / 1000).toFixed(0)}s active` : ''}${castCooldownLabel(event) ? ` · ${castCooldownLabel(event)}` : ''}${event.target ? ` → ${event.target}` : ''}`"
                         @click.stop="castSelectedAbility = row.name; selectAbility(row.name)"
                       >
-                        <img v-if="!event.buffDurationMs && abilityIconSrc(event.abilityId, event.abilityName)" class="cast-event-icon" :src="abilityIconSrc(event.abilityId, event.abilityName)" :alt="event.abilityName" @error="clearAbilityIcon(event.abilityId, event.abilityName)" />
-                        <span v-else>{{ event.buffDurationMs ? row.name : abilityInitials(row.name) }}</span>
+                        <img v-if="abilityIconSrc(event.abilityId, event.abilityName)" class="cast-event-icon" :src="abilityIconSrc(event.abilityId, event.abilityName)" :alt="event.abilityName" @error="clearAbilityIcon(event.abilityId, event.abilityName)" />
+                        <span v-else>{{ abilityInitials(row.name) }}</span>
                       </button>
                       <div v-if="castPlayerDeathTime !== null" class="cast-analysis-death-line" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%' }" />
                       <div v-if="castPlayerResTime !== null" class="cast-analysis-raise-line" :style="{ left: (castPlayerResTime / castTimelineDuration * 100) + '%' }" />
@@ -2691,7 +2794,19 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 .bp-app-title { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.5); letter-spacing: 0.03em; white-space: nowrap; }
-.bp-total { font-size: 11px; color: rgba(255,255,255,0.3); margin-left: auto; white-space: nowrap; }
+.bp-topbar-link {
+  margin-left: auto;
+  color: #8ecae6;
+  border: 1px solid rgba(142,202,230,0.28);
+  background: rgba(142,202,230,0.08);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  text-decoration: none;
+  line-height: 1.2;
+}
+.bp-topbar-link:hover { color: #c6efff; border-color: rgba(142,202,230,0.48); }
+.bp-total { font-size: 11px; color: rgba(255,255,255,0.3); white-space: nowrap; }
 .bp-pull-select {
   flex: 1; min-width: 0;
   background: #1a1a24;
@@ -2861,6 +2976,17 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   font-variant-numeric: tabular-nums;
   color: rgba(116,240,195,0.78);
   white-space: nowrap;
+}
+.bp-tooltip-section {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+.bp-tooltip-section-title {
+  margin-bottom: 3px;
+  font-size: 9px;
+  text-transform: uppercase;
+  color: rgba(142,202,230,0.72);
 }
 
 /* ── Legend ── */
@@ -3434,14 +3560,26 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 .cast-analysis-event--dps { background: linear-gradient(135deg, #9a7422, #ffd250); color: #1b1300; }
 .cast-analysis-event--heals { background: linear-gradient(135deg, #a83464, #fd79a8); }
 .cast-analysis-event--buff-window {
-  height: 18px;
-  top: 6px;
+  height: 22px;
+  top: 4px;
   min-width: 30px;
   transform: none;
   text-align: left;
-  padding: 0 6px;
+  padding: 0;
   border-radius: 4px;
-  opacity: 0.9;
+  opacity: 0.72;
+}
+.cast-analysis-event--buff-window .cast-event-icon {
+  width: 22px;
+  height: 22px;
+  border-right: 1px solid rgba(255,255,255,0.18);
+}
+.cast-analysis-event--buff-window > span {
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  background: rgba(0,0,0,0.16);
 }
 .cast-analysis-death-line,
 .cast-analysis-raise-line {
@@ -3452,7 +3590,7 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   pointer-events: none;
 }
 .cast-analysis-death-line { background: rgba(255,23,68,0.65); }
-.cast-analysis-raise-line { background: rgba(0,230,118,0.65); }
+.cast-analysis-raise-line { background: rgba(255,255,255,0.72); }
 .cast-row-main:hover {
   background: rgba(255,255,255,0.03);
 }

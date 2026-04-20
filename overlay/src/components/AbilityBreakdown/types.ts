@@ -19,7 +19,7 @@ export interface PullEntry {
 }
 
 export type BreakdownView = 'overview' | 'pulls' | 'done' | 'taken' | 'timeline' | 'deaths' | 'casts' | 'events'
-export type TimelineOverlay = 'deaths' | 'raises' | 'casts' | 'spikes'
+export type TimelineOverlay = 'buffs' | 'deaths' | 'raises' | 'casts' | 'spikes'
 export type EventFilter = 'damage' | 'healing' | 'casts' | 'deaths' | 'raises'
 export type EventActorScope = 'selected' | 'all'
 export type CastFilter = 'cooldowns' | 'mitigations' | 'dps' | 'heals'

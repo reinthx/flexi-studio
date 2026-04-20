@@ -487,6 +487,15 @@ export interface AbilityStats {
   hits: number
   maxHit: number
   minHit: number
+  critHits?: number
+  critMinHit?: number
+  critMaxHit?: number
+  directHits?: number
+  directMinHit?: number
+  directMaxHit?: number
+  critDirectHits?: number
+  critDirectMinHit?: number
+  critDirectMaxHit?: number
 }
 
 // [combatantName][abilityId] → AbilityStats
@@ -562,6 +571,7 @@ export interface DeathRecord {
   lastHits?: HitRecord[]  // damage/heals on this target in the 30s before death
   events?: DeathEvent[]
   resurrectTime?: number  // ms since pull start, when raised (if applicable)
+  resurrectSourceName?: string
 }
 
 export interface PullRecord {
