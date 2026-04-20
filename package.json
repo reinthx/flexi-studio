@@ -16,10 +16,12 @@
     "preview": "cd dist/editor && npx http-server -p 3000",
     "preview:overlay": "cd dist/overlay && npx http-server -p 3001",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "2.1.9",
     "concurrently": "^9.2.1",
     "pako": "^2.1.0",
     "vitest": "^2.1.0"

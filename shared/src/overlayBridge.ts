@@ -111,6 +111,8 @@ function detectMode(): ConnectionMode {
     return 'modern'
   }
 
+  if (typeof window.OverlayPluginApi?.callHandler === 'function') return 'legacy'
+
   if (typeof import.meta !== 'undefined' && (import.meta as { env?: { DEV?: boolean } }).env?.DEV) return 'mock'
 
   return 'legacy'

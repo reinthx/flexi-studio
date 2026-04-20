@@ -53,3 +53,69 @@ describe('profileCodec round-trip', () => {
     expect(isShareString('random')).toBe(false)
   })
 })
+
+describe('profileCodec edge cases', () => {
+  it('handles empty profiles array', async () => {
+    const encoded = await encodeShareString([])
+    expect(encoded.startsWith('FLEXI1:')).toBe(true)
+  })
+
+  it('handles profiles with custom icons', async () => {
+    const profile = {
+      ...DEFAULT_PROFILE,
+      customIcons: { PLD: 'data:image/png;base64,abc123' },
+    }
+    const encoded = await encodeShareString([{ name: 'custom', profile }])
+    const decoded = await decodeShareString(encoded)
+    expect(decoded![0].profile.customIcons).toBeDefined()
+  })
+
+  it('handles extreme opacity values', async () => {
+    const profile = {
+      ...DEFAULT_PROFILE,
+      global: { ...DEFAULT_PROFILE.global, opacity: 0 },
+    }
+    const encoded = await encodeShareString([{ name: 'zero', profile }])
+    const decoded = await decodeShareString(encoded)
+    expect(decoded![0].profile.global.opacity).toBe(0)
+  })
+
+  it('handles maximum maxCombatants', async () => {
+    const profile = {
+      ...DEFAULT_PROFILE,
+      global: { ...DEFAULT_PROFILE.global, maxCombatants: 999 },
+    }
+    const encoded = await encodeShareString([{ name: 'max', profile }])
+    const decoded = await decodeShareString(encoded)
+    expect(decoded![0].profile.global.maxCombatants).toBe(999)
+  })
+
+  it('preserves all GlobalConfig fields', async () => {
+    const profile = { ...DEFAULT_PROFILE }
+    const encoded = await encodeShareString([{ name: 'full', profile }])
+    const decoded = await decodeShareString(encoded)
+    const decodedGlobal = decoded![0].profile.global
+
+    expect(decodedGlobal.dpsType).toBe('encdps')
+    expect(decodedGlobal.sortBy).toBe('encdps')
+    expect(decodedGlobal.maxCombatants).toBe(72)
+    expect(decodedGlobal.orientation).toBe('vertical')
+    expect(decodedGlobal.outOfCombat).toBe('dim')
+    expect(decodedGlobal.valueFormat).toBe('abbreviated')
+    expect(decodedGlobal.combatantFilter).toBe('all')
+    expect(decodedGlobal.mergePets).toBe(true)
+  })
+
+  it('handles various dpsType values', async () => {
+    const dpsTypes = ['encdps', 'enchps', 'dtps', 'rdps', 'damage%', 'healed%', 'crithit%'] as const
+    for (const dpsType of dpsTypes) {
+      const profile = {
+        ...DEFAULT_PROFILE,
+        global: { ...DEFAULT_PROFILE.global, dpsType },
+      }
+      const encoded = await encodeShareString([{ name: dpsType, profile }])
+      const decoded = await decodeShareString(encoded)
+      expect(decoded![0].profile.global.dpsType).toBe(dpsType)
+    }
+  })
+})

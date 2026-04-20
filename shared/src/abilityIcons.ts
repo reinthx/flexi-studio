@@ -91,10 +91,8 @@ function iconAssetUrl(iconId: number): string {
 const EMPTY_ABILITY_INFO: AbilityAssetInfo = { iconSrc: '' }
 
 export function abilityInitials(name: unknown): string {
-  const words = String(name ?? '')
-    .replace(/[^\w\s'-]/g, ' ')
-    .trim()
-    .split(/\s+/)
+  const words = Array.from(String(name ?? '').matchAll(/[\p{L}\p{N}'-]+/gu), match => match[0])
+    .filter(word => !/^[ivxlcdm]+$/i.test(word))
     .filter(Boolean)
   if (words.length === 0) return '?'
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
