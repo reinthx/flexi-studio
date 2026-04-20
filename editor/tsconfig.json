@@ -22,5 +22,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.vue", "../shared/src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.vue", "../shared/src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/__tests__/**", "../shared/src/**/*.test.ts", "../shared/src/**/__tests__/**"]
 }

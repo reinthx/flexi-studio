@@ -1,7 +1,9 @@
+import { computed, ref } from 'vue'
 import { describe, it, expect } from 'vitest'
 import type { BreakdownEventRow } from '../types'
 import { deathEventsFor } from '../deathTransforms'
 import type { DeathRecord } from '@shared/configSchema'
+import { useEventRows } from '../eventRows'
 
 const createDeath = (partial: Partial<DeathRecord> = {}): DeathRecord => ({
   targetId: '10',
@@ -50,5 +52,86 @@ describe('BreakdownEventRow', () => {
     expect(row.key).toBe('test')
     expect(row.eventType).toBe('damage')
     expect(row.amount).toBe(5000)
+  })
+})
+
+describe('useEventRows', () => {
+  it('combines cast, death recap, and raise rows sorted newest first', () => {
+    const selectedDeath = createDeath({ resurrectTime: 6500 })
+    const rows = useEventRows({
+      eventActorScope: ref('selected'),
+      visibleCombatants: computed(() => ['Player']),
+      resolvedSelected: computed(() => 'Player'),
+      castData: ref({
+        Player: [{ t: 3000, abilityId: '1', abilityName: 'Fire', target: 'Boss', type: 'cast' }],
+      }),
+      sortedDeaths: computed(() => [selectedDeath]),
+      eventFilters: ref(new Set(['damage', 'healing', 'casts', 'deaths', 'raises'])),
+      eventWindowOnly: ref(false),
+      selectedDeathWindow: computed(() => null),
+      format: mockFormat,
+    })
+
+    expect(rows.eventRowCountFor('Player')).toBe(rows.eventRowsRaw.value.length)
+    expect(rows.eventRowsRaw.value.map(row => row.t)).toEqual([...rows.eventRowsRaw.value.map(row => row.t)].sort((a, b) => b - a))
+    expect(rows.eventRowsRaw.value.map(row => row.eventType)).toEqual(['deaths', 'raises', 'damage', 'casts'])
+    expect(rows.eventRowsRaw.value.find(row => row.eventType === 'raises')).toMatchObject({
+      t: 6500,
+      actor: 'Player',
+      eventType: 'raises',
+      ability: 'Raise',
+      hpBefore: '0%',
+      hpAfter: 'raised',
+    })
+    expect(rows.eventRowsRaw.value.find(row => row.eventType === 'deaths')).toMatchObject({
+      eventType: 'deaths',
+      ability: 'KO',
+      target: 'Player',
+      amount: null,
+    })
+  })
+
+  it('supports all-actor scope, event filters, and selected death windows', () => {
+    const rows = useEventRows({
+      eventActorScope: ref('all'),
+      visibleCombatants: computed(() => ['Player', 'Other', 'Empty']),
+      resolvedSelected: computed(() => 'Player'),
+      castData: ref({
+        Player: [{ t: 1000, abilityId: '1', abilityName: 'Fire', target: 'Boss', type: 'cast' }],
+        Other: [{ t: 9000, abilityId: '2', abilityName: 'Regen', target: 'Other', type: 'tick' }],
+      }),
+      sortedDeaths: computed(() => []),
+      eventFilters: ref(new Set(['casts'])),
+      eventWindowOnly: ref(true),
+      selectedDeathWindow: computed(() => ({ start: 800, end: 2000 })),
+      format: mockFormat,
+    })
+
+    expect(rows.eventRowCountFor('Empty')).toBe(0)
+    expect(rows.eventRowsRaw.value.map(row => row.actor)).toEqual(['Other', 'Player'])
+    expect(rows.eventRows.value).toEqual([
+      expect.objectContaining({
+        actor: 'Player',
+        eventType: 'casts',
+        note: 'cast',
+      }),
+    ])
+  })
+
+  it('returns no selected-scope rows when no actor is selected', () => {
+    const rows = useEventRows({
+      eventActorScope: ref('selected'),
+      visibleCombatants: computed(() => ['Player']),
+      resolvedSelected: computed(() => ''),
+      castData: ref({ Player: [{ t: 1000, abilityId: '1', abilityName: 'Fire', type: 'cast' }] }),
+      sortedDeaths: computed(() => []),
+      eventFilters: ref(new Set(['casts'])),
+      eventWindowOnly: ref(false),
+      selectedDeathWindow: computed(() => null),
+      format: mockFormat,
+    })
+
+    expect(rows.eventRowsRaw.value).toEqual([])
+    expect(rows.eventRows.value).toEqual([])
   })
 })
