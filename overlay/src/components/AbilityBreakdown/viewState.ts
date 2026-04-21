@@ -15,6 +15,11 @@ export function useBreakdownViewState() {
   const timelineFocusBucket = ref<number | null>(null)
   const castFilters = ref<Set<CastFilter>>(new Set(['cooldowns', 'mitigations', 'dps', 'heals']))
 
+  const doneSortColumn = ref<'totalDamage' | 'dps' | 'hits' | 'maxHit' | 'critPct' | 'abilityName'>('totalDamage')
+  const doneSortDesc = ref(true)
+  const takenSortColumn = ref<'totalDamage' | 'hits' | 'maxHit' | 'abilityName'>('totalDamage')
+  const takenSortDesc = ref(true)
+
   const viewTabs: Array<{ id: BreakdownView; label: string }> = [
     { id: 'overview', label: 'Overview' },
     { id: 'pulls', label: 'Pulls' },
@@ -52,6 +57,24 @@ export function useBreakdownViewState() {
     activeView.value = 'timeline'
   }
 
+  function sortDoneBy(column: typeof doneSortColumn.value): void {
+    if (doneSortColumn.value === column) {
+      doneSortDesc.value = !doneSortDesc.value
+    } else {
+      doneSortColumn.value = column
+      doneSortDesc.value = true
+    }
+  }
+
+  function sortTakenBy(column: typeof takenSortColumn.value): void {
+    if (takenSortColumn.value === column) {
+      takenSortDesc.value = !takenSortDesc.value
+    } else {
+      takenSortColumn.value = column
+      takenSortDesc.value = true
+    }
+  }
+
   return {
     activeView,
     chartMetric,
@@ -66,9 +89,15 @@ export function useBreakdownViewState() {
     timelineFocusBucket,
     castFilters,
     viewTabs,
+    doneSortColumn,
+    doneSortDesc,
+    takenSortColumn,
+    takenSortDesc,
     toggleTimelineOverlay,
     toggleEventFilter,
     toggleCastFilter,
     openTimelineAtBucket,
+    sortDoneBy,
+    sortTakenBy,
   }
 }
