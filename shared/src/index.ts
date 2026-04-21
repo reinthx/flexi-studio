@@ -18,5 +18,6 @@ export * from './texturePresets'
 export * from './useBarStyles'
 export * from './useHeaderStyles'
 export * from './raidBuffs'
+export * from './rdpsMath'
 export { default as ScrollableBarsWrapper } from './components/ScrollableBarsWrapper.vue'
 

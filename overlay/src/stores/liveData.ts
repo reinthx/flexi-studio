@@ -21,6 +21,7 @@ import {
   deepClone,
   deepMerge,
   RAID_BUFFS,
+  allocatePercentageBuffDamage,
   isProfileLike,
   parseProfileSafe,
 } from '@shared'
@@ -636,7 +637,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
   // past 65535: actual = upper | ((lower & 0x3FFF) + 1) << 16.
   // Reference: https://github.com/OverlayPlugin/cactbot/blob/main/docs/LogGuide.md
   // Attribute player damage against enemies to buffs on the dealer and debuffs on the target.
-  // Contribution = damage × (multiplier − 1) per active window. Skips self-buffs.
+  // Logged damage already includes active buffs, so allocation removes the combined
+  // multiplier first and distributes the gained damage by log-weighted share.
   function isPlayerId(id: string): boolean {
     return id.startsWith('10')
   }
@@ -674,13 +676,14 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const windows = [
       ...activeBuffWindowsFor(dealerName, nowMs),
       ...activeBuffWindowsFor(targetName, nowMs),
-    ]
-    if (!windows || windows.length === 0) return
-    for (const w of windows) {
-      if (w.sourceName === dealerName) continue
-      const contribution = damage * (w.multiplier - 1)
-      rDpsContributed.set(w.sourceName, (rDpsContributed.get(w.sourceName) ?? 0) + contribution)
-      rDpsReceived.set(dealerName, (rDpsReceived.get(dealerName) ?? 0) + contribution)
+    ].filter(window => window.sourceName !== dealerName)
+    const allocations = allocatePercentageBuffDamage(damage, windows)
+    for (const allocation of allocations) {
+      rDpsContributed.set(
+        allocation.sourceName,
+        (rDpsContributed.get(allocation.sourceName) ?? 0) + allocation.amount,
+      )
+      rDpsReceived.set(dealerName, (rDpsReceived.get(dealerName) ?? 0) + allocation.amount)
     }
   }
 
@@ -1404,12 +1407,17 @@ export const useLiveDataStore = defineStore('liveData', () => {
         if (buff) {
           const windows = activeRaidBuffs.get(targetName) ?? []
           const durationMs = Number.isFinite(durationSec) ? Math.max(0, durationSec * 1000) : 0
-          windows.push({
+          const nextWindow = {
             sourceName,
             effectName,
             multiplier: buff.multiplier,
             expiresAt: currentPullOffsetMs() + durationMs,
-          })
+          }
+          const existingIndex = windows.findIndex(window =>
+            window.sourceName === sourceName && window.effectName === effectName,
+          )
+          if (existingIndex === -1) windows.push(nextWindow)
+          else windows[existingIndex] = nextWindow
           activeRaidBuffs.set(targetName, windows)
         }
       }

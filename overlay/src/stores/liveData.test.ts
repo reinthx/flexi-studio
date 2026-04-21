@@ -61,6 +61,24 @@ vi.mock('@shared', () => {
     return target
   }
 
+  function allocatePercentageBuffDamage(
+    damage: number,
+    windows: Array<{ sourceName: string; multiplier: number }>,
+  ) {
+    if (!Number.isFinite(damage) || damage <= 0) return []
+    const eligible = windows.filter(window => window.sourceName && window.multiplier > 1)
+    if (eligible.length === 0) return []
+    const totalMultiplier = eligible.reduce((product, window) => product * window.multiplier, 1)
+    const buffDamage = damage - damage / totalMultiplier
+    const totalLog = Math.log(totalMultiplier)
+    const bySource = new Map<string, number>()
+    for (const window of eligible) {
+      const weight = Math.log(window.multiplier) / totalLog
+      bySource.set(window.sourceName, (bySource.get(window.sourceName) ?? 0) + buffDamage * weight)
+    }
+    return Array.from(bySource, ([sourceName, amount]) => ({ sourceName, amount }))
+  }
+
   class TransitionEngine {
     private readonly onFrame: (frame: unknown) => void
 
@@ -91,6 +109,7 @@ vi.mock('@shared', () => {
     DEFAULT_PROFILE,
     deepClone,
     deepMerge,
+    allocatePercentageBuffDamage,
     RAID_BUFFS: {},
     isProfileLike: vi.fn((value: unknown) => !!value && typeof value === 'object'),
     parseProfileSafe: vi.fn((json: string) => {
