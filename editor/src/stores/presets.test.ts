@@ -119,6 +119,41 @@ describe('presets store custom presets', () => {
 })
 
 describe('presets store categories', () => {
+  it('starts without a default custom category for new storage', async () => {
+    const store = await createStore()
+
+    await store.init()
+
+    expect(store.categories).toEqual([])
+    expect(localStorage.setItem).not.toHaveBeenCalledWith(
+      'act-flexi-preset-categories',
+      expect.any(String),
+    )
+  })
+
+  it('removes the legacy empty User category without hiding assigned User presets', async () => {
+    const emptyLegacyStore = await createStore({
+      'act-flexi-preset-categories': JSON.stringify([{ name: 'User', collapsed: false }]),
+    })
+
+    await emptyLegacyStore.init()
+
+    expect(emptyLegacyStore.categories).toEqual([])
+    expect(localStorage.setItem).toHaveBeenCalledWith('act-flexi-preset-categories', '[]')
+
+    const assignedLegacyStore = await createStore({
+      'act-flexi-custom-presets': JSON.stringify([
+        { name: 'Saved', category: 'User', profile: mocks.config.profile },
+      ]),
+      'act-flexi-preset-categories': JSON.stringify([{ name: 'User', collapsed: false }]),
+    })
+
+    await assignedLegacyStore.init()
+
+    expect(assignedLegacyStore.categories).toEqual([{ name: 'User', collapsed: false }])
+    expect(assignedLegacyStore.presetsInCategory('User')).toHaveLength(1)
+  })
+
   it('renames and deletes categories while moving affected presets', async () => {
     const store = await createStore()
     store.categories = [{ name: 'Raid', collapsed: false }]

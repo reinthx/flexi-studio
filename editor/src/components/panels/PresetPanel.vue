@@ -343,30 +343,6 @@ const categoryOptions = computed(() => [
       </div>
     </div>
 
-    <!-- If no categories and no uncategorized (simple flat list) -->
-    <div
-      v-if="store.uncategorizedPresets.length > 0 && store.categories.length === 0"
-      class="preset-list flat-list"
-    >
-      <div
-        v-for="{ preset, globalIndex } in store.uncategorizedPresets"
-        :key="globalIndex"
-        class="preset-row"
-      >
-<button
-              class="preset-btn full"
-              :class="{ active: store.activePresetKey === `custom:${preset.name}` }"
-              @click="store.applyCustom(globalIndex)"
-            >
-              {{ preset.name }}
-              <span class="preset-orientation">{{ getOrientationIcon(preset.profile) }}</span>
-              <span class="preset-exports" @click.stop="exportSingle(globalIndex)">Export</span>
-            </button>
-        <button class="preset-btn mini" @click="updatePreset(globalIndex)" title="Save">💾</button>
-        <button class="preset-btn mini" @click="deletePreset(globalIndex)" title="Delete">×</button>
-      </div>
-    </div>
-
     <!-- Actions bar -->
     <div class="preset-actions">
       <input
@@ -577,10 +553,6 @@ const categoryOptions = computed(() => [
   flex-direction: column;
   gap: 3px;
 }
-.flat-list {
-  margin-top: 8px;
-}
-
 /* ── Preset row (draggable) ────────────────────────────────────────────────── */
 .preset-row {
   display: flex;
