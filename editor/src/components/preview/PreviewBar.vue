@@ -27,10 +27,11 @@ const barEl = ref<HTMLElement | null>(null)
 const { width: barWidth } = useElementSize(barEl)
 
 const {
-  shapeCss, isClipped, dims,
+  shapeCss, dims,
   shapeLayerStyle, shapeSvgLayerStyle, shapeSvgViewBox, shapeSvgPoints, shapeClipId,
   shapeSvgBgStyle, shapeSvgFillBox, shapeSvgFillStyle, shapeSvgStrokeStyle,
   bgShadowDirectionalClip, bgShadowStyle, bgShadowSourceStyle,
+  bgShadowSvgStyle, bgShadowSvgFilterId, bgShadowSvgMaskId, bgShadowSvgFilterAttrs, bgShadowSvgDropShadowAttrs, bgShadowSvgMaskAttrs, bgShadowSvgMaskRectAttrs,
   bgStyle, bgTextureInnerStyle, bgStrokePoints, bgStrokeViewBox, bgStrokeSvgStyle, bgStrokeMaskStyle, bgStrokePolygonStyle,
   bgSegmentStrokePolygons,
   fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
@@ -141,8 +142,31 @@ function fieldText(field: { template: string; valueFormat?: string }): string {
   <div ref="barEl" :style="wrapperStyle">
     <!-- Shadow (z:0) â€” directional clip prevents opposite-direction bleed -->
     <div :style="bgShadowDirectionalClip">
-      <div :style="bgShadowStyle">
-        <div v-if="isClipped" :style="bgShadowSourceStyle" />
+      <svg
+        v-if="bgShadowSvgStyle && bgShadowSvgFilterAttrs && bgShadowSvgDropShadowAttrs && bgShadowSvgMaskAttrs"
+        :style="bgShadowSvgStyle"
+        :viewBox="shapeSvgViewBox"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        <defs>
+          <filter v-bind="bgShadowSvgFilterAttrs">
+            <feDropShadow v-bind="bgShadowSvgDropShadowAttrs" />
+          </filter>
+          <mask v-bind="bgShadowSvgMaskAttrs">
+            <rect v-bind="bgShadowSvgMaskRectAttrs" fill="white" />
+            <polygon :points="shapeSvgPoints" fill="black" />
+          </mask>
+        </defs>
+        <polygon
+          :points="shapeSvgPoints"
+          fill="#000"
+          :filter="`url(#${bgShadowSvgFilterId})`"
+          :mask="`url(#${bgShadowSvgMaskId})`"
+        />
+      </svg>
+      <div v-else :style="bgShadowStyle">
+        <div v-if="bgShadowSourceStyle" :style="bgShadowSourceStyle" />
       </div>
     </div>
     <!-- Bg (z:1) -->

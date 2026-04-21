@@ -247,6 +247,8 @@ const DEFAULT_STYLE: BarStyle = {
 
 export { DEFAULT_ICON_CONFIG, DEFAULT_LABEL, DEFAULT_SHAPE, DEFAULT_STYLE }
 
+const SVG_SHADOW_REGION = 10000
+
 function getFillOpacity(fill?: BarFill): number {
   if (!fill) return 1
   if (fill.type === 'texture') return fill.texture.opacity
@@ -382,11 +384,9 @@ export function useBarStyles(
   const shapeHeightPx = computed(() => Math.max(1, (parseFloat(String(dims.value.height)) || 28) - shapeInsetTop.value))
   const shapePoints = computed<ShapePoint[]>(() => buildShapePoints(sc().shape ?? DEFAULT_SHAPE, shapeWidthPx.value, shapeHeightPx.value))
   const shapeSvgPoints = computed(() => pointsToString(shapePoints.value))
-  const shapeClipPathPx = computed(() => {
-    if (!isClipped.value) return undefined
-    return `polygon(${pointsToCssPolygon(shapePoints.value)})`
-  })
   const shapeSvgViewBox = computed(() => `0 0 ${shapeWidthPx.value} ${shapeHeightPx.value}`)
+  const bgShadowSvgFilterId = `flexi-bg-shadow-filter-${Math.random().toString(36).slice(2)}`
+  const bgShadowSvgMaskId = `flexi-bg-shadow-mask-${Math.random().toString(36).slice(2)}`
   const shapeSvgLayerStyle = computed(() => {
     if (!useSvgShape.value) return undefined
     const insetTop = shapeInsetTop.value
@@ -603,13 +603,7 @@ export function useBarStyles(
     if (!s?.enabled) return base
 
     if (isClipped.value) {
-      const cp = shapeClipPathPx.value ?? shapeCss.value.clipPath!
-      const innerPoints = cp.slice(8, -1)
-      return {
-        ...base,
-        filter: buildDropShadowFilter(s.offsetX, s.offsetY, s.blur, s.color, s.thickness ?? 0),
-        clipPath: `polygon(evenodd, -9999px -9999px, 9999px -9999px, 9999px 9999px, -9999px 9999px, ${innerPoints})`,
-      }
+      return base
     }
 
     return {
@@ -619,10 +613,57 @@ export function useBarStyles(
     }
   })
 
-  const bgShadowSourceStyle = computed(() => ({
-    position: 'absolute' as const, inset: '0',
-    background: '#000',
-    clipPath: shapeClipPathPx.value ?? shapeCss.value.clipPath,
+  const bgShadowSourceStyle = computed(() => undefined)
+
+  const bgShadowSvgStyle = computed(() => {
+    const s = sc().shape?.shadow
+    if (!isClipped.value || !s?.enabled) return undefined
+    return {
+      position: 'absolute' as const,
+      inset: '0',
+      pointerEvents: 'none' as const,
+      overflow: 'visible',
+    }
+  })
+  const bgShadowSvgFilterAttrs = computed(() => {
+    const s = sc().shape?.shadow
+    if (!isClipped.value || !s?.enabled) return undefined
+    return {
+      id: bgShadowSvgFilterId,
+      x: String(-SVG_SHADOW_REGION),
+      y: String(-SVG_SHADOW_REGION),
+      width: String(SVG_SHADOW_REGION * 2),
+      height: String(SVG_SHADOW_REGION * 2),
+      filterUnits: 'userSpaceOnUse',
+    }
+  })
+  const bgShadowSvgDropShadowAttrs = computed(() => {
+    const s = sc().shape?.shadow
+    if (!isClipped.value || !s?.enabled) return undefined
+    return {
+      dx: String(s.offsetX),
+      dy: String(s.offsetY),
+      stdDeviation: String((s.blur ?? 0) + Math.max(0, s.thickness ?? 0)),
+      floodColor: s.color,
+    }
+  })
+  const bgShadowSvgMaskAttrs = computed(() => {
+    const s = sc().shape?.shadow
+    if (!isClipped.value || !s?.enabled) return undefined
+    return {
+      id: bgShadowSvgMaskId,
+      x: String(-SVG_SHADOW_REGION),
+      y: String(-SVG_SHADOW_REGION),
+      width: String(SVG_SHADOW_REGION * 2),
+      height: String(SVG_SHADOW_REGION * 2),
+      maskUnits: 'userSpaceOnUse',
+    }
+  })
+  const bgShadowSvgMaskRectAttrs = computed(() => ({
+    x: String(-SVG_SHADOW_REGION),
+    y: String(-SVG_SHADOW_REGION),
+    width: String(SVG_SHADOW_REGION * 2),
+    height: String(SVG_SHADOW_REGION * 2),
   }))
 
   // ── Background ────────────────────────────────────────────────────────────
@@ -1389,6 +1430,7 @@ export function useBarStyles(
     shapeSvgBgStyle, shapeSvgFillBox, shapeSvgFillStyle, shapeSvgStrokeStyle,
     // Shadow
     bgShadowDirectionalClip, bgShadowStyle, bgShadowSourceStyle,
+    bgShadowSvgStyle, bgShadowSvgFilterId, bgShadowSvgMaskId, bgShadowSvgFilterAttrs, bgShadowSvgDropShadowAttrs, bgShadowSvgMaskAttrs, bgShadowSvgMaskRectAttrs,
     // Background + fill
     bgStyle, bgTextureInnerStyle, bgStrokePoints, bgStrokeViewBox, bgStrokeSvgStyle, bgStrokeMaskStyle, bgStrokePolygonStyle,
     bgSegmentStrokePolygons,

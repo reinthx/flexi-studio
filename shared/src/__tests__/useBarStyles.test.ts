@@ -243,6 +243,33 @@ describe('useBarStyles', () => {
     expect(styles.fillShadowWrapStyle.value.filter).toBe('drop-shadow(0px 0px 6px rgba(255,255,255,0.6))')
   })
 
+  it('does not render the clipped black shadow source when shape shadow is disabled', () => {
+    const style = cloneStyle()
+    style.bg = { type: 'solid', color: '#111111', opacity: 0 }
+    style.fill = { type: 'solid', color: '#222222', opacity: 0 }
+    style.shape = {
+      ...style.shape,
+      rightEdge: 'slant-a',
+      edgeDepth: 16,
+      shadow: { enabled: false, color: '#000000', blur: 10, thickness: 0, offsetX: 0, offsetY: 0 },
+    }
+    const styles = useBarStyles(
+      () => bar({ fillFraction: 0.5 }),
+      () => style,
+      () => 'vertical',
+      () => 0,
+      () => undefined,
+      undefined,
+      undefined,
+      () => 200,
+    )
+
+    expect(styles.isClipped.value).toBe(true)
+    expect(styles.bgStyle.value).toMatchObject({ display: 'none' })
+    expect(styles.fillStyle.value).toMatchObject({ display: 'none' })
+    expect(styles.bgShadowSourceStyle.value).toBeUndefined()
+  })
+
   it('keeps offset background shadow active for svg-backed non-rect shapes', () => {
     const style = cloneStyle()
     style.shape = {
@@ -265,7 +292,32 @@ describe('useBarStyles', () => {
     expect(styles.useSvgShape.value).toBe(true)
     expect(styles.bgShadowDirectionalClip.value).not.toHaveProperty('display', 'none')
     expect(styles.bgShadowDirectionalClip.value.clipPath).toBe('inset(-9999px -9999px 0px 0px)')
-    expect(styles.bgShadowStyle.value.filter).toBe('drop-shadow(20px -20px 10px rgba(0,0,0,0.5))')
+    expect(styles.bgShadowStyle.value).not.toHaveProperty('filter')
+    expect(styles.bgShadowSvgStyle.value).toMatchObject({
+      position: 'absolute',
+      inset: '0',
+      overflow: 'visible',
+    })
+    expect(styles.bgShadowSvgFilterAttrs.value).toMatchObject({
+      x: '-10000',
+      y: '-10000',
+      width: '20000',
+      height: '20000',
+      filterUnits: 'userSpaceOnUse',
+    })
+    expect(styles.bgShadowSvgDropShadowAttrs.value).toMatchObject({
+      dx: '20',
+      dy: '-20',
+      stdDeviation: '10',
+      floodColor: 'rgba(0,0,0,0.5)',
+    })
+    expect(styles.bgShadowSvgMaskAttrs.value).toMatchObject({
+      x: '-10000',
+      y: '-10000',
+      width: '20000',
+      height: '20000',
+      maskUnits: 'userSpaceOnUse',
+    })
   })
 
   it('applies job and self label color overrides to processed fields', () => {
