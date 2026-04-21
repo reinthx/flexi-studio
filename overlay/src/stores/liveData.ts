@@ -54,6 +54,37 @@ import { useOverlayConfig } from './overlayConfig'
 // Poll config from localStorage every 500ms as fallback
 // (storage events don't fire on same-origin in some browsers)
 const CONFIG_POLL_INTERVAL_MS = 500
+const METRIC_STRIP_SOURCES = ['encdps', 'enchps', 'dtps', 'rdps', 'damage%', 'healed%', 'crithit%', 'threat'] as const
+
+function parseNumeric(value: string | undefined): number {
+  const parsed = parseFloat(value ?? '0')
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function getMetricValue(c: Record<string, string>, source: string): number {
+  if (source === 'dtps') {
+    const duration = parseNumeric(c['DURATION'])
+    return duration > 0 ? parseNumeric(c['damagetaken']) / duration : 0
+  }
+  if (source === 'threat') {
+    return parseNumeric(c['threat%'] ?? c['Threat%'] ?? c['threat'] ?? c['Threat'])
+  }
+  return parseNumeric(c[source])
+}
+
+function buildMetricFractions(combatants: Array<Record<string, string>>, c: Record<string, string>): Record<string, number> {
+  const fractions: Record<string, number> = {}
+  for (const source of METRIC_STRIP_SOURCES) {
+    const raw = getMetricValue(c, source)
+    if (source === 'damage%' || source === 'healed%' || source === 'crithit%' || (source === 'threat' && (c['threat%'] || c['Threat%']))) {
+      fractions[source] = Math.max(0, Math.min(1, raw / 100))
+      continue
+    }
+    const max = Math.max(...combatants.map(item => getMetricValue(item, source)), 0) || 1
+    fractions[source] = Math.max(0, Math.min(1, raw / max))
+  }
+  return fractions
+}
 
 export const useLiveDataStore = defineStore('liveData', () => {
   // ─── State ───────────────────────────────────────────────────────────────────
@@ -457,14 +488,25 @@ export const useLiveDataStore = defineStore('liveData', () => {
     }
 
     filtered = [...filtered]
-      .sort((a, b) => parseFloat(b[g.sortBy] ?? '0') - parseFloat(a[g.sortBy] ?? '0'))
+      .sort((a, b) => {
+        if (g.sortBy === 'role') {
+          const roleOrder: Record<string, number> = { tank: 0, healer: 1, melee: 2, ranged: 3, caster: 4, unknown: 5 }
+          const getJobRole = (job: string) => {
+            const JOB_ROLES: Record<string, string> = { PLD: 'tank', WAR: 'tank', DRK: 'tank', GNB: 'tank', WHM: 'healer', SCH: 'healer', AST: 'healer', SGE: 'healer', MNK: 'melee', DRG: 'melee', NIN: 'melee', SAM: 'melee', RPR: 'melee', VPR: 'melee', BRD: 'ranged', MCH: 'ranged', DNC: 'ranged', BLM: 'caster', SMN: 'caster', RDM: 'caster', PCT: 'caster', BLU: 'caster' }
+            return JOB_ROLES[normalizeJob(job)] ?? 'unknown'
+          }
+          return (roleOrder[getJobRole(b['Job'] ?? '')] ?? 5) - (roleOrder[getJobRole(a['Job'] ?? '')] ?? 5)
+        }
+        return parseFloat(b[g.sortBy] ?? '0') - parseFloat(a[g.sortBy] ?? '0')
+      })
       .slice(0, g.maxCombatants)
 
-    const maxVal = parseFloat(filtered[0]?.[g.dpsType] ?? '1') || 1
+    const effectiveDpsType = ((g.dpsType as any) === 'role' ? 'encdps' : g.dpsType)
+    const maxVal = parseFloat(filtered[0]?.[effectiveDpsType] ?? '1') || 1
 
     // For DTPS, we need to calculate from damagetaken / DURATION (integer seconds from ACT)
     const getDtpsValue = (c: Record<string, string>) => {
-      if (g.dpsType !== 'dtps') return 0
+      if (effectiveDpsType !== 'dtps') return 0
       const dt = parseFloat(c['damagetaken'] ?? '0')
       const dur = parseFloat(c['DURATION'] ?? '0')
       return dur > 0 ? dt / dur : 0
@@ -476,10 +518,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
     const bars: BarFrame[] = filtered.map((c, i) => {
       let rawVal: number
-      if (g.dpsType === 'dtps') {
+      if (effectiveDpsType === 'dtps') {
         rawVal = getDtpsValue(c)
       } else {
-        rawVal = parseFloat(c[g.dpsType] ?? '0')
+        rawVal = parseFloat(c[effectiveDpsType] ?? '0')
       }
 
       // Calculate party group from partyType if available, fallback to position-based
@@ -511,7 +553,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
         tohit: c.tohit ?? '---',
         enchps: formatValue(parseFloat(c.enchps ?? '0'), g.valueFormat),
         rdps: formatValue(parseFloat(c['rdps'] ?? '0'), g.valueFormat),
+        rawValue: rawVal,
+        rawEnchps: parseFloat(c.enchps ?? '0'),
+        rawRdps: parseFloat(c['rdps'] ?? '0'),
         maxHit: (c.maxhit ?? '---').replace('-', ' '),
+        metricFractions: buildMetricFractions(filtered, c),
         alpha: 1,
         rank: i + 1,
       }
@@ -1602,7 +1648,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
         tohit: c.tohit ?? '---',
         enchps: formatValue(parseFloat(c.enchps ?? '0'), profile.value.global.valueFormat),
         rdps: formatValue(parseFloat(c['rdps'] ?? '0'), profile.value.global.valueFormat),
+        rawValue: rawVal,
+        rawEnchps: parseFloat(c.enchps ?? '0'),
+        rawRdps: parseFloat(c['rdps'] ?? '0'),
         maxHit: (c.maxhit ?? '---').replace('-', ' '),
+        metricFractions: buildMetricFractions(pull.combatants, c),
         alpha: 1,
         rank: i + 1,
       }

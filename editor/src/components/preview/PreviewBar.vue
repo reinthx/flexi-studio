@@ -34,6 +34,7 @@ const {
   bgStyle, bgTextureInnerStyle, bgStrokePoints, bgStrokeViewBox, bgStrokeSvgStyle, bgStrokeMaskStyle, bgStrokePolygonStyle,
   bgSegmentStrokePolygons,
   fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
+  metricStripBoundsStyle, metricStripStyle, metricStripOutsideExtent,
   labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
   showDeath, deathText, deathStyle,
   iconConfig, showIcon, iconSize,
@@ -53,7 +54,8 @@ const wrapperStyle = computed(() => {
   return {
     height: isHorizontal.value ? dims.value.height : `${adjustedHeight}px`,
     width: isHorizontal.value ? `${adjustedWidth}px` : dims.value.width,
-    marginBottom: dims.value.marginBottom,
+    marginTop: metricStripOutsideExtent.value.top ? `${metricStripOutsideExtent.value.top}px` : '0',
+    marginBottom: `${(parseFloat(String(dims.value.marginBottom)) || 0) + metricStripOutsideExtent.value.bottom}px`,
     marginRight: dims.value.marginRight,
     flex: dims.value.flex ?? '0 0 auto',
     opacity: String(props.bar.alpha),
@@ -120,6 +122,17 @@ const tokens = computed(() => ({
   maxHitName: maxHitName.value,
   maxHitValue: maxHitValue.value,
 }))
+
+function fieldText(field: { template: string; valueFormat?: string }): string {
+  if (!field.valueFormat) return renderTemplate(field.template, tokens.value)
+  const fmt = field.valueFormat as ValueFormat
+  return renderTemplate(field.template, {
+    ...tokens.value,
+    value: formatValue(props.bar.rawValue, fmt),
+    enchps: formatValue(props.bar.rawEnchps, fmt),
+    rdps: formatValue(props.bar.rawRdps, fmt),
+  })
+}
 </script>
 
 <template>
@@ -178,6 +191,9 @@ const tokens = computed(() => ({
           <div v-if="fillTextureInnerStyle" :style="fillTextureInnerStyle" />
         </div>
       </div>
+    </div>
+    <div v-if="metricStripBoundsStyle && metricStripStyle" :style="metricStripBoundsStyle">
+      <div :style="metricStripStyle" />
     </div>
     <svg
       v-if="bgStrokeSvgStyle && bgStrokePolygonStyle && (bgStrokePoints || bgSegmentStrokePolygons.length)"
@@ -253,7 +269,7 @@ const tokens = computed(() => ({
             whiteSpace:'nowrap',
             maxWidth:'100%',
             pointerEvents:'none',
-          }">{{ renderTemplate(field.template, tokens) }}</span>
+          }">{{ fieldText(field) }}</span>
           <span :style="{
             display:'block',
             minWidth: 0,
@@ -269,7 +285,7 @@ const tokens = computed(() => ({
               WebkitTextFillColor: field.gradientStyle ? 'transparent' : undefined,
             }),
           }">
-            {{ renderTemplate(field.template, tokens) }}
+            {{ fieldText(field) }}
           </span>
         </div>
       </template>

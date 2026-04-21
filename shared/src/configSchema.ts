@@ -210,6 +210,8 @@ export interface LabelField {
   template: string                        // e.g. "{icon} {name}", "{value} ({pct})"
   hAnchor: 'left' | 'center' | 'right'   // horizontal anchor point
   vAnchor: 'top' | 'middle' | 'bottom'   // vertical anchor point
+  growsFrom?: 'left' | 'center' | 'right' // which edge of the text element sits at the anchor point (left=grows right, right=grows left, center=grows both)
+  valueFormat?: ValueFormat               // per-field override for numeric token formatting (undefined = inherit global)
   offsetX: number                         // px offset from anchor (positive = right/left)
   offsetY: number                         // px offset from anchor (positive = down/up)
   enabled: boolean
@@ -264,11 +266,30 @@ export interface TabConfig {
 
 // ─── Bar Style ────────────────────────────────────────────────────────────────
 
+export type MetricStripSource = 'current' | DpsType | 'threat'
+
+export interface MetricStripConfig {
+  enabled: boolean
+  source: MetricStripSource
+  height: number
+  width?: number
+  offsetX?: number
+  fill: BarFill
+  fillSource?: 'custom' | 'bar' | 'background'
+  inheritShape?: boolean
+  inheritShadow?: boolean
+  opacity: number
+  anchor: 'top' | 'bottom'
+  placement?: 'inside' | 'outside'
+  gap?: number
+}
+
 export interface BarStyle {
   fill: BarFill    // foreground (the value portion)
   bg: BarFill      // background (the empty portion)
   shape: BarShape
   label: BarLabel
+  metricStrip?: MetricStripConfig
   height: number   // px — bar height in vertical mode, bar width in horizontal mode
   horizontalHeight?: number  // px — bar height/length in horizontal mode
   gap: number      // px — spacing between bars

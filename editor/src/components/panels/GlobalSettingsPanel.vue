@@ -601,11 +601,19 @@ function onBrowseChange(e: Event) {
     <div v-if="open.values" class="section-body">
       <div class="row">
         <label class="ctrl-label">Sort by</label>
-        <select class="ctrl-select" :value="g.dpsType" @change="e => patch({ dpsType: (e.target as HTMLSelectElement).value as any, sortBy: (e.target as HTMLSelectElement).value })">
+        <select class="ctrl-select" :value="g.sortBy === 'role' ? 'role' : g.dpsType" @change="e => {
+          const v = (e.target as HTMLSelectElement).value
+          if (v === 'role') {
+            patch({ sortBy: 'role' })
+          } else {
+            patch({ dpsType: v as any, sortBy: v })
+          }
+        }">
           <option value="encdps">DPS</option>
           <option value="enchps">HPS</option>
           <option value="dtps">DTPS</option>
           <option value="rdps">rDPS</option>
+          <option value="role">Role</option>
         </select>
       </div>
       <div class="row">

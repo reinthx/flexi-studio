@@ -112,7 +112,7 @@ function patchField(id: string, p: Partial<LabelField>) {
 
 function addField() {
   const fields = getFields()
-  if (fields.length >= 5) return
+  if (fields.length >= 7) return
   const id = `f${Date.now()}`
   patchFields([...fields, {
     id,
@@ -262,6 +262,29 @@ function insertToken(fieldId: string, token: string) {
                 </button>
               </div>
             </div>
+            <div class="row">
+              <label class="ctrl-label">Grows From</label>
+              <div class="btn-group">
+                <button v-for="a in [{ id: undefined, label: 'Auto', title: 'Match anchor direction' }, { id: 'left', label: '◀|', title: 'Left edge pinned — text grows right' }, { id: 'center', label: '◆', title: 'Center pinned — text grows both ways' }, { id: 'right', label: '|▶', title: 'Right edge pinned — text grows left' }]" :key="String(a.id)"
+                  class="anchor-btn" :class="{ active: (field.growsFrom ?? undefined) === a.id }"
+                  :title="a.title"
+                  type="button" @click="patchField(field.id, { growsFrom: a.id as LabelField['growsFrom'] })">
+                  {{ a.label }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Value Format -->
+            <div class="row">
+              <label class="ctrl-label">Value Fmt</label>
+              <select class="ctrl-select" :value="field.valueFormat ?? ''"
+                @change="e => patchField(field.id, { valueFormat: ((e.target as HTMLSelectElement).value || undefined) as LabelField['valueFormat'] })">
+                <option value="">Global</option>
+                <option value="raw">Raw (1234)</option>
+                <option value="abbreviated">Short (1.2k)</option>
+                <option value="formatted">Formatted (1,234)</option>
+              </select>
+            </div>
 
             <!-- Offsets -->
             <div class="row">
@@ -294,16 +317,16 @@ function insertToken(fieldId: string, token: string) {
             <!-- Style Override button -->
             <button class="field-style-btn" type="button" @click.stop="openStyleModal(field.id)">
               Style Override
-              <span v-if="field.font || field.fontSize || field.colorMode || field.selfMode || field.maxWidth" class="style-dot" />
+              <span v-if="field.font || field.fontSize || field.colorMode || field.selfMode || field.maxWidth || field.growsFrom" class="style-dot" />
             </button>
           </div>
         </div>
 
         <!-- Add field -->
-        <button v-if="getFields().length < 5" class="add-field-btn" type="button" @click="addField">
+        <button v-if="getFields().length < 7" class="add-field-btn" type="button" @click="addField">
           + Add Field
         </button>
-        <p v-else class="hint">Maximum 5 fields</p>
+        <p v-else class="hint">Maximum 7 fields</p>
       </div>
     </div>
 

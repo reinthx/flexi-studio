@@ -55,6 +55,7 @@ const {
   bgStyle, bgTextureInnerStyle, bgStrokePoints, bgStrokeViewBox, bgStrokeSvgStyle, bgStrokeMaskStyle, bgStrokePolygonStyle,
   bgSegmentStrokePolygons,
   fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
+  metricStripBoundsStyle, metricStripStyle, metricStripOutsideExtent,
   labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
   showDeath, deathText, deathStyle,
   iconConfig, iconSrc, showIcon, iconSize,
@@ -80,7 +81,8 @@ const wrapperStyle = computed(() => {
   return {
     height: isHorizontal.value ? dims.value.height : `${adjustedHeight}px`,
     width: isHorizontal.value ? `${adjustedWidth}px` : dims.value.width,
-    marginBottom: dims.value.marginBottom,
+    marginTop: metricStripOutsideExtent.value.top ? `${metricStripOutsideExtent.value.top}px` : '0',
+    marginBottom: `${(parseFloat(String(dims.value.marginBottom)) || 0) + metricStripOutsideExtent.value.bottom}px`,
     marginRight: dims.value.marginRight,
     flex: dims.value.flex ?? '0 0 auto',
     opacity: String(props.bar.alpha),
@@ -149,8 +151,16 @@ const tokens = computed(() => ({
   maxHitValue: maxHitValue.value,
 }))
 
-function fieldText(template: string): string {
-  return renderTemplate(template.replace('{icon}', '').trim(), tokens.value)
+function fieldText(field: { template: string; valueFormat?: string }): string {
+  const tpl = field.template.replace('{icon}', '').trim()
+  if (!field.valueFormat) return renderTemplate(tpl, tokens.value)
+  const fmt = field.valueFormat as ValueFormat
+  return renderTemplate(tpl, {
+    ...tokens.value,
+    value: formatValue(props.bar.rawValue, fmt),
+    enchps: formatValue(props.bar.rawEnchps, fmt),
+    rdps: formatValue(props.bar.rawRdps, fmt),
+  })
 }
 </script>
 
@@ -209,6 +219,9 @@ function fieldText(template: string): string {
           <div v-if="fillTextureInnerStyle" :style="fillTextureInnerStyle" />
         </div>
       </div>
+    </div>
+    <div v-if="metricStripBoundsStyle && metricStripStyle" :style="metricStripBoundsStyle">
+      <div :style="metricStripStyle" />
     </div>
     <svg
       v-if="bgStrokeSvgStyle && bgStrokePolygonStyle && (bgStrokePoints || bgSegmentStrokePolygons.length)"
@@ -286,7 +299,7 @@ function fieldText(template: string): string {
             maxWidth:'100%',
             pointerEvents:'none',
             ...(field.template.includes('{name}') ? blurStyle : undefined)
-          }">{{ fieldText(field.template) }}</span>
+          }">{{ fieldText(field) }}</span>
           <span :style="{
             display:'block',
             minWidth: 0,
@@ -302,7 +315,7 @@ function fieldText(template: string): string {
               WebkitTextFillColor: field.gradientStyle ? 'transparent' : undefined,
             }),
             ...(field.template.includes('{name}') ? blurStyle : undefined)
-          }">{{ fieldText(field.template) }}</span>
+          }">{{ fieldText(field) }}</span>
         </div>
       </template>
     </div>

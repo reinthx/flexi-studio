@@ -5,7 +5,7 @@
  * icon, outline) so both bar components stay in sync without copy-paste.
  */
 import { computed, toValue, type MaybeRefOrGetter } from 'vue'
-import type { BarStyle, BarLabel, LabelField, Orientation, GradientFill, Role, Profile, BarFill } from './configSchema'
+import type { BarStyle, BarLabel, LabelField, Orientation, GradientFill, Role, Profile, BarFill, MetricStripSource } from './configSchema'
 import { buildFillCss, buildShapeCss, buildOutlineCss, buildDropShadowFilter } from './cssBuilder'
 import { getJobIconSrc, getJobInfo } from './jobMap'
 import { resolveBarDimensions } from './barDimensions'
@@ -64,7 +64,11 @@ export interface BarData {
   directhit: string
   enchps: string
   rdps: string
+  rawValue: number
+  rawEnchps: number
+  rawRdps: number
   maxHit: string
+  metricFractions?: Partial<Record<MetricStripSource, number>> & Record<string, number | undefined>
   alpha: number
   rank: number
   isSelf?: boolean
@@ -142,15 +146,25 @@ function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number
   if (field.font) style.fontFamily = field.font
   if (field.fontSize && field.fontSize > 0) style.fontSize = `${field.fontSize}px`
   if (field.opacity !== undefined && field.opacity < 1) style.opacity = String(field.opacity)
+  const gf = field.growsFrom  // which edge of the text element sits at the anchor
 
   let xTransform = ''
   if (field.hAnchor === 'left') {
     style.left = `${padding + extraPad + ox}px`
+    if (gf === 'center') xTransform = 'translateX(-50%)'
+    else if (gf === 'right') xTransform = 'translateX(-100%)'
   } else if (field.hAnchor === 'right') {
-    style.right = `${padding + extraPad - ox}px`
-  } else {
+    // Use left-based positioning so growsFrom can adjust via translateX
+    style.left = `calc(100% - ${padding + extraPad - ox}px)`
+    if (gf === 'left') xTransform = 'translateX(0)'
+    else if (gf === 'center') xTransform = 'translateX(-50%)'
+    else xTransform = 'translateX(-100%)'  // default: right edge at anchor
+  } else {  // center
     style.left = '50%'
-    xTransform = `translateX(calc(-50% + ${ox}px))`
+    const pct = gf === 'left' ? 0 : gf === 'right' ? -100 : -50
+    xTransform = ox !== 0
+      ? `translateX(calc(${pct}% + ${ox}px))`
+      : pct !== 0 ? `translateX(${pct}%)` : ''
   }
 
   let yTransform = ''
@@ -209,6 +223,21 @@ const DEFAULT_STYLE: BarStyle = {
   bg: { type: 'solid', color: '#1a1a2e' },
   shape: DEFAULT_SHAPE,
   label: DEFAULT_LABEL,
+  metricStrip: {
+    enabled: false,
+    source: 'current',
+    height: 3,
+    width: 100,
+    offsetX: 0,
+    fill: { type: 'solid', color: '#ffffff', opacity: 0.9 },
+    fillSource: 'custom',
+    inheritShape: true,
+    inheritShadow: true,
+    opacity: 1,
+    anchor: 'bottom',
+    placement: 'inside',
+    gap: 0,
+  },
   height: 28,
   horizontalHeight: 72,
   gap: 2,
@@ -816,6 +845,145 @@ export function useBarStyles(
     }
   })
 
+  const metricStrip = computed(() => sc().metricStrip ?? DEFAULT_STYLE.metricStrip)
+  const metricStripOutsideExtent = computed(() => {
+    const strip = metricStrip.value
+    if (!strip?.enabled || (strip.placement ?? 'inside') !== 'outside') return { top: 0, bottom: 0 }
+    const extent = Math.max(1, strip.height ?? 3) + Math.max(0, strip.gap ?? 0)
+    return strip.anchor === 'top'
+      ? { top: extent, bottom: 0 }
+      : { top: 0, bottom: extent }
+  })
+  const metricStripFraction = computed(() => {
+    const strip = metricStrip.value
+    if (!strip?.enabled) return 0
+    if ((strip.source ?? 'current') === 'current') return Math.max(0, Math.min(1, b().fillFraction || 0))
+    const raw = b().metricFractions?.[strip.source]
+    return Math.max(0, Math.min(1, raw ?? 0))
+  })
+  const metricStripBoundsStyle = computed(() => {
+    const strip = metricStrip.value
+    if (!strip?.enabled || metricStripFraction.value <= 0) return undefined
+    const insetTop = shapeInsetTop.value
+    const height = Math.max(1, strip.height ?? 3)
+    const gap = Math.max(0, strip.gap ?? 0)
+    const placement = strip.placement ?? 'inside'
+    const trackWidth = Math.max(0, Math.min(100, strip.width ?? 100))
+    const offsetX = strip.offsetX ?? 0
+    if (placement === 'outside') {
+      return {
+        position: 'absolute' as const,
+        left: `${offsetX}px`,
+        width: `${trackWidth}%`,
+        height: `${height}px`,
+        ...(strip.anchor === 'top'
+          ? { bottom: `calc(100% + ${gap}px)` }
+          : { top: `calc(100% + ${gap}px)` }),
+        zIndex: 2,
+        pointerEvents: 'none' as const,
+        overflow: 'visible' as const,
+      }
+    }
+    return {
+      position: 'absolute' as const,
+      left: `${offsetX}px`,
+      width: `${trackWidth}%`,
+      height: `${height}px`,
+      ...(strip.anchor === 'top'
+        ? { top: insetTop ? `${insetTop}px` : '0' }
+        : { bottom: '0' }),
+      zIndex: 2,
+      pointerEvents: 'none' as const,
+      overflow: 'visible' as const,
+    }
+  })
+  const metricStripClipStyle = computed(() => {
+    const strip = metricStrip.value
+    if (!strip?.enabled || metricStripFraction.value <= 0) return undefined
+    const inheritedShape = strip.inheritShape !== false
+    return {
+      position: 'absolute' as const,
+      inset: '0',
+      zIndex: 1,
+      overflow: 'hidden' as const,
+      ...(inheritedShape && isClipped.value ? { clipPath: shapeCss.value.clipPath } : {}),
+      ...(inheritedShape && shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
+    }
+  })
+  const metricStripShadowStyle = computed(() => {
+    const strip = metricStrip.value
+    if (!strip?.enabled || metricStripFraction.value <= 0) return undefined
+    const inheritedShape = strip.inheritShape !== false
+    const inheritedShadow = inheritedShape && strip.inheritShadow !== false ? sc().shape?.shadow : undefined
+    if (!inheritedShadow?.enabled) return undefined
+    const base = {
+      position: 'absolute' as const,
+      inset: '0',
+      zIndex: 0,
+      pointerEvents: 'none' as const,
+    }
+    if (inheritedShape && isClipped.value) {
+      const clip = shapeCss.value.clipPath
+      const innerPoints = clip?.startsWith('polygon(') ? clip.slice(8, -1) : ''
+      return {
+        ...base,
+        filter: buildDropShadowFilter(
+          inheritedShadow.offsetX ?? 0,
+          inheritedShadow.offsetY ?? 0,
+          inheritedShadow.blur ?? 0,
+          inheritedShadow.color ?? '#000000',
+          inheritedShadow.thickness ?? 0,
+        ),
+        clipPath: innerPoints
+          ? `polygon(evenodd, -9999px -9999px, 9999px -9999px, 9999px 9999px, -9999px 9999px, ${innerPoints})`
+          : undefined,
+      }
+    }
+    if (shapeCss.value.borderRadius) {
+      return {
+        ...base,
+        borderRadius: shapeCss.value.borderRadius,
+        boxShadow: `${inheritedShadow.offsetX ?? 0}px ${inheritedShadow.offsetY ?? 0}px ${inheritedShadow.blur ?? 0}px ${inheritedShadow.thickness ?? 0}px ${inheritedShadow.color ?? '#000000'}`,
+      }
+    }
+    return undefined
+  })
+  const metricStripShadowSourceStyle = computed(() => {
+    const strip = metricStrip.value
+    if (!strip?.enabled || metricStripFraction.value <= 0) return undefined
+    const inheritedShape = strip.inheritShape !== false
+    const inheritedShadow = inheritedShape && strip.inheritShadow !== false ? sc().shape?.shadow : undefined
+    if (!inheritedShadow?.enabled || !(inheritedShape && isClipped.value)) return undefined
+    return {
+      position: 'absolute' as const,
+      inset: '0',
+      background: '#000000',
+      clipPath: shapeCss.value.clipPath,
+    }
+  })
+  const metricStripStyle = computed(() => {
+    const strip = metricStrip.value
+    const frac = metricStripFraction.value
+    if (!strip?.enabled || frac <= 0) return undefined
+    const height = Math.max(1, strip.height ?? 3)
+    const sourceFill = strip.fillSource === 'bar'
+      ? sc().fill
+      : strip.fillSource === 'background'
+        ? sc().bg
+        : (strip.fill ?? DEFAULT_STYLE.metricStrip!.fill)
+    const fillCss = buildFillCss(sourceFill, bi(), barHeightWithGap.value, ori())
+    const trackWidth = Math.max(0, Math.min(100, strip.width ?? 100))
+    return {
+      position: 'absolute' as const,
+      left: '0',
+      width: frac >= 1 ? '100%' : `${frac * 100}%`,
+      height: '100%',
+      opacity: String(strip.opacity ?? 1),
+      top: '0',
+      ...fillCss,
+    }
+  })
+
   // ── Label ─────────────────────────────────────────────────────────────────
   const label = computed(() => {
     const tab = tabLabel()
@@ -843,7 +1011,7 @@ export function useBarStyles(
     const textTransform = l.textTransform || 'none'
     return {
       position: 'absolute' as const,
-      left: 0, right: 0, top: 0, bottom: 0, zIndex: 2,
+      left: 0, right: 0, top: 0, bottom: 0, zIndex: 3,
       fontFamily: l.font,
       fontSize: `${l.size}px`,
       color: l.color,
@@ -944,6 +1112,7 @@ export function useBarStyles(
         isFirstField: index === 0,
         style,
         gradientStyle: fieldGradientStyle,
+        valueFormat: f.valueFormat,
       }
     })
   })
@@ -1176,6 +1345,7 @@ export function useBarStyles(
     bgStyle, bgTextureInnerStyle, bgStrokePoints, bgStrokeViewBox, bgStrokeSvgStyle, bgStrokeMaskStyle, bgStrokePolygonStyle,
     bgSegmentStrokePolygons,
     fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
+    metricStripBoundsStyle, metricStripStyle, metricStripOutsideExtent,
     // Label
     label, labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
     // Death indicator
