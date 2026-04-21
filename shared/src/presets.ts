@@ -78,6 +78,8 @@ export const DEFAULT_BAR_STYLE: BarStyle = {
     offsetX: 0,
     fill: { type: 'solid', color: '#ffffff', opacity: 0.9 },
     fillSource: 'custom',
+    bg: { type: 'solid', color: 'rgba(0,0,0,0.35)', opacity: 1 },
+    bgSource: 'none',
     inheritShape: true,
     inheritShadow: true,
     opacity: 1,

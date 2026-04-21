@@ -276,6 +276,8 @@ export interface MetricStripConfig {
   offsetX?: number
   fill: BarFill
   fillSource?: 'custom' | 'bar' | 'background'
+  bg?: BarFill
+  bgSource?: 'custom' | 'bar' | 'background' | 'none'
   inheritShape?: boolean
   inheritShadow?: boolean
   opacity: number

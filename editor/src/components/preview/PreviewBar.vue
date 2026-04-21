@@ -34,7 +34,7 @@ const {
   bgStyle, bgTextureInnerStyle, bgStrokePoints, bgStrokeViewBox, bgStrokeSvgStyle, bgStrokeMaskStyle, bgStrokePolygonStyle,
   bgSegmentStrokePolygons,
   fillShadowBoundsStyle, fillShadowWrapStyle, fillStyle, fillTextureInnerStyle,
-  metricStripBoundsStyle, metricStripStyle, metricStripOutsideExtent,
+  metricStripBoundsStyle, metricStripClipStyle, metricStripShadowStyle, metricStripShadowSourceStyle, metricStripBgStyle, metricStripStyle, metricStripOutsideExtent, metricStripInlineExtent,
   labelStyle, labelOutlineShadow, processedFields, textStyle, gradientTextStyle,
   showDeath, deathText, deathStyle,
   iconConfig, showIcon, iconSize,
@@ -56,7 +56,8 @@ const wrapperStyle = computed(() => {
     width: isHorizontal.value ? `${adjustedWidth}px` : dims.value.width,
     marginTop: metricStripOutsideExtent.value.top ? `${metricStripOutsideExtent.value.top}px` : '0',
     marginBottom: `${(parseFloat(String(dims.value.marginBottom)) || 0) + metricStripOutsideExtent.value.bottom}px`,
-    marginRight: dims.value.marginRight,
+    marginLeft: metricStripInlineExtent.value.left ? `${metricStripInlineExtent.value.left}px` : '0',
+    marginRight: `${(parseFloat(String(dims.value.marginRight)) || 0) + metricStripInlineExtent.value.right}px`,
     flex: dims.value.flex ?? '0 0 auto',
     opacity: String(props.bar.alpha),
     position: 'relative' as const,
@@ -128,9 +129,9 @@ function fieldText(field: { template: string; valueFormat?: string }): string {
   const fmt = field.valueFormat as ValueFormat
   return renderTemplate(field.template, {
     ...tokens.value,
-    value: formatValue(props.bar.rawValue, fmt),
-    enchps: formatValue(props.bar.rawEnchps, fmt),
-    rdps: formatValue(props.bar.rawRdps, fmt),
+    value: formatValue(props.bar.rawValue ?? parseFloat(props.bar.displayValue.replace(/,/g, '')) ?? 0, fmt),
+    enchps: formatValue(props.bar.rawEnchps ?? parseFloat(props.bar.enchps.replace(/,/g, '')) ?? 0, fmt),
+    rdps: formatValue(props.bar.rawRdps ?? parseFloat(props.bar.rdps.replace(/,/g, '')) ?? 0, fmt),
   })
 }
 </script>
@@ -192,8 +193,14 @@ function fieldText(field: { template: string; valueFormat?: string }): string {
         </div>
       </div>
     </div>
-    <div v-if="metricStripBoundsStyle && metricStripStyle" :style="metricStripBoundsStyle">
-      <div :style="metricStripStyle" />
+    <div v-if="metricStripBoundsStyle && metricStripClipStyle && metricStripStyle" :style="metricStripBoundsStyle">
+      <div v-if="metricStripShadowStyle" :style="metricStripShadowStyle">
+        <div v-if="metricStripShadowSourceStyle" :style="metricStripShadowSourceStyle" />
+      </div>
+      <div :style="metricStripClipStyle">
+        <div v-if="metricStripBgStyle" :style="metricStripBgStyle" />
+        <div :style="metricStripStyle" />
+      </div>
     </div>
     <svg
       v-if="bgStrokeSvgStyle && bgStrokePolygonStyle && (bgStrokePoints || bgSegmentStrokePolygons.length)"

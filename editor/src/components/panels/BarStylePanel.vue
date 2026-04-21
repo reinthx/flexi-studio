@@ -35,6 +35,8 @@ const metricStrip = computed<MetricStripConfig>(() => def.value.metricStrip ?? {
   offsetX: 0,
   fill: { type: 'solid', color: '#ffffff', opacity: 0.9 },
   fillSource: 'custom',
+  bg: { type: 'solid', color: 'rgba(0,0,0,0.35)', opacity: 1 },
+  bgSource: 'none',
   inheritShape: true,
   inheritShadow: true,
   opacity: 1,
@@ -389,7 +391,7 @@ const sizeBadge = computed(() => {
             </template>
           </div>
           <div class="row">
-            <label class="ctrl-label">Style</label>
+            <label class="ctrl-label">Fill Style</label>
             <select
               class="ctrl-select"
               :value="metricStrip.fillSource ?? 'custom'"
@@ -400,6 +402,25 @@ const sizeBadge = computed(() => {
               <option value="background">Inherit Background</option>
             </select>
           </div>
+          <div class="row">
+            <label class="ctrl-label">Track Bg</label>
+            <select
+              class="ctrl-select"
+              :value="metricStrip.bgSource ?? 'none'"
+              @change="e => patchMetricStrip({ bgSource: (e.target as HTMLSelectElement).value as MetricStripConfig['bgSource'] })"
+            >
+              <option value="none">None</option>
+              <option value="custom">Own Style</option>
+              <option value="bar">Inherit Bar</option>
+              <option value="background">Inherit Background</option>
+            </select>
+          </div>
+          <FillEditor
+            v-if="metricStrip.bgSource === 'custom'"
+            :model-value="metricStrip.bg ?? { type: 'solid', color: 'rgba(0,0,0,0.35)', opacity: 1 }"
+            :orientation="config.profile.global.orientation"
+            @update:model-value="bg => patchMetricStrip({ bg })"
+          />
           <div class="row">
             <label class="ctrl-label">
               <input
