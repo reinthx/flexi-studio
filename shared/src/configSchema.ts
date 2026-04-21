@@ -519,6 +519,8 @@ export interface AbilityStats {
   critDirectHits?: number
   critDirectMinHit?: number
   critDirectMaxHit?: number
+  targets?: Record<string, { total: number; hits: number }>
+  sources?: Record<string, { total: number; hits: number }>
 }
 
 // [combatantName][abilityId] → AbilityStats
@@ -615,6 +617,7 @@ export interface PullRecord {
   rdpsGiven?: Record<string, number> // combatant name -> DPS credited from that actor's raid buffs
   rdpsTaken?: Record<string, number> // combatant name -> DPS removed from damage gained via others' buffs
   deaths?: DeathRecord[]
+  enemyDeaths?: Record<string, number> // enemy name -> ms since pull start
   combatantIds?: Record<string, string>  // combatant name → FFXIV object ID
   combatantJobs?: Record<string, string> // combatant name → normalized job abbreviation
   castData?: Record<string, CastEvent[]>  // combatant name → cast events

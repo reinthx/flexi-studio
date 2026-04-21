@@ -323,6 +323,94 @@ const abilities = computed(() => {
 
 type AbilityRow = (typeof abilities.value)[number]
 
+const doneTargetRows = computed(() => {
+  const counts = new Map<string, {
+    target: string
+    casts: number
+    damage: number
+    damageHits: number
+    healing: number
+    healingHits: number
+    abilities: Set<string>
+  }>()
+  const ensure = (target: string) => {
+    const key = target || 'Unknown'
+    const row = counts.get(key) ?? {
+      target: key,
+      casts: 0,
+      damage: 0,
+      damageHits: 0,
+      healing: 0,
+      healingHits: 0,
+      abilities: new Set<string>(),
+    }
+    counts.set(key, row)
+    return row
+  }
+
+  for (const event of selectedActorCastEvents.value) {
+    const row = ensure(event.target || 'Unknown')
+    row.casts += 1
+    if (event.abilityName) row.abilities.add(event.abilityName)
+  }
+  for (const ability of Object.values(rawData.value)) {
+    for (const [target, stats] of Object.entries(ability.targets ?? {})) {
+      const row = ensure(target)
+      row.damage += stats.total
+      row.damageHits += stats.hits
+      row.abilities.add(ability.abilityName)
+    }
+  }
+  for (const [target, abilities] of Object.entries(healingReceivedData.value)) {
+    for (const ability of Object.values(abilities)) {
+      const sourceStats = ability.sources?.[resolvedSelected.value]
+      if (!sourceStats) continue
+      const row = ensure(target)
+      row.healing += sourceStats.total
+      row.healingHits += sourceStats.hits
+      row.abilities.add(ability.abilityName)
+    }
+  }
+  const total = Array.from(counts.values()).reduce((sum, row) => sum + row.damage + row.healing + row.casts, 0)
+  return Array.from(counts.values())
+    .map(row => ({
+      target: row.target,
+      casts: row.casts,
+      damage: row.damage,
+      damageHits: row.damageHits,
+      healing: row.healing,
+      healingHits: row.healingHits,
+      abilityCount: row.abilities.size,
+      pct: total > 0 ? (((row.damage + row.healing + row.casts) / total) * 100).toFixed(1) : '0.0',
+    }))
+    .sort((a, b) => (b.damage + b.healing + b.casts) - (a.damage + a.healing + a.casts) || a.target.localeCompare(b.target))
+})
+
+const doneSourceRows = computed(() => {
+  const rows = visibleCombatants.value
+    .filter(name => !isEnemy(name))
+    .map(name => {
+      const abilityRows = Object.values(allData.value[name] ?? {})
+      const total = abilityRows.reduce((sum, ability) => sum + ability.totalDamage, 0)
+      const hits = abilityRows.reduce((sum, ability) => sum + ability.hits, 0)
+      return {
+        name,
+        total,
+        hits,
+        abilityCount: abilityRows.length,
+        dps: encounterDurationSec.value > 0 ? Math.round(total / encounterDurationSec.value) : 0,
+      }
+    })
+    .filter(row => row.total > 0)
+  const total = rows.reduce((sum, row) => sum + row.total, 0)
+  return rows
+    .map(row => ({
+      ...row,
+      pct: total > 0 ? ((row.total / total) * 100).toFixed(1) : '0.0',
+    }))
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
+})
+
 function pctOf(count: number | undefined, total: number | undefined): string {
   if (!count || !total) return '-'
   return `${((count / total) * 100).toFixed(1)}%`
@@ -1518,6 +1606,12 @@ function formatEntryDelta(value: number, formatter: (n: number) => string): stri
   return `${value > 0 ? '+' : '-'}${formatter(Math.abs(value))}`
 }
 
+function pullOutcomeClass(entry: PullEntry | null | undefined): string {
+  if (entry?.pullOutcome === 'clear') return 'success'
+  if (entry?.pullOutcome === 'wipe') return 'danger'
+  return ''
+}
+
 const historicalPullEntries = computed(() =>
   pullList.value.filter(entry => entry.index !== null)
 )
@@ -1564,10 +1658,18 @@ const pullDashboardNotes = computed(() => {
   }
 
   if (bestProgressPullEntry.value && current.index === bestProgressPullEntry.value.index && selectedEncounterPullEntries.value.length > 1) {
-    notes.push('Best boss progress for this encounter.')
+    notes.push('Best enemy progress for this encounter.')
   } else if (bestProgressPullEntry.value && current.bossPercent !== undefined) {
     const delta = current.bossPercent - (bestProgressPullEntry.value.bossPercent ?? current.bossPercent)
-    notes.push(`${delta > 0 ? '+' : ''}${delta.toFixed(1)} boss HP points from best progress.`)
+    notes.push(`${delta > 0 ? '+' : ''}${delta.toFixed(1)} enemy HP points from best progress.`)
+  }
+
+  if (current.pullOutcome === 'clear') {
+    notes.push((current.enemyCount ?? 0) > 1 ? 'All tracked enemies defeated during this pull.' : 'Tracked enemy defeated during this pull.')
+  } else if (current.pullOutcome === 'wipe') {
+    notes.push(`Likely wipe: pull ended with enemies remaining${current.bossPercentLabel ? ` (${current.bossPercentLabel})` : ''}.`)
+  } else if (current.pullOutcome === 'unknown' && current.index !== null) {
+    notes.push('Outcome unknown because no enemy HP samples were captured.')
   }
 
   if (previous) {
@@ -1659,6 +1761,28 @@ function clearBreakdownData() {
   resourceData.value = {}
 }
 
+function historicalPullListSignature(entries: PullEntry[] | undefined): string {
+  if (!Array.isArray(entries)) return ''
+  return JSON.stringify(entries
+    .filter(entry => entry.index !== null)
+    .map(entry => [
+      pullEntryStableKey(entry),
+      entry.index,
+      entry.pullCount ?? 0,
+      entry.bossPercentLabel ?? '',
+      entry.pullOutcome ?? '',
+    ]))
+}
+
+function pullEntryStableKey(entry: PullEntry | null | undefined): string {
+  if (!entry || entry.index === null) return ''
+  return [
+    entry.encounterId ?? entry.encounterName,
+    entry.duration,
+    entry.pullNumber ?? 0,
+  ].join('|')
+}
+
 function applyEncounterPayload(data: BreakdownPayload): boolean {
   if (data.type !== 'encounterData') return false
 
@@ -1670,7 +1794,16 @@ function applyEncounterPayload(data: BreakdownPayload): boolean {
 
   // If viewing historical pull, accept only data for that specific pull.
   if (activePull.value !== null) {
-    if (incomingPullIndex !== activePull.value) return false
+    if (incomingPullIndex !== activePull.value) {
+      const liveHistoryChanged = incomingPullIndex === null &&
+        historicalPullListSignature(data.pullList) !== historicalPullListSignature(pullList.value)
+      if (!liveHistoryChanged) return false
+      const selectedKey = pullEntryStableKey(selectedPullEntry.value)
+      pullList.value = Array.isArray(data.pullList) ? data.pullList : pullList.value
+      const remappedEntry = pullList.value.find(entry => pullEntryStableKey(entry) === selectedKey)
+      if (remappedEntry) activePull.value = remappedEntry.index
+      return true
+    }
   } else {
     // For live view, skip if timestamp is not newer.
     if (lastBroadcastTime.value > 0 && ts <= lastBroadcastTime.value) return false
@@ -2013,7 +2146,8 @@ onUnmounted(() => {
             </span>
             <span class="bp-pull-row-stats">
               <span>{{ entry.duration || '0:00' }}</span>
-              <span v-if="entry.bossPercentLabel">{{ entry.bossPercentLabel }} boss</span>
+              <span v-if="entry.pullOutcomeLabel" :class="pullOutcomeClass(entry)">{{ entry.pullOutcomeLabel }}</span>
+              <span v-if="entry.bossPercentLabel">{{ entry.bossPercentLabel }} enemy</span>
               <span>{{ f(entry.dps ?? 0) }} DPS</span>
               <span title="Raid-contributing DPS: raw DPS adjusted by buff credit">{{ f(entry.rdps ?? entry.dps ?? 0) }} rDPS</span>
               <span :class="{ danger: (entry.deaths ?? 0) > 0 }">{{ entry.deaths ?? 0 }} deaths</span>
@@ -2034,10 +2168,13 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="bp-card bp-card--taken">
-              <div class="bp-card-label">Boss HP</div>
+              <div class="bp-card-label">Enemy Progress</div>
               <div class="bp-card-value">{{ selectedPullEntry?.bossPercentLabel ?? '—' }}</div>
               <div class="bp-card-detail">
-                <template v-if="bestProgressPullEntry && selectedPullEntry?.bossPercent !== undefined">
+                <template v-if="selectedPullEntry?.pullOutcomeLabel">
+                  <span :class="pullOutcomeClass(selectedPullEntry)">{{ selectedPullEntry.pullOutcomeLabel }}</span>
+                </template>
+                <template v-else-if="bestProgressPullEntry && selectedPullEntry?.bossPercent !== undefined">
                   {{ selectedPullEntry.index === bestProgressPullEntry.index ? 'best progress' : `${((selectedPullEntry.bossPercent ?? 0) - (bestProgressPullEntry.bossPercent ?? 0)).toFixed(1)} pts from best` }}
                 </template>
                 <template v-else>needs enemy HP samples</template>
@@ -2141,7 +2278,52 @@ onUnmounted(() => {
               <button class="bp-mode-btn" :class="{ active: doneDimension === 'sources' }" @click="doneDimension = 'sources'">Sources</button>
             </div>
           </div>
-          <div v-if="doneDimension !== 'ability'" class="bp-empty-panel">Target and source pivots are reserved for the shared event stream layer. The ability view is live now and keeps the selected ability pinned across views.</div>
+          <div v-if="doneDimension === 'targets' && doneTargetRows.length === 0" class="bp-waiting">No target rows for this pull yet.</div>
+          <div v-else-if="doneDimension === 'targets'" class="bp-scroll">
+            <table class="bp-table">
+              <thead><tr>
+                <th class="col-name">Target</th>
+                <th class="col-num">Uses</th>
+                <th class="col-num">Damage</th>
+                <th class="col-num">Healing</th>
+                <th class="col-pct">%</th>
+                <th class="col-num">Abilities</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="row in doneTargetRows" :key="`done-target-${row.target}`">
+                  <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname" :style="nameStyle(row.target)">{{ row.target }}</span></td>
+                  <td class="col-num">{{ row.casts }}</td>
+                  <td class="col-num">{{ row.damage > 0 ? f(row.damage) : '—' }}</td>
+                  <td class="col-num">{{ row.healing > 0 ? f(row.healing) : '—' }}</td>
+                  <td class="col-pct">{{ row.pct }}%</td>
+                  <td class="col-num">{{ row.abilityCount }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else-if="doneDimension === 'sources' && doneSourceRows.length === 0" class="bp-waiting">No source rows for this pull yet.</div>
+          <div v-else-if="doneDimension === 'sources'" class="bp-scroll">
+            <table class="bp-table">
+              <thead><tr>
+                <th class="col-name">Source</th>
+                <th class="col-num">Total</th>
+                <th class="col-pct">%</th>
+                <th class="col-num">DPS</th>
+                <th class="col-num">Hits</th>
+                <th class="col-num">Abilities</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="row in doneSourceRows" :key="`done-source-${row.name}`" :class="{ 'bp-row-active': resolvedSelected === row.name }" @click="selectActor(row.name)">
+                  <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname" :style="nameStyle(row.name)">{{ row.name }}</span></td>
+                  <td class="col-num">{{ f(row.total) }}</td>
+                  <td class="col-pct">{{ row.pct }}%</td>
+                  <td class="col-num">{{ encounterDurationSec > 0 ? f(row.dps) : '—' }}</td>
+                  <td class="col-num">{{ row.hits }}</td>
+                  <td class="col-num">{{ row.abilityCount }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <div v-else-if="abilities.length === 0" class="bp-waiting">No outgoing ability data for this pull.</div>
           <div v-else class="bp-scroll">
             <table class="bp-table">
@@ -4044,6 +4226,9 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   border-radius: 4px;
 }
 .bp-pull-row-stats .danger { color: rgba(255,150,150,0.95); }
+.bp-pull-row-stats .success,
+.bp-card-detail .success { color: rgba(95,220,150,0.95); }
+.bp-card-detail .danger { color: rgba(255,150,150,0.95); }
 .bp-pulls-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

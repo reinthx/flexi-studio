@@ -16,6 +16,11 @@ export interface PullEntry {
   damageTaken?: number
   bossPercent?: number
   bossPercentLabel?: string
+  bossKilled?: boolean
+  enemyCount?: number
+  defeatedEnemyCount?: number
+  pullOutcome?: 'live' | 'clear' | 'wipe' | 'unknown'
+  pullOutcomeLabel?: string
 }
 
 export type BreakdownView = 'overview' | 'pulls' | 'done' | 'taken' | 'timeline' | 'deaths' | 'casts' | 'events'
