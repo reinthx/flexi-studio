@@ -179,7 +179,26 @@ function fieldText(field: { template: string; valueFormat?: string }): string {
       >
         <defs>
           <filter v-bind="bgShadowSvgFilterAttrs">
-            <feDropShadow v-bind="bgShadowSvgDropShadowAttrs" />
+            <feGaussianBlur
+              in="SourceAlpha"
+              :stdDeviation="bgShadowSvgDropShadowAttrs.stdDeviation"
+              result="bg-shadow-blur"
+            />
+            <feOffset
+              in="bg-shadow-blur"
+              :dx="bgShadowSvgDropShadowAttrs.dx"
+              :dy="bgShadowSvgDropShadowAttrs.dy"
+              result="bg-shadow-offset"
+            />
+            <feFlood
+              :flood-color="bgShadowSvgDropShadowAttrs.floodColor"
+              result="bg-shadow-color"
+            />
+            <feComposite
+              in="bg-shadow-color"
+              in2="bg-shadow-offset"
+              operator="in"
+            />
           </filter>
           <mask v-bind="bgShadowSvgMaskAttrs">
             <rect v-bind="bgShadowSvgMaskRectAttrs" fill="white" />
