@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { BarStyle, Orientation, BarLabel } from '@shared/configSchema'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import type { BarStyle, Orientation, BarLabel, StyleOverrides } from '@shared/configSchema'
 import { useBarStyles } from '@shared/useBarStyles'
 import type { BarData } from '@shared/useBarStyles'
 import { renderTemplate } from '../lib/templateRenderer'
@@ -18,10 +18,34 @@ const props = defineProps<{
   blurName?: boolean
   valueFormat?: 'raw' | 'abbreviated' | 'formatted'
   barIndex?: number
-  barWidth?: number
   tabLabelConfig?: BarLabel
   rank1Config?: { rank1HeightIncrease?: number; rank1Glow?: { enabled: boolean; color: string; blur: number }; rank1ShowCrown?: boolean; rank1Crown?: { enabled: boolean; icon: string; imageUrl?: string; size: number; offsetX: number; offsetY: number; rotation?: number; hAnchor: 'left' | 'right' | 'center'; vAnchor: 'top' | 'middle' | 'bottom' }; rank1NameStyle?: { enabled: boolean; gradient?: { type: 'linear' | 'radial'; angle: number; stops: Array<{ color: string; position: number }> } }; rank1IconStyle?: { enabled: boolean; glow?: { enabled: boolean; color: string; blur: number }; shadow?: { enabled: boolean; color: string; blur: number }; bgShape?: { enabled: boolean; shape: 'circle' | 'square' | 'rounded' | 'diamond'; color: string; size: number; opacity: number; offsetX: number; offsetY: number } } }
+  colorOverrides?: StyleOverrides
 }>()
+
+const barEl = ref<HTMLElement | null>(null)
+const barWidth = ref(0)
+let barResizeObserver: ResizeObserver | null = null
+
+function updateBarWidth() {
+  barWidth.value = barEl.value?.getBoundingClientRect().width ?? 0
+}
+
+onMounted(() => {
+  updateBarWidth()
+  if (typeof ResizeObserver !== 'undefined' && barEl.value) {
+    barResizeObserver = new ResizeObserver(updateBarWidth)
+    barResizeObserver.observe(barEl.value)
+  } else {
+    window.addEventListener('resize', updateBarWidth)
+  }
+})
+
+onUnmounted(() => {
+  barResizeObserver?.disconnect()
+  barResizeObserver = null
+  window.removeEventListener('resize', updateBarWidth)
+})
 
 const {
   shapeCss, isClipped, dims,
@@ -38,7 +62,7 @@ const {
   iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
   iconFallback,
   rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, isRank1,
-} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, undefined, () => props.barWidth ?? 0)
+} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, () => props.colorOverrides, () => barWidth.value)
 
 const isHorizontal = computed(() => props.orientation === 'horizontal')
 
@@ -62,6 +86,7 @@ const wrapperStyle = computed(() => {
     opacity: String(props.bar.alpha),
     position: 'relative' as const,
     overflow: 'visible' as const,
+    flexShrink: 0,
     zIndex: rank1ZIndex.value,
     ...(rank1GlowStyle.value ? rank1GlowStyle.value : {}),
     ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
@@ -130,7 +155,7 @@ function fieldText(template: string): string {
 </script>
 
 <template>
-  <div v-if="isValid" :style="wrapperStyle" @click="emit('click')" style="cursor:pointer">
+  <div v-if="isValid" ref="barEl" :style="wrapperStyle" @click="emit('click')" style="cursor:pointer">
     <!-- Shadow (z:0) - directional clip prevents opposite-direction bleed -->
     <div :style="bgShadowDirectionalClip">
       <div :style="bgShadowStyle">
@@ -256,7 +281,8 @@ function fieldText(template: string): string {
             display:'block',
             color:'transparent',
             textShadow: labelOutlineShadow,
-            overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+            overflow:'visible',
+            whiteSpace:'nowrap',
             maxWidth:'100%',
             pointerEvents:'none',
             ...(field.template.includes('{name}') ? blurStyle : undefined)
@@ -265,7 +291,7 @@ function fieldText(template: string): string {
             display:'block',
             minWidth: 0,
             maxWidth:'100%',
-            overflow:'hidden', textOverflow:'ellipsis',
+            overflow:'visible',
             whiteSpace:'nowrap',
             filter: textStyle,
             ...(field.template.includes('{name}') && isRank1 ? { ...gradientTextStyle, ...rank1NameGradientStyle } : {

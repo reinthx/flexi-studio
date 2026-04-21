@@ -108,6 +108,23 @@ describe('buildFillCss', () => {
     const result = buildFillCss(solidFill, 0, 30, 'horizontal')
     expect(result).toBeDefined()
   })
+
+  it('keeps paginate mode active in horizontal orientation', () => {
+    const textureFill: BarFill = {
+      type: 'texture',
+      texture: {
+        src: 'test.png',
+        repeat: 'paginate',
+        opacity: 1,
+        blendMode: 'normal',
+        pagination: { enabled: true, startOffsetX: 3, startOffsetY: 5 },
+      },
+    }
+    const result = buildFillCss(textureFill, 2, 30, 'horizontal')
+    expect(result.backgroundSize).toBe('auto')
+    expect(result.backgroundRepeat).toBe('no-repeat')
+    expect(result.backgroundPosition).toBe('3px -65px')
+  })
 })
 
 describe('buildBorderRadiusCss', () => {

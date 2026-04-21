@@ -6,7 +6,7 @@
  */
 import { computed, toValue, type MaybeRefOrGetter } from 'vue'
 import type { BarStyle, BarLabel, LabelField, Orientation, GradientFill, Role, Profile, BarFill } from './configSchema'
-import { buildEdgeClipPath, buildFillCss, buildShapeCss, buildOutlineCss, buildDropShadowFilter } from './cssBuilder'
+import { buildFillCss, buildShapeCss, buildOutlineCss, buildDropShadowFilter } from './cssBuilder'
 import { getJobIconSrc, getJobInfo } from './jobMap'
 import { resolveBarDimensions } from './barDimensions'
 import { JOB_COLORS } from './presets'
@@ -133,8 +133,7 @@ function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number
     position: 'absolute',
     maxWidth: maxW,
     minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
+    overflow: 'visible',
     whiteSpace: 'nowrap',
     lineHeight: '1.2',
     display: 'flex',
@@ -184,7 +183,6 @@ function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number
   if (finalRotation) {
     transformParts.push(`rotate(${finalRotation}deg)`)
     style.transformOrigin = '0% 100%'
-    style.overflow = 'hidden'
   }
   
   const transform = transformParts.join(' ')
@@ -517,6 +515,7 @@ export function useBarStyles(
   const bgStroke = computed(() => sc().shape?.bgStroke)
   const clippedOutlineStroke = computed(() => {
     if (!isClipped.value) return undefined
+    if (outlineTarget.value !== 'bg' && outlineTarget.value !== 'both') return undefined
     const outline = sc().shape?.outline ?? DEFAULT_SHAPE.outline
     const t = outline.thickness
     const width = Math.max(t.top ?? 0, t.right ?? 0, t.bottom ?? 0, t.left ?? 0)
@@ -541,13 +540,6 @@ export function useBarStyles(
   // ── Shape layer ───────────────────────────────────────────────────────────
   const shapeLayerStyle = computed(() => {
     const insetTop = shapeInsetTop.value
-    if (useSvgShape.value) {
-      return {
-        position: 'absolute' as const,
-        ...(insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }),
-        display: 'none',
-      }
-    }
     return {
       position: 'absolute' as const,
       ...(insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }),
@@ -564,7 +556,6 @@ export function useBarStyles(
     const insetTop = sc().shape?.fillInsetTop ?? 0
     const baseInset = insetTop ? { top: `${insetTop}px`, left: '0', right: '0', bottom: '0' } : { inset: '0' }
     const base = { position: 'absolute' as const, ...baseInset, zIndex: 0 }
-    if (useSvgShape.value) return { ...base, display: 'none' }
     if (!s?.enabled) return base
     const oX = s.offsetX, oY = s.offsetY
     const t = oY > 0 ? '0px' : oY < 0 ? '-9999px' : '0px'
@@ -643,7 +634,6 @@ export function useBarStyles(
   })
 
   const bgStyle = computed(() => {
-    if (useSvgShape.value) return { display: 'none' }
     if (!isBgVisible.value) return { display: 'none' }
     const sf = sc().shape?.segmentFill
     const triClip = (() => {
@@ -673,7 +663,7 @@ export function useBarStyles(
     const bg = sc().bg
     if (bg.type !== 'texture') return undefined
     const texture = bg.texture
-    const isPaginate = texture.repeat === 'paginate' && !isHorizontal.value
+    const isPaginate = texture.repeat === 'paginate'
     const height = barHeightWithGap.value
     const base = buildFillCss(sc().bg, bi(), barHeightWithGap.value, ori())
     
@@ -705,7 +695,7 @@ export function useBarStyles(
     const base = insetTop
       ? { position: 'absolute' as const, top: `${insetTop}px`, left: '0', right: '0', bottom: '0', zIndex: 1 }
       : { position: 'absolute' as const, inset: '0', zIndex: 1 }
-    if (useSvgShape.value || !isFillVisible.value) return { ...base, display: 'none' }
+    if (!isFillVisible.value) return { ...base, display: 'none' }
     if (isClipped.value) {
       return { ...base, clipPath: shapeCss.value.clipPath }
     } else if (shapeCss.value.borderRadius) {
@@ -732,23 +722,11 @@ export function useBarStyles(
   })
 
   const isTextureFill = computed(() => sc().fill?.type === 'texture')
-  const shapeSvgBgStyle = computed(() => {
-    if (!useSvgShape.value || !isBgVisible.value) return undefined
-    return {
-      width: '100%',
-      height: '100%',
-      ...buildFillCss(sc().bg, bi(), barHeightWithGap.value, ori()),
-      ...segmentMaskCss.value,
-    }
+  const shapeSvgBgStyle = computed<Record<string, string> | undefined>(() => {
+    return undefined
   })
-  const shapeSvgFillBox = computed(() => {
-    if (!useSvgShape.value || !isFillVisible.value) return undefined
-    const frac = Math.max(0, Math.min(1, b().fillFraction))
-    if (isHorizontal.value) {
-      const height = shapeHeightPx.value * frac
-      return { x: 0, y: shapeHeightPx.value - height, width: shapeWidthPx.value, height }
-    }
-    return { x: 0, y: 0, width: shapeWidthPx.value * frac, height: shapeHeightPx.value }
+  const shapeSvgFillBox = computed<{ x: number; y: number; width: number; height: number } | undefined>(() => {
+    return undefined
   })
   const shapeSvgFillStyle = computed(() => {
     if (!shapeSvgFillBox.value) return undefined
@@ -756,6 +734,7 @@ export function useBarStyles(
       width: '100%',
       height: '100%',
       ...buildFillCss(sc().fill, bi(), barHeightWithGap.value, ori()),
+      ...(outlineTarget.value === 'fill' || outlineTarget.value === 'both' ? outlineCss.value : {}),
       ...segmentMaskCss.value,
     }
   })
@@ -775,14 +754,7 @@ export function useBarStyles(
   })
   const fillClipPath = computed(() => {
     if (!isClipped.value) return undefined
-    if (isHorizontal.value || b().fillFraction >= 0.999) return shapeCss.value.clipPath
-    const shape = sc().shape ?? DEFAULT_SHAPE
-    const chamferMode = shape.chamferMode ?? 'none'
-    if (chamferMode !== 'none') return shapeCss.value.clipPath
-    const left = shape.leftEdge ?? 'flat'
-    const right = shape.rightEdge ?? 'flat'
-    if (left === 'flat' && right === 'flat') return undefined
-    return buildEdgeClipPath(left, 'flat', shape.edgeDepthLeft ?? shape.edgeDepth ?? 10, 0)
+    return shapeCss.value.clipPath
   })
 
   const fillStyle = computed(() => {
@@ -801,7 +773,7 @@ export function useBarStyles(
       ...(isTextureFill.value ? { overflow: 'hidden' as const } : {}),
       ...(fillClipPath.value ? { clipPath: fillClipPath.value } : {}),
       ...(shapeCss.value.borderRadius ? { borderRadius: shapeCss.value.borderRadius } : {}),
-      ...(!showBgStroke.value && (outlineTarget.value === 'fill' || outlineTarget.value === 'both') ? outlineCss.value : {}),
+      ...(outlineTarget.value === 'fill' || outlineTarget.value === 'both' ? outlineCss.value : {}),
       ...(() => {
         const sf = sc().shape?.segmentFill
         if (!sf?.enabled) return {}

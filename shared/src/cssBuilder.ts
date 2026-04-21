@@ -62,7 +62,7 @@ export function buildDropShadowFilter(offsetX: number, offsetY: number, blur: nu
   return `drop-shadow(${offsetX}px ${offsetY}px ${effectiveBlur}px ${color})`
 }
 
-export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithGap: number = 30, orientation: Orientation = 'vertical'): Record<string, any> {
+export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithGap: number = 30, _orientation: Orientation = 'vertical'): Record<string, any> {
   switch (fill.type) {
     case 'solid':
       return fill.opacity !== undefined && fill.opacity < 1
@@ -117,9 +117,8 @@ export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithG
 
     case 'texture': {
       const { texture } = fill
-      const isHorizontal = orientation === 'horizontal'
-      const isPaginate = texture.repeat === 'paginate' && !isHorizontal
-      const isStretch = texture.repeat === 'stretch' || (texture.repeat === 'paginate' && isHorizontal)
+      const isPaginate = texture.repeat === 'paginate'
+      const isStretch = texture.repeat === 'stretch'
       // For paginate, use original size. For stretch, stretch to fill. For others, auto.
       const size = isPaginate ? 'auto' : (isStretch ? '100% 100%' : 'auto')
       const repeat = (texture.repeat === 'no-repeat' || isPaginate) ? 'no-repeat' : 'repeat'
@@ -146,7 +145,7 @@ export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithG
         result.backgroundColor = texture.tintColor
         result.backgroundBlendMode = 'multiply'
       }
-      if (isPaginate && texture.pagination?.enabled) {
+      if (texture.pagination?.enabled) {
         const paginationCss = buildTexturePaginationCss(texture, barIndex, barHeightWithGap)
         if (texture.tintGradient) {
           result.backgroundPosition = `0 0, ${paginationCss.backgroundPosition}`

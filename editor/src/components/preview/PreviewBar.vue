@@ -249,7 +249,8 @@ const tokens = computed(() => ({
             display:'block',
             color:'transparent',
             textShadow: labelOutlineShadow,
-            overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+            overflow:'visible',
+            whiteSpace:'nowrap',
             maxWidth:'100%',
             pointerEvents:'none',
           }">{{ renderTemplate(field.template, tokens) }}</span>
@@ -257,8 +258,7 @@ const tokens = computed(() => ({
             display:'block',
             minWidth: 0,
             maxWidth:'100%',
-            overflow:'hidden',
-            textOverflow:'ellipsis',
+            overflow:'visible',
             whiteSpace:'nowrap',
             filter: textStyle,
             ...(field.template.includes('{name}') && isRank1 ? { ...gradientTextStyle, ...rank1NameGradientStyle } : {

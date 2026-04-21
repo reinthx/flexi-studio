@@ -9,7 +9,7 @@ import ShadowEditor from '../controls/ShadowEditor.vue'
 import BarSlider from '../controls/BarSlider.vue'
 import ColorPicker from '../controls/ColorPicker.vue'
 import DragNumber from '../controls/DragNumber.vue'
-import type { BarFill, BarShape, BarLabel, BarShadow, IconConfig } from '@shared/configSchema'
+import type { BarFill, BarShape, BarLabel, BarShadow, IconConfig, BarOutline } from '@shared/configSchema'
 
 const config = useConfigStore()
 const def = computed(() => config.profile.default)
@@ -31,6 +31,34 @@ function setGap(v: number)         { config.patchDefault({ gap: v }) }
 const fillShadow = computed(() => def.value.shape.fillShadow ?? { enabled: false, color: '#000000', blur: 4, thickness: 0, offsetX: 0, offsetY: 1 })
 function setFillShadow(s: BarShadow) {
   config.patchDefault({ shape: { ...def.value.shape, fillShadow: s } })
+}
+
+const fillOutline = computed<BarOutline>(() => def.value.shape.outline ?? {
+  color: 'rgba(255,255,255,0.15)',
+  thickness: { top: 0, right: 0, bottom: 1, left: 0 },
+  target: 'fill',
+})
+const fillOutlineEnabled = computed(() => {
+  const t = fillOutline.value.thickness
+  return (fillOutline.value.target === 'fill' || fillOutline.value.target === 'both')
+    && !!(t.top || t.right || t.bottom || t.left)
+})
+const fillOutlineWidth = computed(() => {
+  const t = fillOutline.value.thickness
+  return Math.max(t.top ?? 0, t.right ?? 0, t.bottom ?? 0, t.left ?? 0)
+})
+function patchFillOutline(p: Partial<BarOutline>) {
+  config.patchDefault({ shape: { ...def.value.shape, outline: { ...fillOutline.value, target: 'fill', ...p } } })
+}
+function setFillOutlineEnabled(enabled: boolean) {
+  patchFillOutline({
+    thickness: enabled
+      ? { top: 1, right: 1, bottom: 1, left: 1 }
+      : { top: 0, right: 0, bottom: 0, left: 0 },
+  })
+}
+function setFillOutlineWidth(width: number) {
+  patchFillOutline({ thickness: { top: width, right: width, bottom: width, left: width } })
 }
 
 // Background shadow — uses opacity mode (checkbox sets alpha to 0)
@@ -171,6 +199,31 @@ const sizeBadge = computed(() => {
               @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, segmentWidth: 8, gap: 2 }), endHeight: v || undefined } } })" />
           </div>
         </template>
+        <div class="sub-divider">Outline</div>
+        <div class="row">
+          <label class="ctrl-label">Enabled</label>
+          <input
+            type="checkbox"
+            :checked="fillOutlineEnabled"
+            @change="e => setFillOutlineEnabled((e.target as HTMLInputElement).checked)"
+          />
+          <template v-if="fillOutlineEnabled">
+            <ColorPicker
+              :model-value="fillOutline.color"
+              label="Outline"
+              @update:model-value="c => patchFillOutline({ color: c })"
+            />
+            <DragNumber
+              :model-value="fillOutlineWidth"
+              :min="0"
+              :max="12"
+              :step="1"
+              unit="px"
+              :speed="1"
+              @update:model-value="setFillOutlineWidth"
+            />
+          </template>
+        </div>
         <div class="sub-divider">Shadow</div>
         <ShadowEditor :model-value="fillShadow" @update:model-value="setFillShadow" />
       </div>

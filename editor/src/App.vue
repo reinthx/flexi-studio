@@ -192,7 +192,6 @@ const saveStateLabel = computed(() => applySuccess.value ? 'Live overlay updated
   width: 100vw;
   height: 100vh;
   min-width: 980px;
-  min-height: 620px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -334,7 +333,6 @@ const saveStateLabel = computed(() => applySuccess.value ? 'Live overlay updated
 .preview-area {
   flex: 1;
   min-width: 360px;
-  min-height: 320px;
   position: relative;
   overflow: hidden;
   background: var(--bg-base);

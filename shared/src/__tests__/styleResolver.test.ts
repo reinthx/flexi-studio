@@ -105,4 +105,39 @@ describe('resolveBarStyle', () => {
     const style = resolveBarStyle('PLD', 'YOU', 0, profile, 'Player')
     expect(style.fill).toBeDefined()
   })
+
+  it('applies rank 1 solid fill as texture tint without replacing the texture fill', () => {
+    const profile = createMockProfile({
+      default: {
+        ...createMockProfile().default,
+        fill: {
+          type: 'texture',
+          texture: {
+            src: 'texture.png',
+            repeat: 'paginate',
+            opacity: 1,
+            blendMode: 'normal',
+            pagination: { enabled: true, startOffsetX: 0, startOffsetY: 0 },
+          },
+        },
+      },
+      global: {
+        ...createMockProfile().global,
+        rankIndicator: {
+          ...createMockProfile().global.rankIndicator,
+          rank1Enabled: true,
+          rank1StyleEnabled: true,
+          rank1Style: { fill: { type: 'solid', color: '#ff0000' } },
+        },
+      },
+    })
+
+    const style = resolveBarStyle('PLD', 'Player', 1, profile, 'Player')
+
+    expect(style.fill.type).toBe('texture')
+    if (style.fill.type !== 'texture') return
+    expect(style.fill.texture.src).toBe('texture.png')
+    expect(style.fill.texture.tintColor).toBe('#ff0000')
+    expect(style.fill.texture.tintGradient).toBeUndefined()
+  })
 })

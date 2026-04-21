@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, useTemplateRef } from 'vue'
+import { computed, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { useDraggable, useElementSize } from '@vueuse/core'
 import { useLiveDataStore } from '../../stores/liveData'
 import PreviewBar from './PreviewBar.vue'
@@ -8,6 +8,8 @@ import PreviewHeader from './PreviewHeader.vue'
 import { useConfigStore } from '../../stores/config'
 import { resolveBarStyle } from '@shared/styleResolver'
 import { buildFillCss } from '@shared/cssBuilder'
+
+const STORAGE_KEY = 'flexi-editor-meter-height'
 
 const liveData = useLiveDataStore()
 const config   = useConfigStore()
@@ -53,6 +55,22 @@ const { x, y } = useDraggable(wrapperRef, {
 
 const { height: winH } = useElementSize(meterRef)
 
+const savedHeight = typeof sessionStorage !== 'undefined'
+  ? parseInt(sessionStorage.getItem(STORAGE_KEY) || '', 10)
+  : 0
+
+onMounted(() => {
+  if (meterRef.value && savedHeight > 0) {
+    meterRef.value.style.height = `${savedHeight}px`
+  }
+})
+
+watch(winH, (height) => {
+  if (height > 50) {
+    sessionStorage.setItem(STORAGE_KEY, String(Math.round(height)))
+  }
+})
+
 // Window background — from global config (falls back to default)
 const windowBg = computed(() => g.value.windowBg ?? 'rgba(0,0,0,0.6)')
 const windowFillStyle = computed(() => {
@@ -75,9 +93,7 @@ const wrapperStyle = computed(() => ({
   width: isHorizontal.value ? '720px' : '350px',
 }))
 
-const meterStyle = computed(() => ({
-  height: isHorizontal.value ? '160px' : '300px',
-}))
+const meterStyle = computed(() => ({}))
 
 function toggleHeaderPin() {
   config.profile.global.header.pinned = !(config.profile.global.header.pinned ?? true)
@@ -224,7 +240,7 @@ function toggleHeaderPin() {
   position: relative;
   height: 300px;
   resize: both;
-  overflow: hidden;
+  overflow: auto;
   min-width: 150px;
   border: 1px solid var(--border);
   border-radius: 0 0 4px 4px;

@@ -145,15 +145,10 @@ const contentStyle = computed(() => {
 
 // Bars container max-height driven by viewport (shared wrapper will handle scrolling)
 const barsMaxHeight = ref<string>('unset')
-const barWidth = ref<number>(typeof window !== 'undefined' ? window.innerWidth : 0)  // actual window width for auto-rotation angle
 let resizeObserver: ResizeObserver | null = null
 let breakdownViewChannel: BroadcastChannel | null = null
 let breakdownViewTimer: ReturnType<typeof setTimeout> | null = null
 const isDevMode = (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV === true
-
-function updateBarWidth() {
-  barWidth.value = window.innerWidth
-}
 
 function postBreakdownView(view: 'overview' | 'pulls') {
   if (typeof BroadcastChannel === 'undefined') return
@@ -176,9 +171,6 @@ function postBreakdownView(view: 'overview' | 'pulls') {
 onMounted(() => {
   store.start()
   loadCustomFont('redacted-script-bold')
-  // Track window resize for auto-rotation
-  barWidth.value = window.innerWidth
-  window.addEventListener('resize', updateBarWidth)
   if (isDevMode) {
     ;(window as any).actFlexiDebug = () => {
       const root = document.querySelector('.meter-root') as HTMLElement
@@ -202,8 +194,6 @@ onMounted(() => {
     const vh = root?.offsetHeight ?? window.innerHeight
     const available = Math.max(0, vh - headerHeight)
     barsMaxHeight.value = `${available}px`
-    // Track window width for auto-rotation angle calc (auto-updates on resize)
-    barWidth.value = window.innerWidth
   }
   updateBarsHeight()
   const root = document.querySelector('.meter-root') as HTMLElement | null
@@ -215,7 +205,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   store.stop()
-  window.removeEventListener('resize', updateBarWidth)
   if (isDevMode) delete (window as any).actFlexiDebug
   if (breakdownViewTimer) {
     clearTimeout(breakdownViewTimer)
@@ -274,7 +263,7 @@ const showResizeCorner = computed(() => g.value.header?.pinned === true)
           :value-format="g.valueFormat"
           :bar-index="bar.barIndex"
           :rank1-config="bar.isRank1 && g.rankIndicator?.rank1Enabled ? g.rankIndicator : undefined"
-          :bar-width="barWidth"
+          :color-overrides="store.profile.overrides"
           @click="openAbilityBreakdown(bar.name)"
         />
       </ScrollableBarsWrapper>
