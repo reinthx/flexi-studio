@@ -275,10 +275,65 @@ describe('overlay liveData store', () => {
 
     expect(store.sessionPulls[0].healingReceivedData?.Alice?.['1D55']).toMatchObject({
       abilityName: 'Equilibrium',
-      totalDamage: 5000,
+      totalDamage: 0,
+      overheal: 5000,
       hits: 1,
       sources: {
-        Alice: { total: 5000, hits: 1 },
+        Alice: { total: 0, overheal: 5000, hits: 1 },
+      },
+    })
+
+    store.stop()
+  })
+
+  it('splits incoming healing into effective healing and overheal', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      Bob: { name: 'Bob', Job: 'WHM', encdps: '0', damage: '0', damageperc: '0', deaths: '0' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      2: '40000001',
+      3: 'Training Boss',
+      4: '0001',
+      5: 'Raidwide',
+      6: '10AAAAAA',
+      7: 'Alice',
+      8: '03',
+      9: '3E800000',
+      24: '6000',
+      25: '10000',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      2: '10BBBBBB',
+      3: 'Bob',
+      4: '0BB8',
+      5: 'Cure',
+      6: '10AAAAAA',
+      7: 'Alice',
+      8: '04',
+      9: '13880000',
+      24: '9000',
+      25: '10000',
+    }))
+
+    mocks.listeners.CombatData(combatData(false, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      Bob: { name: 'Bob', Job: 'WHM', encdps: '0', damage: '0', damageperc: '0', deaths: '0' },
+    }))
+
+    expect(store.sessionPulls[0].healingReceivedData?.Alice?.['0BB8']).toMatchObject({
+      abilityName: 'Cure',
+      totalDamage: 3000,
+      overheal: 2000,
+      hits: 1,
+      sources: {
+        Bob: { total: 3000, overheal: 2000, hits: 1 },
       },
     })
 
@@ -317,6 +372,57 @@ describe('overlay liveData store', () => {
       targets: {
         'Training Boss': { total: 10000, hits: 1 },
       },
+    })
+
+    store.stop()
+  })
+
+  it('uses raw live timelines for pull list DPS and primary enemy instead of formatted frame totals', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        ENCDPS: '96',
+      },
+    })
+
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      2: '10AAAAAA',
+      3: 'Alice',
+      4: '0001',
+      5: 'Heavy Swing',
+      6: '40000001',
+      7: 'Training Boss',
+      8: '03',
+      9: '75300000',
+      24: '70000',
+      25: '100000',
+    }))
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        ENCDPS: '96',
+      },
+    })
+
+    store.broadcastForCombatant('Alice')
+    const payload = JSON.parse(localStorage.getItem('flexi-breakdown-snapshot') ?? '{}')
+    const livePull = payload.pullList.find((entry: { index: number | null }) => entry.index === null)
+
+    expect(livePull).toMatchObject({
+      dps: 1000,
+      rdps: 1000,
+      primaryEnemyName: 'Training Boss',
     })
 
     store.stop()

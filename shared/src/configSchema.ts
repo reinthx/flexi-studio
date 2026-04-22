@@ -507,6 +507,7 @@ export interface AbilityStats {
   abilityId: string
   abilityName: string
   totalDamage: number
+  overheal?: number
   hits: number
   maxHit: number
   minHit: number
@@ -519,8 +520,8 @@ export interface AbilityStats {
   critDirectHits?: number
   critDirectMinHit?: number
   critDirectMaxHit?: number
-  targets?: Record<string, { total: number; hits: number }>
-  sources?: Record<string, { total: number; hits: number }>
+  targets?: Record<string, { total: number; hits: number; overheal?: number }>
+  sources?: Record<string, { total: number; hits: number; overheal?: number }>
 }
 
 // [combatantName][abilityId] → AbilityStats

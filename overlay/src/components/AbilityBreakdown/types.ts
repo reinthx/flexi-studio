@@ -14,6 +14,8 @@ export interface PullEntry {
   dtps?: number
   deaths?: number
   damageTaken?: number
+  primaryEnemyName?: string
+  primaryEnemyMaxHp?: number
   bossPercent?: number
   bossPercentLabel?: string
   bossKilled?: boolean

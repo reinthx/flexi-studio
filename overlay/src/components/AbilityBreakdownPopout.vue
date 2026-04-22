@@ -18,6 +18,8 @@ const allData             = ref<Record<string, CombatantAbilityData>>({})
 const dpsTimeline         = ref<DpsTimeline>({})
 const hpsTimeline         = ref<DpsTimeline>({})
 const dtakenTimeline      = ref<DpsTimeline>({})
+const dpsByCombatant      = ref<Record<string, number>>({})
+const damageByCombatant   = ref<Record<string, number>>({})
 const rdpsByCombatant     = ref<Record<string, number>>({})
 const rdpsGiven           = ref<Record<string, number>>({})
 const rdpsTaken           = ref<Record<string, number>>({})
@@ -46,6 +48,8 @@ type BreakdownPayload = {
   dpsTimeline?: DpsTimeline
   hpsTimeline?: DpsTimeline
   dtakenTimeline?: DpsTimeline
+  dpsByCombatant?: Record<string, number>
+  damageByCombatant?: Record<string, number>
   rdpsByCombatant?: Record<string, number>
   rdpsGiven?: Record<string, number>
   rdpsTaken?: Record<string, number>
@@ -110,26 +114,34 @@ const abilityIconRequested = new Set<string>()
 
 const partyData = ref<PartyMemberData[]>([])
 
+const pullHasRaidBuffCredit = computed(() =>
+  Object.values(rdpsGiven.value).some(value => value > 0)
+)
+
+const pullHasRaidBuffCast = computed(() =>
+  Object.values(castData.value).some(casts =>
+    casts.some(cast => {
+      const abilityKey = cast.abilityName.trim().toLowerCase()
+      const effectKey = cast.effectName?.trim().toLowerCase() ?? ''
+      return !!RAID_BUFFS[abilityKey] || !!RAID_BUFFS[effectKey]
+    }),
+  )
+)
+
 const buffWarnings = computed(() => {
   if (activeView.value !== 'pulls') return []
   const warnings: string[] = []
   const job = actorJob(resolvedSelected.value)
-  const isMelee = ['PLD', 'WAR', 'DRK', 'GNB'].includes(job)
-  const isRanged = ['MCH', 'DNC', 'BRD'].includes(job)
-  const isCaster = ['BLM', 'SMN', 'RDM', 'PCT'].includes(job)
   const isHealer = ['WHM', 'SCH', 'AST', 'SGE'].includes(job)
   const casts = castData.value[resolvedSelected.value] ?? []
-  if (casts.length === 0) return warnings
   const abilityNamesLower = new Set(casts.map(c => c.abilityName.toLowerCase()))
   if (isHealer) {
     const hasHeal = abilityNamesLower.has('cure') || abilityNamesLower.has('cure ii') || abilityNamesLower.has('medica') ||
       abilityNamesLower.has('benefic') || abilityNamesLower.has('diagnosis') || abilityNamesLower.has('heal') || abilityNamesLower.has('heal ii')
     if (!hasHeal) warnings.push('No direct heals cast')
   }
-  if (isMelee || isRanged || isCaster) {
-    const hasBuff = abilityNamesLower.has('blood weapon') || abilityNamesLower.has('battle litany') || abilityNamesLower.has('battle voice') ||
-      abilityNamesLower.has('technical finish') || abilityNamesLower.has('standard finish') || abilityNamesLower.has('devotion')
-    if (!hasBuff) warnings.push('No major buffs used')
+  if (!pullHasRaidBuffCast.value && !pullHasRaidBuffCredit.value) {
+    warnings.push('No raid buffs detected')
   }
   return warnings
 })
@@ -330,6 +342,7 @@ const doneTargetRows = computed(() => {
     damage: number
     damageHits: number
     healing: number
+    overheal: number
     healingHits: number
     abilities: Set<string>
   }>()
@@ -341,6 +354,7 @@ const doneTargetRows = computed(() => {
       damage: 0,
       damageHits: 0,
       healing: 0,
+      overheal: 0,
       healingHits: 0,
       abilities: new Set<string>(),
     }
@@ -367,11 +381,12 @@ const doneTargetRows = computed(() => {
       if (!sourceStats) continue
       const row = ensure(target)
       row.healing += sourceStats.total
+      row.overheal += sourceStats.overheal ?? 0
       row.healingHits += sourceStats.hits
       row.abilities.add(ability.abilityName)
     }
   }
-  const total = Array.from(counts.values()).reduce((sum, row) => sum + row.damage + row.healing + row.casts, 0)
+  const total = Array.from(counts.values()).reduce((sum, row) => sum + row.damage + row.healing + row.overheal + row.casts, 0)
   return Array.from(counts.values())
     .map(row => ({
       target: row.target,
@@ -379,11 +394,12 @@ const doneTargetRows = computed(() => {
       damage: row.damage,
       damageHits: row.damageHits,
       healing: row.healing,
+      overheal: row.overheal,
       healingHits: row.healingHits,
       abilityCount: row.abilities.size,
-      pct: total > 0 ? (((row.damage + row.healing + row.casts) / total) * 100).toFixed(1) : '0.0',
+      pct: total > 0 ? (((row.damage + row.healing + row.overheal + row.casts) / total) * 100).toFixed(1) : '0.0',
     }))
-    .sort((a, b) => (b.damage + b.healing + b.casts) - (a.damage + a.healing + a.casts) || a.target.localeCompare(b.target))
+    .sort((a, b) => (b.damage + b.healing + b.overheal + b.casts) - (a.damage + a.healing + a.overheal + a.casts) || a.target.localeCompare(b.target))
 })
 
 const doneSourceRows = computed(() => {
@@ -433,6 +449,15 @@ function critDirectPct(row: AbilityRow): string {
   return pctOf(row.critDirectHits, row.hits)
 }
 
+function rawHealingAverage(row: { totalDamage: number; overheal?: number; hits: number }): number {
+  return row.hits > 0 ? Math.round((row.totalDamage + (row.overheal ?? 0)) / row.hits) : 0
+}
+
+function overhealPct(row: { totalDamage: number; overheal?: number }): string {
+  const raw = row.totalDamage + (row.overheal ?? 0)
+  return raw > 0 ? (((row.overheal ?? 0) / raw) * 100).toFixed(1) : '0.0'
+}
+
 // ── Damage Taken (Summary "Taken" mode) ──────────────────────────────────────
 const takenRawData = computed(() => damageTakenData.value[resolvedSelected.value] ?? {})
 
@@ -472,9 +497,13 @@ const healingTotal = computed(() =>
   Object.values(healingRawData.value).reduce((s, a) => s + a.totalDamage, 0)
 )
 
+const healingOverhealTotal = computed(() =>
+  Object.values(healingRawData.value).reduce((s, a) => s + (a.overheal ?? 0), 0)
+)
+
 const healingAbilities = computed(() =>
   Object.values(healingRawData.value)
-    .sort((a, b) => b.totalDamage - a.totalDamage)
+    .sort((a, b) => (b.totalDamage + (b.overheal ?? 0)) - (a.totalDamage + (a.overheal ?? 0)))
     .map(a => ({
       ...a,
       pct:    healingTotal.value > 0 ? ((a.totalDamage / healingTotal.value) * 100).toFixed(1) : '0.0',
@@ -577,16 +606,57 @@ function totalOutgoingFor(name: string): number {
   return Object.values(allData.value[name] ?? {}).reduce((sum, ability) => sum + ability.totalDamage, 0)
 }
 
+function actorAliases(name: string): string[] {
+  const aliases = [name]
+  if (name === 'YOU' && selfName.value) aliases.push(selfName.value)
+  if (selfName.value && name === selfName.value) aliases.push('YOU')
+  return [...new Set(aliases.filter(Boolean))]
+}
+
+function metricFor(record: Record<string, number>, name: string): number | undefined {
+  for (const alias of actorAliases(name)) {
+    const value = record[alias]
+    if (value !== undefined) return value
+  }
+  return undefined
+}
+
+function displayActorName(name: string): string {
+  return name === 'YOU' && selfName.value ? selfName.value : name
+}
+
+function rowActorNames(): string[] {
+  const names = new Set<string>()
+  for (const name of visibleCombatants.value) {
+    if (!isEnemy(name)) names.add(displayActorName(name))
+  }
+  for (const source of [damageByCombatant.value, dpsByCombatant.value, rdpsByCombatant.value]) {
+    for (const name of Object.keys(source)) {
+      const displayName = displayActorName(name)
+      if (!isEnemy(displayName)) names.add(displayName)
+    }
+  }
+  return Array.from(names)
+}
+
+function attributionDamageFor(name: string): number {
+  return metricFor(damageByCombatant.value, name) ?? totalOutgoingFor(name)
+}
+
+function dpsFor(name: string): number {
+  return metricFor(dpsByCombatant.value, name) ?? (totalOutgoingFor(name) / Math.max(encounterDurationSec.value, 1))
+}
+
 function rdpsFor(name: string): number {
-  return rdpsByCombatant.value[name] ?? (totalOutgoingFor(name) / Math.max(encounterDurationSec.value, 1))
+  return metricFor(rdpsByCombatant.value, name) ?? (totalOutgoingFor(name) / Math.max(encounterDurationSec.value, 1))
 }
 
 function rdpsGivenFor(name: string): number {
-  return rdpsGiven.value[name] ?? 0
+  return metricFor(rdpsGiven.value, name) ?? 0
 }
 
 function rdpsTakenFor(name: string): number {
-  return rdpsTaken.value[name] ?? 0
+  return metricFor(rdpsTaken.value, name) ?? 0
 }
 
 function rdpsDeltaLabel(name: string): string {
@@ -1533,6 +1603,66 @@ const overviewTimelineBars = computed(() => {
   })
 })
 
+const pullGroupDpsBars = computed(() => {
+  const names = Object.keys(dpsTimeline.value).filter(name => showEnemies.value || !isEnemy(name))
+  if (names.length === 0) return []
+  const maxBuckets = Math.max(...names.map(name => dpsTimeline.value[name]?.length ?? 0), 0)
+  if (maxBuckets === 0) return []
+  const bucketCount = Math.min(48, maxBuckets)
+  const groupSize = Math.ceil(maxBuckets / bucketCount)
+  const values: number[] = []
+
+  for (let i = 0; i < maxBuckets; i += groupSize) {
+    let total = 0
+    for (let b = i; b < Math.min(i + groupSize, maxBuckets); b++) {
+      total += names.reduce((sum, name) => sum + ((dpsTimeline.value[name]?.[b] ?? 0) / TIMELINE_BUCKET_SEC), 0)
+    }
+    values.push(total / groupSize)
+  }
+
+  const max = Math.max(1, ...values)
+  return values.map((value, index) => {
+    const bucket = index * groupSize
+    const startMs = bucket * TIMELINE_BUCKET_SEC * 1000
+    const endMs = startMs + groupSize * TIMELINE_BUCKET_SEC * 1000
+    const deathCount = sortedDeaths.value.filter(death => death.timestamp >= startMs && death.timestamp < endMs).length
+    const raiseCount = sortedDeaths.value.filter(death => death.resurrectTime && death.resurrectTime >= startMs && death.resurrectTime < endMs).length
+    return {
+      key: `pull-group-dps-${index}`,
+      bucket,
+      height: `${Math.max(6, Math.min(100, (value / max) * 100)).toFixed(1)}%`,
+      value,
+      label: fmtTime(startMs),
+      deathCount,
+      raiseCount,
+    }
+  })
+})
+
+const pullDamageRows = computed(() => {
+  const actorNames = rowActorNames()
+  const totalDamage = actorNames
+    .reduce((sum, name) => sum + attributionDamageFor(name), 0)
+  const rows = actorNames
+    .map(name => {
+      const total = attributionDamageFor(name)
+      return {
+        name,
+        total,
+        pct: totalDamage > 0 ? ((total / totalDamage) * 100).toFixed(1) : '0.0',
+        width: totalDamage > 0 ? `${Math.max(2, Math.min(100, (total / totalDamage) * 100)).toFixed(1)}%` : '2%',
+        dps: dpsFor(name),
+        rdps: rdpsFor(name),
+        given: rdpsGivenFor(name),
+        taken: rdpsTakenFor(name),
+        deaths: deathCountFor(name),
+      }
+    })
+    .filter(row => row.total > 0 || row.deaths > 0)
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
+  return rows
+})
+
 function openOverviewCard(view: BreakdownView): void {
   activeView.value = view
 }
@@ -1657,16 +1787,14 @@ const pullDashboardNotes = computed(() => {
     notes.push(`${formatEntryDelta(delta, seconds => fmtSeconds(Math.abs(seconds)))} from best pull duration.`)
   }
 
-  if (bestProgressPullEntry.value && current.index === bestProgressPullEntry.value.index && selectedEncounterPullEntries.value.length > 1) {
+  if (current.pullOutcome !== 'clear' && bestProgressPullEntry.value && current.index === bestProgressPullEntry.value.index && selectedEncounterPullEntries.value.length > 1) {
     notes.push('Best enemy progress for this encounter.')
-  } else if (bestProgressPullEntry.value && current.bossPercent !== undefined) {
+  } else if (current.pullOutcome !== 'clear' && bestProgressPullEntry.value && current.bossPercent !== undefined) {
     const delta = current.bossPercent - (bestProgressPullEntry.value.bossPercent ?? current.bossPercent)
     notes.push(`${delta > 0 ? '+' : ''}${delta.toFixed(1)} enemy HP points from best progress.`)
   }
 
-  if (current.pullOutcome === 'clear') {
-    notes.push((current.enemyCount ?? 0) > 1 ? 'All tracked enemies defeated during this pull.' : 'Tracked enemy defeated during this pull.')
-  } else if (current.pullOutcome === 'wipe') {
+  if (current.pullOutcome === 'wipe') {
     notes.push(`Likely wipe: pull ended with enemies remaining${current.bossPercentLabel ? ` (${current.bossPercentLabel})` : ''}.`)
   } else if (current.pullOutcome === 'unknown' && current.index !== null) {
     notes.push('Outcome unknown because no enemy HP samples were captured.')
@@ -1749,6 +1877,8 @@ function clearBreakdownData() {
   dpsTimeline.value = {}
   hpsTimeline.value = {}
   dtakenTimeline.value = {}
+  dpsByCombatant.value = {}
+  damageByCombatant.value = {}
   rdpsByCombatant.value = {}
   rdpsGiven.value = {}
   rdpsTaken.value = {}
@@ -1817,6 +1947,8 @@ function applyEncounterPayload(data: BreakdownPayload): boolean {
   dpsTimeline.value          = data.dpsTimeline      ?? {}
   hpsTimeline.value          = data.hpsTimeline      ?? {}
   dtakenTimeline.value       = data.dtakenTimeline   ?? {}
+  dpsByCombatant.value       = data.dpsByCombatant   ?? {}
+  damageByCombatant.value    = data.damageByCombatant ?? {}
   rdpsByCombatant.value      = data.rdpsByCombatant  ?? {}
   rdpsGiven.value            = data.rdpsGiven        ?? {}
   rdpsTaken.value            = data.rdpsTaken        ?? {}
@@ -2142,14 +2274,14 @@ onUnmounted(() => {
             </span>
             <span class="bp-pull-row-main">
               <strong>{{ entryPullLabel(entry) }}</strong>
-              <span>{{ entry.encounterName }}</span>
+              <span>{{ entry.index === null ? (entry.primaryEnemyName ?? entry.encounterName) : entry.encounterName }}</span>
             </span>
             <span class="bp-pull-row-stats">
               <span>{{ entry.duration || '0:00' }}</span>
               <span v-if="entry.pullOutcomeLabel" :class="pullOutcomeClass(entry)">{{ entry.pullOutcomeLabel }}</span>
               <span v-if="entry.bossPercentLabel">{{ entry.bossPercentLabel }} enemy</span>
               <span>{{ f(entry.dps ?? 0) }} DPS</span>
-              <span title="Raid-contributing DPS: raw DPS adjusted by buff credit">{{ f(entry.rdps ?? entry.dps ?? 0) }} rDPS</span>
+              <span title="Raid-contributing DPS adjusted by buff credit">{{ f(entry.rdps ?? entry.dps ?? 0) }} rDPS</span>
               <span :class="{ danger: (entry.deaths ?? 0) > 0 }">{{ entry.deaths ?? 0 }} deaths</span>
             </span>
           </button>
@@ -2173,11 +2305,16 @@ onUnmounted(() => {
               <div class="bp-card-detail">
                 <template v-if="selectedPullEntry?.pullOutcomeLabel">
                   <span :class="pullOutcomeClass(selectedPullEntry)">{{ selectedPullEntry.pullOutcomeLabel }}</span>
+                  <span v-if="selectedPullEntry?.primaryEnemyMaxHp"> · Max HP {{ f(selectedPullEntry.primaryEnemyMaxHp) }}</span>
                 </template>
                 <template v-else-if="bestProgressPullEntry && selectedPullEntry?.bossPercent !== undefined">
                   {{ selectedPullEntry.index === bestProgressPullEntry.index ? 'best progress' : `${((selectedPullEntry.bossPercent ?? 0) - (bestProgressPullEntry.bossPercent ?? 0)).toFixed(1)} pts from best` }}
+                  <span v-if="selectedPullEntry?.primaryEnemyMaxHp"> · Max HP {{ f(selectedPullEntry.primaryEnemyMaxHp) }}</span>
                 </template>
-                <template v-else>needs enemy HP samples</template>
+                <template v-else>
+                  <span v-if="selectedPullEntry?.primaryEnemyMaxHp">Max HP {{ f(selectedPullEntry.primaryEnemyMaxHp) }}</span>
+                  <span v-else>needs enemy HP samples</span>
+                </template>
               </div>
             </div>
             <div class="bp-card bp-card--done">
@@ -2187,7 +2324,7 @@ onUnmounted(() => {
                 <template v-if="previousPullEntry">
                   {{ formatEntryDelta((selectedPullEntry?.rdps ?? selectedPullEntry?.dps ?? 0) - (previousPullEntry.rdps ?? previousPullEntry.dps ?? 0), f) }} vs previous
                 </template>
-                <template v-else>{{ f(selectedPullEntry?.dps ?? 0) }} raw DPS</template>
+                <template v-else>{{ f(selectedPullEntry?.dps ?? 0) }} DPS</template>
               </div>
             </div>
             <div class="bp-card bp-card--deaths">
@@ -2227,26 +2364,49 @@ onUnmounted(() => {
               </button>
             </section>
 
-            <section class="bp-panel">
-              <div class="bp-panel-title">Top Incoming Sources</div>
-              <table class="bp-table">
-                <thead><tr><th class="col-name">Ability</th><th class="col-num">Total</th><th class="col-num">Hits</th></tr></thead>
-                <tbody>
-                  <tr v-for="row in takenAbilities.slice(0, 8)" :key="`pull-taken-${row.abilityId}`" @click="selectAbility(row.abilityName); activeView = 'taken'">
-                    <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
-                    <td class="col-num">{{ f(row.totalDamage) }}</td>
-                    <td class="col-num">{{ row.hits }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </section>
-
-            <section class="bp-panel">
-              <div class="bp-panel-title">Next Drilldowns</div>
-              <button class="bp-action-btn" @click="activeView = 'overview'">Open overview</button>
-              <button class="bp-action-btn" @click="activeView = 'timeline'">Open timeline</button>
-              <button class="bp-action-btn" :disabled="sortedDeaths.length === 0" @click="activeView = 'deaths'">Open deaths</button>
-              <button class="bp-action-btn" @click="activeView = 'events'">Open event rows</button>
+            <section class="bp-panel bp-panel--wide">
+              <div class="bp-panel-title">Damage Attribution</div>
+              <div class="bp-pull-attribution-chart" :class="{ empty: pullGroupDpsBars.length === 0 }">
+                <button
+                  v-for="bar in pullGroupDpsBars"
+                  :key="bar.key"
+                  class="bp-pull-dps-bar"
+                  :style="{ height: bar.height }"
+                  :title="`${bar.label} · ${f(bar.value)} group DPS`"
+                  @click="openTimelineAtBucket(bar.bucket)"
+                >
+                  <span v-if="bar.deathCount > 0" class="bp-pull-marker bp-pull-marker--death" :title="`${bar.deathCount} death${bar.deathCount === 1 ? '' : 's'}`"></span>
+                  <span v-if="bar.raiseCount > 0" class="bp-pull-marker bp-pull-marker--raise" :title="`${bar.raiseCount} raise${bar.raiseCount === 1 ? '' : 's'}`"></span>
+                </button>
+                <span v-if="pullGroupDpsBars.length === 0">No group DPS samples yet.</span>
+              </div>
+              <div v-if="pullDamageRows.length === 0" class="bp-empty-panel">No damage attribution rows for this pull.</div>
+              <div v-else class="bp-scroll">
+                <table class="bp-table bp-attribution-table">
+                  <thead><tr>
+                    <th class="col-name">Name</th>
+                    <th class="col-num">Amount</th>
+                    <th class="col-pct">%</th>
+                    <th class="col-num">DPS</th>
+                    <th class="col-num">rDPS</th>
+                    <th class="col-num">Given</th>
+                    <th class="col-num">Taken</th>
+                    <th class="col-num">Deaths</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="row in pullDamageRows" :key="`pull-damage-${row.name}`" :class="{ 'bp-row-active': resolvedSelected === row.name }" @click="selectActor(row.name); activeView = 'done'">
+                      <td class="col-name"><div class="row-fill" :style="{ width: row.width }" /><span class="aname" :style="nameStyle(row.name)">{{ row.name }}</span></td>
+                      <td class="col-num">{{ f(row.total) }}</td>
+                      <td class="col-pct">{{ row.pct }}%</td>
+                      <td class="col-num">{{ f(row.dps) }}</td>
+                      <td class="col-num">{{ f(row.rdps) }}</td>
+                      <td class="col-num">{{ row.given > 0 ? f(row.given) : '—' }}</td>
+                      <td class="col-num">{{ row.taken > 0 ? f(row.taken) : '—' }}</td>
+                      <td class="col-num" :class="{ danger: row.deaths > 0 }">{{ row.deaths || '—' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </section>
           </div>
         </main>
@@ -2285,7 +2445,8 @@ onUnmounted(() => {
                 <th class="col-name">Target</th>
                 <th class="col-num">Uses</th>
                 <th class="col-num">Damage</th>
-                <th class="col-num">Healing</th>
+                <th class="col-num">Effective Heal</th>
+                <th class="col-num">Overheal</th>
                 <th class="col-pct">%</th>
                 <th class="col-num">Abilities</th>
               </tr></thead>
@@ -2295,6 +2456,7 @@ onUnmounted(() => {
                   <td class="col-num">{{ row.casts }}</td>
                   <td class="col-num">{{ row.damage > 0 ? f(row.damage) : '—' }}</td>
                   <td class="col-num">{{ row.healing > 0 ? f(row.healing) : '—' }}</td>
+                  <td class="col-num">{{ row.overheal > 0 ? f(row.overheal) : '—' }}</td>
                   <td class="col-pct">{{ row.pct }}%</td>
                   <td class="col-num">{{ row.abilityCount }}</td>
                 </tr>
@@ -2392,6 +2554,7 @@ onUnmounted(() => {
           <div class="bp-panel-toolbar">
             <div class="bp-panel-title">Incoming Breakdown</div>
             <div class="bp-toolbar-group">
+              <span v-if="takenMode === 'healing'" class="bp-mode-total">{{ f(healingTotal) }} effective · {{ f(healingOverhealTotal) }} overheal</span>
               <button class="bp-mode-btn" :class="{ active: takenMode === 'damage' }" @click="takenMode = 'damage'">Damage Taken</button>
               <button class="bp-mode-btn" :class="{ active: takenMode === 'healing' }" @click="takenMode = 'healing'">Healing Received</button>
             </div>
@@ -2401,7 +2564,8 @@ onUnmounted(() => {
             <table class="bp-table">
               <thead><tr>
                 <th class="col-name" @click="sortTakenBy('abilityName')">Source Ability</th>
-                <th class="col-num col-sort" :class="{ active: takenSortColumn === 'totalDamage' }" @click="sortTakenBy('totalDamage')">Total{{ takenSortColumn === 'totalDamage' ? (takenSortDesc ? ' ↓' : ' ↑') : '' }}</th>
+                <th class="col-num col-sort" :class="{ active: takenSortColumn === 'totalDamage' }" @click="sortTakenBy('totalDamage')">{{ takenMode === 'healing' ? 'Effective' : 'Total' }}{{ takenSortColumn === 'totalDamage' ? (takenSortDesc ? ' ↓' : ' ↑') : '' }}</th>
+                <th v-if="takenMode === 'healing'" class="col-num">Overheal</th>
                 <th class="col-pct">%</th>
                 <th class="col-num col-sort" :class="{ active: takenSortColumn === 'hits' }" @click="sortTakenBy('hits')">{{ takenMode === 'healing' ? 'Heals' : 'Hits' }}{{ takenSortColumn === 'hits' ? (takenSortDesc ? ' ↓' : ' ↑') : '' }}</th>
                 <th class="col-num">Avg</th>
@@ -2412,9 +2576,10 @@ onUnmounted(() => {
                 <tr v-for="row in incomingAbilities" :key="`${takenMode}-${row.abilityId}`" :class="{ 'bp-row-active': selectedTakenAbility?.abilityName === row.abilityName }" @click="selectAbility(row.abilityName)">
                   <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
                   <td class="col-num">{{ f(row.totalDamage) }}</td>
+                  <td v-if="takenMode === 'healing'" class="col-num">{{ (row.overheal ?? 0) > 0 ? f(row.overheal ?? 0) : '—' }}</td>
                   <td class="col-pct">{{ row.pct }}%</td>
                   <td class="col-num">{{ row.hits }}</td>
-                  <td class="col-num">{{ f(row.avg) }}</td>
+                  <td class="col-num">{{ f(takenMode === 'healing' ? rawHealingAverage(row) : row.avg) }}</td>
                   <td class="col-num">{{ f(row.maxHit) }}</td>
                   <td class="col-num">{{ (takenMode === 'healing' ? selectedActorDeathHealingAbilitySet : selectedActorNearDeathCounts).get(row.abilityName) ?? '—' }}</td>
                 </tr>
@@ -2429,10 +2594,11 @@ onUnmounted(() => {
           <template v-else>
             <div class="bp-inspector-block">
               <div class="bp-kv"><span>Ability</span><strong>{{ selectedTakenAbility.abilityName }}</strong></div>
-              <div class="bp-kv"><span>Total</span><strong>{{ f(selectedTakenAbility.totalDamage) }}</strong></div>
+              <div class="bp-kv"><span>{{ takenMode === 'healing' ? 'Effective' : 'Total' }}</span><strong>{{ f(selectedTakenAbility.totalDamage) }}</strong></div>
+              <div v-if="takenMode === 'healing'" class="bp-kv"><span>Overheal</span><strong>{{ f(selectedTakenAbility.overheal ?? 0) }} · {{ overhealPct(selectedTakenAbility) }}%</strong></div>
               <div class="bp-kv"><span>Share</span><strong>{{ selectedTakenAbility.pct }}%</strong></div>
               <div class="bp-kv"><span>{{ takenMode === 'healing' ? 'Heals' : 'Hits' }}</span><strong>{{ selectedTakenAbility.hits }}</strong></div>
-              <div class="bp-kv"><span>Average</span><strong>{{ f(selectedTakenAbility.avg) }}</strong></div>
+              <div class="bp-kv"><span>Average</span><strong>{{ f(takenMode === 'healing' ? rawHealingAverage(selectedTakenAbility) : selectedTakenAbility.avg) }}</strong></div>
               <div class="bp-kv"><span>Near Deaths</span><strong>{{ (takenMode === 'healing' ? selectedActorDeathHealingAbilitySet : selectedActorNearDeathCounts).get(selectedTakenAbility.abilityName) ?? 'None tracked' }}</strong></div>
             </div>
           </template>
@@ -4234,7 +4400,10 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-top: 10px;
+  min-height: 0;
+  overflow: auto;
 }
+.bp-panel--wide { grid-column: 1 / -1; min-height: 360px; }
 .bp-pull-note-list {
   display: grid;
   gap: 7px;
@@ -4475,6 +4644,62 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   cursor: pointer;
   font-family: inherit;
 }
+.bp-pull-attribution-chart {
+  position: relative;
+  height: 130px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  margin: 12px 12px 0;
+  padding: 12px 10px 18px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0) 1px) 0 25% / 100% 25%,
+    rgba(0,0,0,0.16);
+}
+.bp-pull-attribution-chart.empty {
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,255,255,0.36);
+}
+.bp-pull-dps-bar {
+  position: relative;
+  flex: 1;
+  min-width: 4px;
+  border: none;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(180deg, rgba(116,185,255,0.94), rgba(116,185,255,0.24));
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.15s;
+}
+.bp-pull-dps-bar:hover {
+  filter: brightness(1.18);
+  transform: scaleY(1.02);
+}
+.bp-pull-marker {
+  position: absolute;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.bp-pull-marker--death {
+  top: -12px;
+  height: calc(100% + 16px);
+  background: rgba(255,55,55,0.86);
+}
+.bp-pull-marker--raise {
+  top: -6px;
+  height: 8px;
+  background: rgba(255,166,70,0.92);
+}
+.bp-attribution-table td.col-name {
+  max-width: 240px;
+}
+.bp-attribution-table .danger {
+  color: rgba(255,120,120,0.95);
+}
 .bp-mini-pill--button:hover {
   color: #d9bcff;
   border-color: var(--flexi-accent-border);
@@ -4583,6 +4808,11 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 }
 
 @media (max-width: 820px) {
+  .bp-root {
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
+  }
   .bp-analysis-header,
   .bp-filter-strip {
     flex-direction: column;
@@ -4590,11 +4820,63 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   }
   .bp-card-grid,
   .bp-overview-grid,
-  .bp-workspace {
+  .bp-workspace,
+  .bp-pulls-workspace,
+  .bp-pulls-grid {
     grid-template-columns: 1fr;
+  }
+  .bp-workspace,
+  .bp-pulls-workspace,
+  .bp-main,
+  .bp-pulls-grid,
+  .bp-overview-grid,
+  .bp-panel {
+    min-height: 0;
+    overflow: visible;
   }
   .bp-rail {
     max-height: 220px;
+  }
+  .bp-pull-list-panel {
+    max-height: 280px;
+    border-right: none;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .bp-panel--wide {
+    min-height: 0;
+  }
+  .bp-scroll {
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+  .bp-table {
+    min-width: 620px;
+  }
+  .bp-card-grid {
+    border-bottom: none;
+  }
+  .bp-pull-attribution-chart {
+    height: 110px;
+  }
+}
+
+@media (max-height: 680px) {
+  .bp-root {
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
+  }
+  .bp-pulls-workspace,
+  .bp-workspace,
+  .bp-main,
+  .bp-pulls-grid {
+    min-height: 0;
+    overflow: visible;
+  }
+  .bp-pull-list-panel,
+  .bp-rail,
+  .bp-inspector {
+    max-height: 260px;
   }
 }
 </style>

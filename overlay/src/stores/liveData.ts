@@ -107,6 +107,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
   const currentTimeline      = ref<DpsTimeline>({})  // damage dealt   (DPS)
   const currentHealTimeline  = ref<DpsTimeline>({})  // heals dealt    (HPS)
   const currentDtakenTimeline = ref<DpsTimeline>({}) // damage received (DTPS)
+  const currentDamageByCombatant = ref<Record<string, number>>({})
+  const currentDpsByCombatant = ref<Record<string, number>>({})
 
   // Per-ability damage received by each target (for Summary "Taken" view).
   const currentDtakenData = ref<Record<string, CombatantAbilityData>>({})
@@ -180,6 +182,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
     dtps?: number
     deaths?: number
     damageTaken?: number
+    primaryEnemyName?: string
+    primaryEnemyMaxHp?: number
     bossPercent?: number
     bossPercentLabel?: string
     bossKilled?: boolean
@@ -191,7 +195,35 @@ export const useLiveDataStore = defineStore('liveData', () => {
   let cachedPullListKey = ''
   let cachedHistoricalPullEntries: PullListEntry[] = []
 
+  function isMeterActorName(name: string): boolean {
+    const id = currentCombatantIds.value[name]
+    if (!id) return true
+    if (id.startsWith('40')) return false
+    if (!id.startsWith('10') && !id.startsWith('40') && !id.startsWith('00')) return false
+    return true
+  }
+
+  function timelineRateTotal(timeline: DpsTimeline, durationSec: number): number {
+    const duration = Math.max(1, durationSec)
+    return Object.entries(timeline)
+      .filter(([name]) => isMeterActorName(name))
+      .reduce((sum, [, buckets]) => sum + buckets.reduce((s, value) => s + value, 0), 0) / duration
+  }
+
+  function liveRdpsTotal(): number {
+    return Object.entries(currentRdpsByCombatant.value)
+      .filter(([name]) => isMeterActorName(name))
+      .reduce((sum, [, value]) => sum + value, 0)
+  }
+
+  function liveDpsTotal(): number {
+    return Object.entries(currentDpsByCombatant.value)
+      .filter(([name]) => isMeterActorName(name))
+      .reduce((sum, [, value]) => sum + value, 0)
+  }
+
   function buildPullList() {
+    const liveDuration = parseDurationToSec(frame.value?.encounterDuration ?? '')
     const list: PullListEntry[] = [
       {
         index: null,
@@ -201,10 +233,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
         pullNumber: 0,
         pullCount: 0,
         isFirstInEncounter: true,
-        dps: parseFloat(frame.value?.totalDps ?? '0'),
-        rdps: parseFloat(frame.value?.totalRdps ?? '0'),
-        hps: parseFloat(frame.value?.totalHps ?? '0'),
-        dtps: parseFloat(frame.value?.totalDtps ?? '0'),
+        dps: liveDpsTotal() || timelineRateTotal(currentTimeline.value, liveDuration),
+        rdps: liveRdpsTotal(),
+        hps: timelineRateTotal(currentHealTimeline.value, liveDuration),
+        dtps: timelineRateTotal(currentDtakenTimeline.value, liveDuration),
         deaths: currentDeaths.value.length,
         damageTaken: Object.values(currentDtakenData.value).reduce((sum, abilities) =>
           sum + Object.values(abilities).reduce((s, ability) => s + ability.totalDamage, 0), 0),
@@ -274,6 +306,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
   ): {
     bossPercent?: number
     bossPercentLabel?: string
+    primaryEnemyName?: string
+    primaryEnemyMaxHp?: number
     bossKilled?: boolean
     enemyCount?: number
     defeatedEnemyCount?: number
@@ -322,6 +356,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
       bossPercentLabel: allDefeated
         ? (enemies.length > 1 ? `Cleared · ${defeatedLabel}` : 'Defeated')
         : progressLabel,
+      primaryEnemyName: primary.name,
+      primaryEnemyMaxHp: primary.maxHp > 0 ? primary.maxHp : undefined,
       bossKilled: allDefeated,
       enemyCount: enemies.length,
       defeatedEnemyCount,
@@ -350,6 +386,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const rdpsByCombatant = pullIndex === null
       ? deepClone(currentRdpsByCombatant.value)
       : Object.fromEntries((pull?.combatants ?? []).map(c => [c.name, parseFloat(c.rdps ?? '0') || 0]))
+    const dpsByCombatant = pullIndex === null
+      ? deepClone(currentDpsByCombatant.value)
+      : Object.fromEntries((pull?.combatants ?? []).map(c => [c.name, parseFloat(c.encdps ?? '0') || 0]))
+    const damageByCombatant = pullIndex === null
+      ? deepClone(currentDamageByCombatant.value)
+      : Object.fromEntries((pull?.combatants ?? []).map(c => [c.name, parseFloat(c.damage ?? '0') || 0]))
     const liveDuration = parseDurationToSec(frame.value?.encounterDuration ?? '')
     const rdpsGiven = pullIndex === null
       ? mapToRateRecord(rDpsContributed, liveDuration)
@@ -373,7 +415,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       timestamp,
       abilityData,
       dpsTimeline, hpsTimeline, dtakenTimeline,
-      damageTakenData, healingReceivedData, rdpsByCombatant, rdpsGiven, rdpsTaken, deaths, combatantIds, combatantJobs, castData, resourceData,
+      damageTakenData, healingReceivedData, dpsByCombatant, damageByCombatant, rdpsByCombatant, rdpsGiven, rdpsTaken, deaths, combatantIds, combatantJobs, castData, resourceData,
       selfName: selfName.value,
       blurNames: profile.value.global.blurNames ?? false,
       partyNames: Array.from(partyNamesHistorical),
@@ -479,15 +521,22 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
     // Inject synthetic rdps field: (personal damage + contributions given − boosts received) / duration
     const rDpsDuration = parseFloat(event.Encounter['DURATION'] ?? '0') || 1
+    const nextDamageByCombatant: Record<string, number> = {}
+    const nextDpsByCombatant: Record<string, number> = {}
     const nextRdpsByCombatant: Record<string, number> = {}
     for (const c of combatants) {
       const baseDamage  = parseFloat(c['damage'] ?? '0')
+      const dps = parseFloat(c['encdps'] ?? '0') || 0
       const contributed = rDpsContributed.get(c.name) ?? 0
       const received    = rDpsReceived.get(c.name) ?? 0
       const rdps = Math.max(0, (baseDamage + contributed - received) / rDpsDuration)
+      nextDamageByCombatant[c.name] = baseDamage
+      nextDpsByCombatant[c.name] = dps
       c['rdps'] = String(Math.round(rdps))
       nextRdpsByCombatant[c.name] = Math.round(rdps)
     }
+    currentDamageByCombatant.value = nextDamageByCombatant
+    currentDpsByCombatant.value = nextDpsByCombatant
     currentRdpsByCombatant.value = nextRdpsByCombatant
 
     // Use combatantFilter if set, otherwise fall back to legacy selfOnly/partyOnly
@@ -1012,18 +1061,25 @@ export const useLiveDataStore = defineStore('liveData', () => {
     })
   }
 
-  function appliedHealingAmount(targetName: string, sourceName: string, rawHeal: number, currentHp: number, maxHp: number): number {
-    if (rawHeal <= 0) return 0
-    if (!targetName || !Number.isFinite(currentHp) || !Number.isFinite(maxHp) || maxHp <= 0) return rawHeal
+  function healingAmounts(targetName: string, rawHeal: number, currentHp: number, maxHp: number): { effective: number; overheal: number } {
+    if (rawHeal <= 0) return { effective: 0, overheal: 0 }
+    if (!targetName || !Number.isFinite(currentHp) || !Number.isFinite(maxHp) || maxHp <= 0) {
+      return { effective: rawHeal, overheal: 0 }
+    }
 
     const safeCurrentHp = Math.max(0, Math.min(currentHp, maxHp))
     const previous = lastKnownHp.get(targetName)
+    let effective = rawHeal
     if (previous && previous.maxHp > 0) {
-      return Math.max(0, Math.min(rawHeal, safeCurrentHp - previous.currentHp))
+      effective = Math.max(0, Math.min(rawHeal, safeCurrentHp - previous.currentHp))
+    } else if (safeCurrentHp >= maxHp) {
+      effective = 0
     }
 
-    if (safeCurrentHp >= maxHp && sourceName && sourceName === targetName) return rawHeal
-    return safeCurrentHp >= maxHp ? 0 : rawHeal
+    return {
+      effective,
+      overheal: Math.max(0, rawHeal - effective),
+    }
   }
 
   let lastResourceSampleTime = new Map<string, number>()
@@ -1153,8 +1209,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
     abilityName: string,
     healing: number,
     sourceName: string,
+    overheal = 0,
   ): void {
-    if (!targetName || !abilityId || healing === 0) return
+    if (!targetName || !abilityId || (healing === 0 && overheal === 0)) return
     if (!currentHealingReceivedData.value[targetName]) {
       currentHealingReceivedData.value[targetName] = {}
     }
@@ -1171,13 +1228,16 @@ export const useLiveDataStore = defineStore('liveData', () => {
     }
     const stats: AbilityStats = combatant[abilityId]
     stats.totalDamage += healing
+    stats.overheal = (stats.overheal ?? 0) + overheal
     stats.hits++
-    if (healing > stats.maxHit) stats.maxHit = healing
-    if (healing < stats.minHit) stats.minHit = healing
+    const rawHealing = healing + overheal
+    if (rawHealing > stats.maxHit) stats.maxHit = rawHealing
+    if (rawHealing < stats.minHit) stats.minHit = rawHealing
     if (sourceName) {
       stats.sources ??= {}
       const sourceStats = stats.sources[sourceName] ?? { total: 0, hits: 0 }
       sourceStats.total += healing
+      sourceStats.overheal = (sourceStats.overheal ?? 0) + overheal
       sourceStats.hits += 1
       stats.sources[sourceName] = sourceStats
     }
@@ -1252,13 +1312,13 @@ export const useLiveDataStore = defineStore('liveData', () => {
         // Heal hit — attribute to source for HPS, to target for incoming heals
         const heal = decodeLogDamage(damageHex)
         if (heal > 0 && effectiveName) {
-          const appliedHeal = appliedHealingAmount(targetName, effectiveName, heal, tgtCurrentHp, tgtMaxHp)
+          const { effective: appliedHeal, overheal } = healingAmounts(targetName, heal, tgtCurrentHp, tgtMaxHp)
           if (appliedHeal > 0) recordTimelineBucket(currentHealTimeline.value, effectiveName, appliedHeal)
           if (targetName) {
-            if (abilityId && appliedHeal > 0) recordHealingReceived(targetName, abilityId, abilityName, appliedHeal, effectiveName)
+            if (abilityId && (appliedHeal > 0 || overheal > 0)) recordHealingReceived(targetName, abilityId, abilityName, appliedHeal, effectiveName, overheal)
             if (appliedHeal > 0) recordHitEvent(targetName, 'heal', abilityName, effectiveName, appliedHeal, tgtCurrentHp, tgtMaxHp)
           }
-          didRecord = didRecord || appliedHeal > 0
+          didRecord = didRecord || appliedHeal > 0 || overheal > 0
         }
         if (targetName) {
           recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
@@ -1281,12 +1341,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const healAbilityName = selfHealingEffect ? selfHealingEffect.effectName : abilityName
         if (!healTargetName || !healAbilityId) continue
 
-        const appliedHeal = appliedHealingAmount(healTargetName, effectiveName, heal, healTargetCurrentHp, healTargetMaxHp)
-        if (appliedHeal <= 0) continue
+        const { effective: appliedHeal, overheal } = healingAmounts(healTargetName, heal, healTargetCurrentHp, healTargetMaxHp)
+        if (appliedHeal <= 0 && overheal <= 0) continue
 
-        recordTimelineBucket(currentHealTimeline.value, effectiveName, appliedHeal)
-        recordHealingReceived(healTargetName, healAbilityId, healAbilityName, appliedHeal, effectiveName)
-        recordHitEvent(healTargetName, 'heal', healAbilityName, effectiveName, appliedHeal, healTargetCurrentHp, healTargetMaxHp)
+        if (appliedHeal > 0) recordTimelineBucket(currentHealTimeline.value, effectiveName, appliedHeal)
+        recordHealingReceived(healTargetName, healAbilityId, healAbilityName, appliedHeal, effectiveName, overheal)
+        if (appliedHeal > 0) recordHitEvent(healTargetName, 'heal', healAbilityName, effectiveName, appliedHeal, healTargetCurrentHp, healTargetMaxHp)
         recordHpSample(healTargetName, healTargetCurrentHp, healTargetMaxHp)
         recordKnownHp(healTargetName, healTargetCurrentHp, healTargetMaxHp)
         didRecord = true
@@ -1335,11 +1395,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const abilityName = tickAbilityName('HoT', effectId, sourceId, sourceName, targetId)
         const heal = decodeTickAmount(damageHex, tgtMaxHp)
         if (heal === 0) return
-        const appliedHeal = appliedHealingAmount(targetName, sourceName, heal, tgtCurrentHp, tgtMaxHp)
+        const { effective: appliedHeal, overheal } = healingAmounts(targetName, heal, tgtCurrentHp, tgtMaxHp)
         if (appliedHeal > 0) recordTimelineBucket(currentHealTimeline.value, sourceName, appliedHeal)
         recordCastEvent(sourceName, `hot:${effectId}`, abilityName, targetName, 'tick')
         if (targetName) {
-          if (appliedHeal > 0) recordHealingReceived(targetName, `hot:${effectId}`, abilityName, appliedHeal, sourceName)
+          if (appliedHeal > 0 || overheal > 0) recordHealingReceived(targetName, `hot:${effectId}`, abilityName, appliedHeal, sourceName, overheal)
           if (appliedHeal > 0) recordHitEvent(targetName, 'heal', abilityName, sourceName, appliedHeal, tgtCurrentHp, tgtMaxHp)
           recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
           recordKnownHp(targetName, tgtCurrentHp, tgtMaxHp)
@@ -1470,6 +1530,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
     currentTimeline.value = {}
     currentHealTimeline.value = {}
     currentDtakenTimeline.value = {}
+    currentDamageByCombatant.value = {}
+    currentDpsByCombatant.value = {}
     currentDtakenData.value = {}
     currentHealingReceivedData.value = {}
     currentRdpsByCombatant.value = {}
