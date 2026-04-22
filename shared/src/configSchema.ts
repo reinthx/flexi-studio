@@ -521,6 +521,7 @@ export interface AbilityStats {
   critDirectMinHit?: number
   critDirectMaxHit?: number
   targets?: Record<string, { total: number; hits: number; overheal?: number }>
+  targetInstances?: Record<string, { name: string; id: string; total: number; hits: number; overheal?: number }>
   sources?: Record<string, { total: number; hits: number; overheal?: number }>
 }
 
@@ -571,6 +572,7 @@ export interface CastEvent {
   abilityId: string
   source: string
   target: string
+  targetId?: string
   type: 'instant' | 'cast' | 'tick'
   durationMs?: number
   endT?: number
@@ -615,6 +617,7 @@ export interface PullRecord {
   dtakenTimeline?: DpsTimeline // damage received per combatant over time
   damageTakenData?: Record<string, CombatantAbilityData>  // target name → per-ability received damage
   healingReceivedData?: Record<string, CombatantAbilityData> // target name → per-ability received healing
+  hitData?: Record<string, HitRecord[]> // target name → rolling damage/heal events
   rdpsGiven?: Record<string, number> // combatant name -> DPS credited from that actor's raid buffs
   rdpsTaken?: Record<string, number> // combatant name -> DPS removed from damage gained via others' buffs
   deaths?: DeathRecord[]

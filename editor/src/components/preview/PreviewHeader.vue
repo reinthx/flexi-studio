@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import type { HeaderConfig, GlobalConfig } from '@shared/configSchema'
 import type { Frame } from '@shared'
-import { renderTemplate } from '../../lib/templateRenderer'
+import { renderTemplate } from '@shared/templateRenderer'
 import HeaderBar from '@shared/HeaderBar.vue'
 
 const props = defineProps<{

@@ -5,6 +5,7 @@ import type { Profile } from '../configSchema'
 vi.mock('virtual:custom-fonts', () => ({
   default: {
     Orbitron: './assets/fonts/Orbitron.ttf',
+    'Orbitron Black': './assets/fonts/Orbitron Black.otf',
     OstrichSans: './assets/fonts/OstrichSans.ttf',
   },
 }))
@@ -164,11 +165,23 @@ describe('font loading', () => {
     expect(appended).toHaveLength(3)
     expect(appended[0].textContent).toContain("font-family: 'Orbitron'")
     expect(appended[0].textContent).toContain('./assets/fonts/Orbitron.ttf')
+    expect(appended[0].textContent).toContain("format('truetype')")
     expect(appended[1].textContent).toContain("font-family: 'Runtime Font'")
     expect(appended[1].textContent).toContain('Runtime%20Font.woff2')
     expect(appended[1].textContent).toContain('Runtime%20Font.ttf')
     expect(appended[2].textContent).toContain("font-family: 'Missing Font'")
     expect(appended[2].textContent).toContain('Missing%20Font.woff2')
+  })
+
+  it('uses the correct font-face format for built-in otf fonts', async () => {
+    const { appended, loadCustomFont } = await loadGoogleFonts()
+
+    loadCustomFont('Orbitron Black')
+
+    expect(appended).toHaveLength(1)
+    expect(appended[0].textContent).toContain("font-family: 'Orbitron Black'")
+    expect(appended[0].textContent).toContain('./assets/fonts/Orbitron Black.otf')
+    expect(appended[0].textContent).toContain("format('opentype')")
   })
 
   it('loads supported font files from a directory handle and skips unsupported/read-failing files', async () => {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { formatValue } from '@shared/formatValue'
-import type { CombatantAbilityData, DpsTimeline, DeathRecord, DeathEvent, CastEvent, ResourceSample } from '@shared/configSchema'
+import type { CombatantAbilityData, DpsTimeline, DeathRecord, DeathEvent, CastEvent, ResourceSample, HitRecord } from '@shared/configSchema'
 import { TIMELINE_BUCKET_SEC } from '@shared/configSchema'
 import { RAID_BUFFS } from '@shared/raidBuffs'
 import { getJobIconSrc, normalizeJob } from '@shared/jobMap'
@@ -11,6 +11,7 @@ import AbilityCell from './AbilityBreakdown/AbilityCell.vue'
 import type { BreakdownView, CastFilter, CombatantGroup, EventFilter, PartyMemberData, PullEntry, ResourceTrackKey, TimelineOverlay } from './AbilityBreakdown/types'
 import { deathEventsFor, deathHpBars as buildDeathHpBars, formatHpBefore as formatDeathHpBefore, sortPlayerDeaths } from './AbilityBreakdown/deathTransforms'
 import { useEventRows } from './AbilityBreakdown/eventRows'
+import { entryPullLabel, fmtSeconds, fmtTime, formatEntryDelta, formatPartyLabel, hitRange as formatHitRange, overhealPct, parseEntryDuration, pctOf, pullOutcomeClass, rawHealingAverage } from './AbilityBreakdown/formatters'
 import { useBreakdownViewState } from './AbilityBreakdown/viewState'
 
 // ── State from main window ────────────────────────────────────────────────────
@@ -33,6 +34,7 @@ const encounterDurationSec = ref(0)
 const hiddenSeries        = ref<Set<string>>(new Set())
 const damageTakenData     = ref<Record<string, CombatantAbilityData>>({})
 const healingReceivedData = ref<Record<string, CombatantAbilityData>>({})
+const hitData             = ref<Record<string, HitRecord[]>>({})
 const deaths              = ref<DeathRecord[]>([])
 const combatantIds        = ref<Record<string, string>>({})
 const combatantJobs       = ref<Record<string, string>>({})
@@ -55,6 +57,7 @@ type BreakdownPayload = {
   rdpsTaken?: Record<string, number>
   damageTakenData?: Record<string, CombatantAbilityData>
   healingReceivedData?: Record<string, CombatantAbilityData>
+  hitData?: Record<string, HitRecord[]>
   deaths?: DeathRecord[]
   combatantIds?: Record<string, string>
   combatantJobs?: Record<string, string>
@@ -111,6 +114,7 @@ const castHoverData = ref<{ time: number; ability: string; target: string; x: nu
 const abilityIconSrcs = ref<Record<string, string>>({})
 const abilityCooldownMs = ref<Record<string, number>>({})
 const abilityIconRequested = new Set<string>()
+const collapsedCastGroups = ref<Set<CastFilter>>(new Set())
 
 const partyData = ref<PartyMemberData[]>([])
 
@@ -145,26 +149,6 @@ const buffWarnings = computed(() => {
   }
   return warnings
 })
-
-// Helper to format partyType with space (AllianceA -> "Alliance A")
-function formatPartyLabel(pt: string | undefined, isSelf: boolean, partyIdx?: number, totalPartySize?: number): string {
-  // If ACT says Solo/Party but we have >8 members (alliance), use position-based
-  // Only if player IS in partyData (partyIdx !== undefined) - else use ACT's partyType as-is
-  if (totalPartySize !== undefined && totalPartySize > 8 && partyIdx !== undefined && (!pt || pt === 'Solo' || pt === 'Party')) {
-    const allianceParty = Math.floor(partyIdx / 8)
-    const label = ['Alliance A', 'Alliance B', 'Alliance C'][allianceParty] ?? 'Party'
-    return isSelf ? `${label} (YOU)` : label
-  }
-  // If solo-queued in 8-man (total 8), treat 'Solo' as 'Party' to keep everyone together
-  if (totalPartySize !== undefined && totalPartySize <= 8) {
-    if (!pt || pt === 'Solo') return 'Party'
-    return pt.replace(/^Alliance/, 'Alliance ')
-  }
-  // For alliance >8 without partyType, fallback
-  if (!pt) return 'Party'
-  const label = pt.replace(/^Alliance/, 'Alliance ')
-  return label
-}
 
 // Toggle to show friendly NPCs (Non-player companions, minions that deal damage, etc.)
 const showFriendlyNPCs = ref(false)
@@ -335,6 +319,16 @@ const abilities = computed(() => {
 
 type AbilityRow = (typeof abilities.value)[number]
 
+type DoneTargetAbilityRow = {
+  abilityId: string
+  abilityName: string
+  casts: number
+  damage: number
+  healing: number
+  overheal: number
+  hits: number
+}
+
 const doneTargetRows = computed(() => {
   const counts = new Map<string, {
     target: string
@@ -344,7 +338,7 @@ const doneTargetRows = computed(() => {
     healing: number
     overheal: number
     healingHits: number
-    abilities: Set<string>
+    abilities: Map<string, DoneTargetAbilityRow>
   }>()
   const ensure = (target: string) => {
     const key = target || 'Unknown'
@@ -356,23 +350,43 @@ const doneTargetRows = computed(() => {
       healing: 0,
       overheal: 0,
       healingHits: 0,
-      abilities: new Set<string>(),
+      abilities: new Map<string, DoneTargetAbilityRow>(),
     }
     counts.set(key, row)
     return row
+  }
+  const ensureAbility = (row: { abilities: Map<string, DoneTargetAbilityRow> }, abilityId: string, abilityName: string) => {
+    const key = abilityId || abilityName || 'unknown'
+    const ability = row.abilities.get(key) ?? {
+      abilityId,
+      abilityName: abilityName || 'Unknown',
+      casts: 0,
+      damage: 0,
+      healing: 0,
+      overheal: 0,
+      hits: 0,
+    }
+    if (!ability.abilityId && abilityId) ability.abilityId = abilityId
+    if (ability.abilityName === 'Unknown' && abilityName) ability.abilityName = abilityName
+    row.abilities.set(key, ability)
+    return ability
   }
 
   for (const event of selectedActorCastEvents.value) {
     const row = ensure(event.target || 'Unknown')
     row.casts += 1
-    if (event.abilityName) row.abilities.add(event.abilityName)
+    if (event.abilityName) {
+      ensureAbility(row, event.abilityId, event.abilityName).casts += 1
+    }
   }
   for (const ability of Object.values(rawData.value)) {
     for (const [target, stats] of Object.entries(ability.targets ?? {})) {
       const row = ensure(target)
       row.damage += stats.total
       row.damageHits += stats.hits
-      row.abilities.add(ability.abilityName)
+      const abilityRow = ensureAbility(row, ability.abilityId, ability.abilityName)
+      abilityRow.damage += stats.total
+      abilityRow.hits += stats.hits
     }
   }
   for (const [target, abilities] of Object.entries(healingReceivedData.value)) {
@@ -383,22 +397,33 @@ const doneTargetRows = computed(() => {
       row.healing += sourceStats.total
       row.overheal += sourceStats.overheal ?? 0
       row.healingHits += sourceStats.hits
-      row.abilities.add(ability.abilityName)
+      const abilityRow = ensureAbility(row, ability.abilityId, ability.abilityName)
+      abilityRow.healing += sourceStats.total
+      abilityRow.overheal += sourceStats.overheal ?? 0
+      abilityRow.hits += sourceStats.hits
     }
   }
   const total = Array.from(counts.values()).reduce((sum, row) => sum + row.damage + row.healing + row.overheal + row.casts, 0)
   return Array.from(counts.values())
-    .map(row => ({
-      target: row.target,
-      casts: row.casts,
-      damage: row.damage,
-      damageHits: row.damageHits,
-      healing: row.healing,
-      overheal: row.overheal,
-      healingHits: row.healingHits,
-      abilityCount: row.abilities.size,
-      pct: total > 0 ? (((row.damage + row.healing + row.overheal + row.casts) / total) * 100).toFixed(1) : '0.0',
-    }))
+    .map(row => {
+      const abilityRows = Array.from(row.abilities.values())
+        .sort((a, b) =>
+          (b.damage + b.healing + b.overheal + b.casts) - (a.damage + a.healing + a.overheal + a.casts) ||
+          a.abilityName.localeCompare(b.abilityName),
+        )
+      return {
+        target: row.target,
+        casts: row.casts,
+        damage: row.damage,
+        damageHits: row.damageHits,
+        healing: row.healing,
+        overheal: row.overheal,
+        healingHits: row.healingHits,
+        abilityCount: abilityRows.length,
+        abilities: abilityRows,
+        pct: total > 0 ? (((row.damage + row.healing + row.overheal + row.casts) / total) * 100).toFixed(1) : '0.0',
+      }
+    })
     .sort((a, b) => (b.damage + b.healing + b.overheal + b.casts) - (a.damage + a.healing + a.overheal + a.casts) || a.target.localeCompare(b.target))
 })
 
@@ -427,14 +452,8 @@ const doneSourceRows = computed(() => {
     .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
 })
 
-function pctOf(count: number | undefined, total: number | undefined): string {
-  if (!count || !total) return '-'
-  return `${((count / total) * 100).toFixed(1)}%`
-}
-
 function hitRange(minHit: number | undefined, maxHit: number | undefined): string {
-  if (!minHit || minHit === Infinity || !maxHit) return '-'
-  return `${f(minHit)} - ${f(maxHit)}`
+  return formatHitRange(minHit, maxHit, f)
 }
 
 function critPct(row: AbilityRow): string {
@@ -447,15 +466,6 @@ function directPct(row: AbilityRow): string {
 
 function critDirectPct(row: AbilityRow): string {
   return pctOf(row.critDirectHits, row.hits)
-}
-
-function rawHealingAverage(row: { totalDamage: number; overheal?: number; hits: number }): number {
-  return row.hits > 0 ? Math.round((row.totalDamage + (row.overheal ?? 0)) / row.hits) : 0
-}
-
-function overhealPct(row: { totalDamage: number; overheal?: number }): string {
-  const raw = row.totalDamage + (row.overheal ?? 0)
-  return raw > 0 ? (((row.overheal ?? 0) / raw) * 100).toFixed(1) : '0.0'
 }
 
 // ── Damage Taken (Summary "Taken" mode) ──────────────────────────────────────
@@ -746,8 +756,9 @@ const sortedDeaths = computed(() => sortPlayerDeaths(deaths.value))
 // ── Casts tab ─────────────────────────────────────────────────────────────────
 const castSelectedPlayer = ref('')
 const castSelectedAbility = ref<string | null>(null)
+const castSelectedEventKey = ref<string | null>(null)
 
-watch(activePull, () => { castSelectedPlayer.value = ''; castSelectedAbility.value = null })
+watch(activePull, () => { castSelectedPlayer.value = ''; castSelectedAbility.value = null; castSelectedEventKey.value = null })
 watch(resolvedSelected, (name) => {
   if (!name) return
   castSelectedPlayer.value = name
@@ -841,14 +852,97 @@ const castPlayerData = computed(() => {
   }
 
   const abilities = Array.from(abilityMap.entries()).map(([name, evts]) => {
-    const targetCounts = new Map<string, number>()
-    for (const ev of evts) {
-      if (ev.target) {
-        targetCounts.set(ev.target, (targetCounts.get(ev.target) ?? 0) + 1)
+    const targetRows = new Map<string, {
+      name: string
+      id: string
+      label: string
+      casts: number
+      hits: number
+      damage: number
+      healing: number
+      overheal: number
+    }>()
+    const ensureTarget = (target: string, targetId = '') => {
+      const name = target || 'Unknown'
+      const key = targetId ? `${name}|${targetId}` : name
+      const row = targetRows.get(key) ?? {
+        name,
+        id: targetId,
+        label: name,
+        casts: 0,
+        hits: 0,
+        damage: 0,
+        healing: 0,
+        overheal: 0,
+      }
+      targetRows.set(key, row)
+      return row
+    }
+    const idBackedTargetForName = (target: string) =>
+      Array.from(targetRows.values()).find(row => row.id && row.name === target)
+
+    const ensureBestKnownTarget = (target: string) => idBackedTargetForName(target) ?? ensureTarget(target)
+
+    const addCasts = () => {
+      for (const ev of evts) {
+        if (!ev.target) continue
+        const row = targetRows.size > 0
+          ? idBackedTargetForName(ev.target) ?? (ev.targetId ? targetRows.get(`${ev.target}|${ev.targetId}`) : undefined) ?? ensureTarget(ev.target)
+          : ensureTarget(ev.target, ev.targetId ?? '')
+        row.casts += 1
       }
     }
-    const topTargets = Array.from(targetCounts.entries())
-      .sort((a, b) => b[1] - a[1])
+
+    for (const ability of Object.values(rawData.value)) {
+      if (ability.abilityName !== name) continue
+      if (ability.targetInstances) {
+        for (const instance of Object.values(ability.targetInstances)) {
+          const row = ensureTarget(instance.name, instance.id)
+          row.hits += instance.hits
+          row.damage += instance.total
+        }
+        continue
+      }
+      for (const [target, stats] of Object.entries(ability.targets ?? {})) {
+        const row = ensureBestKnownTarget(target)
+        row.hits += stats.hits
+        row.damage += stats.total
+      }
+    }
+
+    for (const [target, abilities] of Object.entries(healingReceivedData.value)) {
+      for (const ability of Object.values(abilities)) {
+        if (ability.abilityName !== name) continue
+        const sourceStats = ability.sources?.[castSelectedPlayer.value]
+        if (!sourceStats) continue
+        const row = ensureBestKnownTarget(target)
+        row.hits += sourceStats.hits
+        row.healing += sourceStats.total
+        row.overheal += sourceStats.overheal ?? 0
+      }
+    }
+
+    addCasts()
+
+    const targets = Array.from(targetRows.values())
+      .sort((a, b) =>
+        (b.damage + b.healing + b.overheal + b.hits + b.casts) - (a.damage + a.healing + a.overheal + a.hits + a.casts) ||
+        a.name.localeCompare(b.name),
+      )
+    const seenTargetNames = new Map<string, number>()
+    const duplicateTargetNames = new Set(
+      targets
+        .map(target => target.name)
+        .filter((target, index, names) => names.indexOf(target) !== index),
+    )
+    for (const target of targets) {
+      if (!duplicateTargetNames.has(target.name)) continue
+      const nextIndex = (seenTargetNames.get(target.name) ?? 0) + 1
+      seenTargetNames.set(target.name, nextIndex)
+      target.label = `${target.name} #${nextIndex}`
+    }
+    const topTargets = targets
+      .map(target => [target.label, target.casts || target.hits] as [string, number])
       .slice(0, 3)
 
     const intervals: number[] = []
@@ -865,6 +959,7 @@ const castPlayerData = computed(() => {
       casts: evts.length,
       avgInterval: avgInterval.toFixed(1),
       topTargets,
+      targets,
       events: evts,
     }
   }).sort((a, b) => b.casts - a.casts)
@@ -874,6 +969,91 @@ const castPlayerData = computed(() => {
   return { abilities, maxDuration, events }
 })
 
+function castMitigationWindow(event: CastEvent): { start: number; end: number } {
+  const durationMs = event.buffDurationMs ?? Math.max(event.durationMs ?? 0, 15_000)
+  return { start: event.t, end: event.t + durationMs }
+}
+
+function castEventKey(event: CastEvent): string {
+  return `${event.source}|${event.abilityId}|${event.abilityName}|${event.target}|${event.targetId ?? ''}|${event.t}`
+}
+
+function mitigationReductionPercent(abilityName: string): number {
+  const name = abilityName.toLowerCase().replace(/[’']/g, "'")
+  const reductions: Array<[RegExp, number]> = [
+    [/reprisal/, 0.10],
+    [/feint/, 0.10],
+    [/addle/, 0.10],
+    [/rampart/, 0.20],
+    [/sentinel/, 0.30],
+    [/guardian/, 0.40],
+    [/vengeance/, 0.30],
+    [/damnation/, 0.40],
+    [/bloodwhetting/, 0.10],
+    [/raw intuition/, 0.10],
+    [/nascent flash/, 0.10],
+    [/shadow wall/, 0.30],
+    [/dark mind/, 0.20],
+    [/dark missionary/, 0.10],
+    [/oblation/, 0.10],
+    [/nebula/, 0.30],
+    [/great nebula/, 0.40],
+    [/camouflage/, 0.10],
+    [/heart of stone/, 0.15],
+    [/heart of corundum/, 0.15],
+    [/heart of light/, 0.10],
+    [/aquaveil/, 0.15],
+    [/temperance/, 0.10],
+    [/sacred soil/, 0.10],
+    [/expedient/, 0.10],
+    [/exaltation/, 0.10],
+    [/collective unconscious/, 0.10],
+    [/troubadour/, 0.10],
+    [/tactician/, 0.10],
+    [/shield samba/, 0.10],
+    [/dismantle/, 0.10],
+    [/magick barrier/, 0.10],
+  ]
+  return reductions.find(([pattern]) => pattern.test(name))?.[1] ?? 0
+}
+
+function selectCastAbilityRow(name: string): void {
+  castSelectedAbility.value = name
+  castSelectedEventKey.value = null
+  selectAbility(name)
+}
+
+function selectCastEvent(name: string, event: CastEvent): void {
+  castSelectedAbility.value = name
+  castSelectedEventKey.value = castEventKey(event)
+  selectAbility(name)
+}
+
+function mitigationCouldAffectSelectedPlayer(event: CastEvent): boolean {
+  const player = castSelectedPlayer.value
+  if (!player) return false
+  if (event.source === player || event.target === player) return true
+  if (!event.target) return true
+
+  const targetHasJob = Boolean(combatantJobs.value[event.target])
+  const targetIsParty = partyNames.value.includes(event.target) || targetHasJob
+  if (targetIsParty) return false
+
+  const targetId = event.targetId || combatantIds.value[event.target] || ''
+  return targetId.startsWith('4') || !targetHasJob
+}
+
+const selectedCastEvents = computed(() => {
+  const castAbility = selectedCastAbility.value
+  if (!castAbility) return []
+  const selectedEvent = castSelectedEventKey.value
+    ? castAbility.events.find(event => castEventKey(event) === castSelectedEventKey.value)
+    : null
+  return selectedEvent ? [selectedEvent] : castAbility.events
+})
+
+const selectedCastEvent = computed(() => selectedCastEvents.value.length === 1 ? selectedCastEvents.value[0] : null)
+
 const castMitigationEffectiveness = computed(() => {
   if (!castSelectedPlayer.value) return null
   const castAbility = selectedCastAbility?.value
@@ -881,13 +1061,73 @@ const castMitigationEffectiveness = computed(() => {
   const abilityName = castAbility.name
   const isMitigation = MITIGATION_PATTERNS.some(pattern => pattern.test(abilityName.toLowerCase()))
   if (!isMitigation) return null
-  const takenData = damageTakenData.value[castSelectedPlayer.value] ?? {}
-  let maxHit = 0
-  for (const ability of Object.values(takenData)) {
-    if (ability.maxHit && ability.maxHit > maxHit) maxHit = ability.maxHit
+
+  const reductionPct = mitigationReductionPercent(abilityName)
+  const canEstimate = reductionPct > 0 && reductionPct < 1
+  const events = selectedCastEvents.value
+  const windows = events
+    .map(castMitigationWindow)
+    .filter(window => window.end > window.start)
+  const incomingHits = (hitData.value[castSelectedPlayer.value] ?? [])
+    .filter(hit => hit.type === 'dmg' && hit.amount > 0)
+  const activeHits = incomingHits.filter(hit =>
+    windows.some(window => hit.t >= window.start && hit.t <= window.end),
+  )
+  const selectedEventKeys = new Set(events.map(castEventKey))
+  const otherMitigationWindows = Object.values(castData.value)
+    .flatMap(events => events)
+    .filter(event => {
+      if (!MITIGATION_PATTERNS.some(pattern => pattern.test(event.abilityName.toLowerCase()))) return false
+      if (!mitigationCouldAffectSelectedPlayer(event)) return false
+      return !selectedEventKeys.has(castEventKey(event))
+    })
+    .map(event => ({ event, window: castMitigationWindow(event) }))
+    .filter(({ window }) => window.end > window.start)
+  const stackedHits = activeHits.filter(hit =>
+    otherMitigationWindows.some(({ window }) => hit.t >= window.start && hit.t <= window.end),
+  )
+  const soloHits = activeHits.filter(hit => !stackedHits.includes(hit))
+  const stackedWith = otherMitigationWindows
+    .map(({ event, window }) => {
+      const overlaps = windows
+        .map(selectedWindow => ({
+          start: Math.max(selectedWindow.start, window.start),
+          end: Math.min(selectedWindow.end, window.end),
+        }))
+        .filter(overlap => overlap.end > overlap.start)
+      const overlapMs = overlaps.reduce((sum, overlap) => sum + overlap.end - overlap.start, 0)
+      return {
+        key: castEventKey(event),
+        name: event.abilityName,
+        source: event.source,
+        target: event.target,
+        time: fmtTime(event.t),
+        overlap: `${(overlapMs / 1000).toFixed(overlapMs >= 10_000 ? 0 : 1)}s`,
+        expected: mitigationReductionPercent(event.abilityName) > 0
+          ? `${(mitigationReductionPercent(event.abilityName) * 100).toFixed(0)}%`
+          : '—',
+        overlapMs,
+      }
+    })
+    .filter(row => row.overlapMs > 0)
+    .sort((a, b) => b.overlapMs - a.overlapMs || a.name.localeCompare(b.name))
+  const estimatedReduced = canEstimate
+    ? activeHits.reduce((sum, hit) => sum + (hit.amount / (1 - reductionPct) - hit.amount), 0)
+    : 0
+  const estimatedWithoutThisMit = activeHits.reduce((sum, hit) =>
+    sum + (canEstimate ? hit.amount / (1 - reductionPct) : hit.amount),
+  0)
+
+  return {
+    expected: canEstimate ? `${(reductionPct * 100).toFixed(0)}%` : '—',
+    hits: `${activeHits.length}`,
+    stackedHits: `${stackedHits.length}`,
+    soloHits: `${soloHits.length}`,
+    mitigated: estimatedReduced > 0 ? f(Math.round(estimatedReduced)) : '—',
+    withoutThisMit: estimatedWithoutThisMit > 0 ? f(Math.round(estimatedWithoutThisMit)) : '—',
+    scope: selectedCastEvent.value ? 'Selected Cast' : 'All Casts',
+    stackedWith,
   }
-  if (maxHit === 0) return null
-  return { before: f(maxHit), after: '—', reduced: '—' }
 })
 
 const castTimelineDuration = computed(() => {
@@ -957,6 +1197,26 @@ function castCategory(event: CastEvent): CastFilter {
   return 'dps'
 }
 
+const castFilterLabels: Record<CastFilter, string> = {
+  cooldowns: 'Cooldowns',
+  mitigations: 'Mitigations',
+  dps: 'Abilities',
+  heals: 'Heals',
+}
+
+const castFilterOrder: CastFilter[] = ['cooldowns', 'mitigations', 'dps', 'heals']
+
+function castFilterLabel(filter: CastFilter): string {
+  return castFilterLabels[filter]
+}
+
+function toggleCastGroupCollapsed(category: CastFilter): void {
+  const next = new Set(collapsedCastGroups.value)
+  if (next.has(category)) next.delete(category)
+  else next.add(category)
+  collapsedCastGroups.value = next
+}
+
 const castTimelineRows = computed(() => {
   if (!castPlayerData.value) return []
   return castPlayerData.value.abilities
@@ -978,16 +1238,11 @@ const castTimelineRows = computed(() => {
 })
 
 const castTimelineGroups = computed(() => {
-  const labels: Record<CastFilter, string> = {
-    cooldowns: 'Cooldowns',
-    mitigations: 'Mitigations',
-    dps: 'DPS / GCD',
-    heals: 'Heals',
-  }
-  return (['cooldowns', 'mitigations', 'dps', 'heals'] as CastFilter[])
+  return castFilterOrder
     .map(category => ({
       category,
-      label: labels[category],
+      label: castFilterLabels[category],
+      collapsed: collapsedCastGroups.value.has(category),
       rows: castTimelineRows.value.filter(row => row.category === category),
     }))
     .filter(group => group.rows.length > 0)
@@ -1066,6 +1321,10 @@ function castEventWidth(event: CastEvent): string {
     const pct = (event.buffDurationMs / 1000) / castTimelineDuration.value * 100
     return `max(22px, ${Math.max(0, pct)}%)`
   }
+  return '22px'
+}
+
+function castMarkerWidth(_: CastEvent): string {
   return '22px'
 }
 
@@ -1240,7 +1499,8 @@ const selectedTakenAbility = computed(() =>
 )
 
 const selectedCastAbility = computed(() =>
-  castPlayerData.value?.abilities.find(ability => ability.name === selectedAbility.value || ability.name === castSelectedAbility.value)
+  castPlayerData.value?.abilities.find(ability => ability.name === castSelectedAbility.value)
+    ?? castPlayerData.value?.abilities.find(ability => ability.name === selectedAbility.value)
     ?? castPlayerData.value?.abilities[0]
     ?? null
 )
@@ -1284,20 +1544,6 @@ const overviewNotableEvents = computed(() => {
 
 function hitRowStyle(_: DeathEvent): string {
   return ''
-}
-
-function fmtTime(ms: number): string {
-  if (!ms || ms < 0) return '0:00'
-  const s = Math.floor(ms / 1000)
-  const m = Math.floor(s / 60)
-  return `${m}:${String(s % 60).padStart(2, '0')}`
-}
-
-function fmtSeconds(seconds: number): string {
-  if (!seconds || seconds < 0) return '0:00'
-  const s = Math.floor(seconds)
-  const m = Math.floor(s / 60)
-  return `${m}:${String(s % 60).padStart(2, '0')}`
 }
 
 const formatHpBefore = (event: DeathEvent) => formatDeathHpBefore(event, f)
@@ -1718,30 +1964,6 @@ const tooltipStyle = computed(() => {
 
 const f = (n: number) => formatValue(n, 'abbreviated')
 
-function entryPullLabel(entry: PullEntry): string {
-  if (entry.index === null) return 'Live'
-  return `Pull ${entry.pullNumber ?? 1}`
-}
-
-function parseEntryDuration(entry: PullEntry | null): number {
-  if (!entry?.duration) return 0
-  const parts = entry.duration.split(':').map(part => parseInt(part, 10))
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + (parts[2] || 0)
-  if (parts.length === 2) return parts[0] * 60 + (parts[1] || 0)
-  return parseInt(entry.duration, 10) || 0
-}
-
-function formatEntryDelta(value: number, formatter: (n: number) => string): string {
-  if (!value) return 'same'
-  return `${value > 0 ? '+' : '-'}${formatter(Math.abs(value))}`
-}
-
-function pullOutcomeClass(entry: PullEntry | null | undefined): string {
-  if (entry?.pullOutcome === 'clear') return 'success'
-  if (entry?.pullOutcome === 'wipe') return 'danger'
-  return ''
-}
-
 const historicalPullEntries = computed(() =>
   pullList.value.filter(entry => entry.index !== null)
 )
@@ -1755,6 +1977,24 @@ const selectedEncounterPullEntries = computed(() => {
 const selectedPullEntry = computed(() =>
   pullList.value.find(entry => entry.index === activePull.value) ?? pullList.value[0] ?? null
 )
+
+function pullEnemyHpDetail(entry: PullEntry | null | undefined): string {
+  if (!entry) return 'needs enemy HP samples'
+  if (entry.pullOutcome === 'clear') {
+    return entry.primaryEnemyMaxHp ? `Max HP ${f(entry.primaryEnemyMaxHp)}` : 'enemy defeated'
+  }
+  if (entry.pullOutcome === 'wipe') {
+    return entry.primaryEnemyCurrentHp !== undefined
+      ? `HP Remaining ${f(entry.primaryEnemyCurrentHp)}`
+      : 'needs enemy HP samples'
+  }
+  if (entry.pullOutcome === 'live') {
+    return entry.primaryEnemyCurrentHp !== undefined
+      ? `Current HP ${f(entry.primaryEnemyCurrentHp)}`
+      : 'needs enemy HP samples'
+  }
+  return 'needs enemy HP samples'
+}
 
 const previousPullEntry = computed(() => {
   const current = selectedPullEntry.value
@@ -1884,6 +2124,7 @@ function clearBreakdownData() {
   rdpsTaken.value = {}
   damageTakenData.value = {}
   healingReceivedData.value = {}
+  hitData.value = {}
   deaths.value = []
   combatantIds.value = {}
   combatantJobs.value = {}
@@ -1954,6 +2195,7 @@ function applyEncounterPayload(data: BreakdownPayload): boolean {
   rdpsTaken.value            = data.rdpsTaken        ?? {}
   damageTakenData.value      = data.damageTakenData  ?? {}
   healingReceivedData.value  = data.healingReceivedData ?? {}
+  hitData.value              = data.hitData          ?? {}
   deaths.value               = data.deaths           ?? []
   combatantIds.value         = data.combatantIds     ?? {}
   combatantJobs.value        = data.combatantJobs    ?? {}
@@ -2121,7 +2363,7 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div v-if="combatants.length === 0" class="bp-waiting">Waiting for combat data…</div>
+    <div v-if="combatants.length === 0 && activeView !== 'pulls'" class="bp-waiting">Waiting for combat data…</div>
     <template v-else-if="activeView === 'overview'">
       <div class="bp-workspace">
         <ActorRail
@@ -2280,6 +2522,8 @@ onUnmounted(() => {
               <span>{{ entry.duration || '0:00' }}</span>
               <span v-if="entry.pullOutcomeLabel" :class="pullOutcomeClass(entry)">{{ entry.pullOutcomeLabel }}</span>
               <span v-if="entry.bossPercentLabel">{{ entry.bossPercentLabel }} enemy</span>
+              <span v-if="entry.pullOutcome === 'wipe' && entry.primaryEnemyCurrentHp !== undefined">HP {{ f(entry.primaryEnemyCurrentHp) }}</span>
+              <span v-else-if="entry.pullOutcome === 'clear' && entry.primaryEnemyMaxHp">Max {{ f(entry.primaryEnemyMaxHp) }}</span>
               <span>{{ f(entry.dps ?? 0) }} DPS</span>
               <span title="Raid-contributing DPS adjusted by buff credit">{{ f(entry.rdps ?? entry.dps ?? 0) }} rDPS</span>
               <span :class="{ danger: (entry.deaths ?? 0) > 0 }">{{ entry.deaths ?? 0 }} deaths</span>
@@ -2305,15 +2549,14 @@ onUnmounted(() => {
               <div class="bp-card-detail">
                 <template v-if="selectedPullEntry?.pullOutcomeLabel">
                   <span :class="pullOutcomeClass(selectedPullEntry)">{{ selectedPullEntry.pullOutcomeLabel }}</span>
-                  <span v-if="selectedPullEntry?.primaryEnemyMaxHp"> · Max HP {{ f(selectedPullEntry.primaryEnemyMaxHp) }}</span>
+                  <span> · {{ pullEnemyHpDetail(selectedPullEntry) }}</span>
                 </template>
                 <template v-else-if="bestProgressPullEntry && selectedPullEntry?.bossPercent !== undefined">
                   {{ selectedPullEntry.index === bestProgressPullEntry.index ? 'best progress' : `${((selectedPullEntry.bossPercent ?? 0) - (bestProgressPullEntry.bossPercent ?? 0)).toFixed(1)} pts from best` }}
-                  <span v-if="selectedPullEntry?.primaryEnemyMaxHp"> · Max HP {{ f(selectedPullEntry.primaryEnemyMaxHp) }}</span>
+                  <span> · {{ pullEnemyHpDetail(selectedPullEntry) }}</span>
                 </template>
                 <template v-else>
-                  <span v-if="selectedPullEntry?.primaryEnemyMaxHp">Max HP {{ f(selectedPullEntry.primaryEnemyMaxHp) }}</span>
-                  <span v-else>needs enemy HP samples</span>
+                  <span>{{ pullEnemyHpDetail(selectedPullEntry) }}</span>
                 </template>
               </div>
             </div>
@@ -2439,8 +2682,8 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-if="doneDimension === 'targets' && doneTargetRows.length === 0" class="bp-waiting">No target rows for this pull yet.</div>
-          <div v-else-if="doneDimension === 'targets'" class="bp-scroll">
-            <table class="bp-table">
+          <div v-else-if="doneDimension === 'targets'" class="bp-scroll bp-scroll--targets">
+            <table class="bp-table bp-table--targets">
               <thead><tr>
                 <th class="col-name">Target</th>
                 <th class="col-num">Uses</th>
@@ -2448,7 +2691,7 @@ onUnmounted(() => {
                 <th class="col-num">Effective Heal</th>
                 <th class="col-num">Overheal</th>
                 <th class="col-pct">%</th>
-                <th class="col-num">Abilities</th>
+                <th class="col-name col-abilities">Abilities</th>
               </tr></thead>
               <tbody>
                 <tr v-for="row in doneTargetRows" :key="`done-target-${row.target}`">
@@ -2458,7 +2701,29 @@ onUnmounted(() => {
                   <td class="col-num">{{ row.healing > 0 ? f(row.healing) : '—' }}</td>
                   <td class="col-num">{{ row.overheal > 0 ? f(row.overheal) : '—' }}</td>
                   <td class="col-pct">{{ row.pct }}%</td>
-                  <td class="col-num">{{ row.abilityCount }}</td>
+                  <td class="col-name col-abilities">
+                    <div class="target-ability-stack">
+                      <div
+                        v-for="ability in row.abilities"
+                        :key="`done-target-${row.target}-${ability.abilityId || ability.abilityName}`"
+                        class="target-ability-row"
+                      >
+                        <AbilityCell
+                          :ability-id="ability.abilityId"
+                          :ability-name="ability.abilityName"
+                          :icon-src="abilityIconSrc(ability.abilityId, ability.abilityName)"
+                          small
+                          @icon-error="clearAbilityIcon(ability.abilityId, ability.abilityName)"
+                        />
+                        <span class="target-ability-meta">
+                          <span v-if="ability.casts > 0">{{ ability.casts }} use{{ ability.casts === 1 ? '' : 's' }}</span>
+                          <span v-if="ability.damage > 0">{{ f(ability.damage) }} dmg</span>
+                          <span v-if="ability.healing > 0">{{ f(ability.healing) }} heal</span>
+                          <span v-if="ability.overheal > 0">{{ f(ability.overheal) }} over</span>
+                        </span>
+                      </div>
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -2977,13 +3242,13 @@ onUnmounted(() => {
               <span>{{ castPlayerData.abilities.length }} abilities · {{ castPlayerData.events.length }} total casts</span>
               <div class="bp-toolbar-group">
                 <button
-                  v-for="filter in ['cooldowns', 'mitigations', 'dps', 'heals']"
+                  v-for="filter in castFilterOrder"
                   :key="filter"
                   class="bp-mode-btn"
                   :class="{ active: castFilters.has(filter as CastFilter) }"
                   @click="toggleCastFilter(filter as CastFilter)"
                 >
-                  {{ filter }}
+                  {{ castFilterLabel(filter as CastFilter) }}
                 </button>
               </div>
             </div>
@@ -3034,13 +3299,23 @@ onUnmounted(() => {
                   </template>
 
                   <template v-for="group in castTimelineGroups" :key="group.category">
-                    <div class="cast-analysis-section">{{ group.label }}</div>
+                    <button
+                      class="cast-analysis-section cast-analysis-section-toggle"
+                      :class="{ collapsed: group.collapsed }"
+                      @click="toggleCastGroupCollapsed(group.category)"
+                      :aria-expanded="!group.collapsed"
+                    >
+                      <span class="cast-section-caret">{{ group.collapsed ? '+' : '-' }}</span>
+                      <span>{{ group.label }}</span>
+                      <small>{{ group.rows.length }}</small>
+                    </button>
                     <div class="cast-analysis-section cast-analysis-section--timeline"></div>
+                    <template v-if="!group.collapsed">
                     <template v-for="row in group.rows" :key="row.name">
                       <div
                         class="cast-analysis-label"
                         :class="{ active: castSelectedAbility === row.name || selectedAbility === row.name }"
-                        @click="castSelectedAbility = row.name; selectAbility(row.name)"
+                        @click="selectCastAbilityRow(row.name)"
                       >
                         <span class="cast-ability-icon">
                           <img v-if="abilityIconSrc(row.events[0]?.abilityId ?? '', row.name)" :src="abilityIconSrc(row.events[0]?.abilityId ?? '', row.name)" :alt="row.name" @error="clearAbilityIcon(row.events[0]?.abilityId ?? '', row.name)" />
@@ -3052,7 +3327,7 @@ onUnmounted(() => {
                       <div
                         class="cast-analysis-grid cast-analysis-grid--row"
                         :class="{ active: castSelectedAbility === row.name || selectedAbility === row.name }"
-                        @click="castSelectedAbility = row.name; selectAbility(row.name)"
+                        @click="selectCastAbilityRow(row.name)"
                       >
                       <div
                         v-for="tick in castTimeTicks"
@@ -3080,10 +3355,10 @@ onUnmounted(() => {
                         v-for="event in row.events"
                         :key="`row-event-${event.t}-${event.abilityName}-${event.target}`"
                         class="cast-analysis-event"
-                        :class="[`cast-analysis-event--${row.category}`, event.buffDurationMs ? 'cast-analysis-event--buff-window' : '']"
-                        :style="{ left: castEventLeft(event), width: castEventWidth(event) }"
+                        :class="[`cast-analysis-event--${row.category}`, { active: castSelectedEventKey === castEventKey(event) }]"
+                        :style="{ left: castEventLeft(event), width: (row.category === 'cooldowns' || row.category === 'mitigations') ? castMarkerWidth(event) : castEventWidth(event) }"
                         :title="`${fmtTime(event.t)} · ${event.abilityName}${event.durationMs ? ` · ${(event.durationMs / 1000).toFixed(1)}s cast` : ''}${event.buffDurationMs ? ` · ${(event.buffDurationMs / 1000).toFixed(0)}s active` : ''}${castCooldownLabel(event) ? ` · ${castCooldownLabel(event)}` : ''}${event.target ? ` → ${event.target}` : ''}`"
-                        @click.stop="castSelectedAbility = row.name; selectAbility(row.name)"
+                        @click.stop="selectCastEvent(row.name, event)"
                       >
                         <img v-if="abilityIconSrc(event.abilityId, event.abilityName)" class="cast-event-icon" :src="abilityIconSrc(event.abilityId, event.abilityName)" :alt="event.abilityName" @error="clearAbilityIcon(event.abilityId, event.abilityName)" />
                         <span v-else>{{ abilityInitials(row.name) }}</span>
@@ -3091,6 +3366,7 @@ onUnmounted(() => {
                       <div v-if="castPlayerDeathTime !== null" class="cast-analysis-death-line" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%' }" />
                       <div v-if="castPlayerResTime !== null" class="cast-analysis-raise-line" :style="{ left: (castPlayerResTime / castTimelineDuration * 100) + '%' }" />
                     </div>
+                    </template>
                     </template>
                   </template>
                   <div v-if="castTimelineGroups.length === 0" class="bp-empty-panel">
@@ -3110,13 +3386,50 @@ onUnmounted(() => {
               <div class="bp-kv"><span>Ability</span><strong>{{ selectedCastAbility.name }}</strong></div>
               <div class="bp-kv"><span>Casts</span><strong>{{ selectedCastAbility.casts }}</strong></div>
               <div class="bp-kv"><span>Avg Interval</span><strong>{{ selectedCastAbility.avgInterval }}s</strong></div>
-              <div class="bp-kv"><span>Top Targets</span><strong>{{ selectedCastAbility.topTargets.length }}</strong></div>
+              <div class="bp-kv"><span>Target(s)</span><strong>{{ selectedCastAbility.targets.length }}</strong></div>
+            </div>
+            <div v-if="selectedCastEvent" class="bp-inspector-block">
+              <div class="bp-section-heading">Selected Cast</div>
+              <div class="bp-kv"><span>Time</span><strong>{{ fmtTime(selectedCastEvent.t) }}</strong></div>
+              <div class="bp-kv"><span>Target</span><strong>{{ selectedCastEvent.target || '—' }}</strong></div>
+              <div class="bp-kv"><span>Duration</span><strong>{{ ((selectedCastEvent.buffDurationMs ?? selectedCastEvent.durationMs ?? 0) / 1000).toFixed(1) }}s</strong></div>
+            </div>
+            <div class="bp-inspector-block">
+              <div class="bp-section-heading">Target(s)</div>
+              <div v-if="selectedCastAbility.targets.length === 0" class="bp-empty-panel">No target data captured for this ability.</div>
+              <div v-else class="cast-target-list">
+                <div v-for="target in selectedCastAbility.targets" :key="target.id ? `${target.name}-${target.id}` : target.name" class="cast-target-row">
+                  <span class="cast-target-name" :style="nameStyle(target.name)" :title="target.id ? `${target.name} · ${target.id}` : target.name">{{ target.label }}</span>
+                  <span class="cast-target-detail">
+                    <span v-if="target.casts > 0">{{ target.casts }} cast{{ target.casts === 1 ? '' : 's' }}</span>
+                    <span v-if="target.hits > 0">{{ target.hits }} hit{{ target.hits === 1 ? '' : 's' }}</span>
+                    <span v-if="target.damage > 0">{{ f(target.damage) }} dmg</span>
+                    <span v-if="target.healing > 0">{{ f(target.healing) }} heal</span>
+                    <span v-if="target.overheal > 0">{{ f(target.overheal) }} over</span>
+                  </span>
+                </div>
+              </div>
             </div>
             <div v-if="castMitigationEffectiveness" class="bp-inspector-block">
-              <div class="bp-section-heading">Mitigation</div>
-              <div class="bp-kv"><span>Max Hit Taken</span><strong>{{ castMitigationEffectiveness.before }}</strong></div>
-              <div class="bp-kv"><span>After Mit</span><strong>{{ castMitigationEffectiveness.after }}</strong></div>
-              <div class="bp-kv"><span>Reduced</span><strong>{{ castMitigationEffectiveness.reduced }}</strong></div>
+              <div class="bp-section-heading">Mitigation Efficiency</div>
+              <div class="bp-kv"><span>Scope</span><strong>{{ castMitigationEffectiveness.scope }}</strong></div>
+              <div class="bp-kv"><span>Expected Reduction</span><strong>{{ castMitigationEffectiveness.expected }}</strong></div>
+              <div class="bp-kv"><span>Hits in Duration</span><strong>{{ castMitigationEffectiveness.hits }}</strong></div>
+              <div class="bp-kv"><span>Solo / Stacked Hits</span><strong>{{ castMitigationEffectiveness.soloHits }} / {{ castMitigationEffectiveness.stackedHits }}</strong></div>
+              <div class="bp-kv"><span>Reduced Damage Taken By</span><strong>{{ castMitigationEffectiveness.mitigated }}</strong></div>
+              <div class="bp-kv"><span>Damage Without This Mit</span><strong>{{ castMitigationEffectiveness.withoutThisMit }}</strong></div>
+              <div class="bp-section-heading">Stacked With</div>
+              <div v-if="castMitigationEffectiveness.stackedWith.length === 0" class="bp-empty-panel">No overlapping mitigation captured.</div>
+              <div v-else class="cast-target-list">
+                <div v-for="mit in castMitigationEffectiveness.stackedWith" :key="mit.key" class="cast-target-row">
+                  <span class="cast-target-name" :title="`${mit.time} · ${mit.source}${mit.target ? ` → ${mit.target}` : ''}`">{{ mit.name }}</span>
+                  <span class="cast-target-detail">
+                    <span>{{ mit.expected }}</span>
+                    <span>{{ mit.overlap }}</span>
+                    <span>{{ mit.source }}</span>
+                  </span>
+                </div>
+              </div>
             </div>
           </template>
         </aside>
@@ -3333,8 +3646,9 @@ onUnmounted(() => {
 .bp-waiting { flex: 1; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.25); font-size: 13px; }
 
 /* ── Summary table ── */
-.bp-scroll { flex: 1; overflow-y: auto; }
+.bp-scroll { flex: 1; min-height: 0; overflow: auto; }
 .bp-table { width: 100%; border-collapse: collapse; }
+.bp-table--targets { table-layout: fixed; min-width: 760px; }
 .bp-table thead tr { border-bottom: 1px solid rgba(255,255,255,0.08); position: sticky; top: 0; background: #0d0d10; z-index: 1; }
 .bp-table th { padding: 5px 8px; font-size: 10px; font-weight: 500; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.05em; text-align: right; white-space: nowrap; }
 .bp-table th.col-name { text-align: left; }
@@ -3345,6 +3659,8 @@ onUnmounted(() => {
 .bp-table tbody tr:hover { background: rgba(255,255,255,0.04); }
 td { padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgba(255,255,255,0.75); }
 td.col-name { text-align: left; position: relative; max-width: 160px; }
+td.col-abilities,
+th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .row-fill { position: absolute; inset: 0; right: auto; background: rgba(255,255,255,0.05); pointer-events: none; min-width: 2px; }
 .aname { position: relative; z-index: 1; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ability-cell {
@@ -3386,6 +3702,33 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 }
 .col-pct { color: rgba(255,210,80,0.9); }
 .col-dim { color: rgba(255,255,255,0.3); }
+.target-ability-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  max-height: 128px;
+  overflow: auto;
+  padding-right: 2px;
+  overscroll-behavior: contain;
+}
+.target-ability-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.target-ability-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 7px;
+  color: rgba(255,255,255,0.42);
+  font-size: 10px;
+  white-space: nowrap;
+}
 
 /* ── Chart area ── */
 .bp-chart-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 8px 10px 4px; gap: 4px; position: relative; }
@@ -3829,6 +4172,7 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   left: 0;
   z-index: 4;
   padding: 5px 10px;
+  min-height: 24px;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -3836,6 +4180,31 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   background: rgba(255,255,255,0.04);
   border-top: 1px solid rgba(255,255,255,0.07);
   border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.cast-analysis-section-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-right: 0;
+  border-left: 0;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+.cast-analysis-section-toggle:hover {
+  color: rgba(255,255,255,0.72);
+  background: rgba(255,255,255,0.07);
+}
+.cast-analysis-section-toggle small {
+  margin-left: auto;
+  color: rgba(255,255,255,0.32);
+  font-size: 9px;
+}
+.cast-section-caret {
+  width: 12px;
+  color: rgba(255,255,255,0.42);
+  text-align: center;
 }
 .cast-analysis-section--timeline {
   position: relative;
@@ -3971,6 +4340,12 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 .cast-analysis-event:hover {
   z-index: 6;
   filter: brightness(1.25);
+}
+.cast-analysis-event.active {
+  z-index: 7;
+  border-color: rgba(255,255,255,0.86);
+  box-shadow: 0 0 0 2px rgba(116,185,255,0.42), 0 4px 12px rgba(0,0,0,0.42);
+  filter: brightness(1.18);
 }
 .cast-cooldown-window {
   position: absolute;
@@ -4205,6 +4580,39 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   background: rgba(255,255,255,0.08);
   border-radius: 3px;
   color: rgba(255,255,255,0.6);
+}
+.cast-target-list {
+  display: grid;
+  gap: 5px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.cast-target-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  background: rgba(255,255,255,0.045);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 4px;
+}
+.cast-target-name {
+  overflow: hidden;
+  color: rgba(255,255,255,0.76);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cast-target-detail {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px 7px;
+  color: rgba(255,255,255,0.42);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .bp-analysis-header {
@@ -4809,9 +5217,9 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 
 @media (max-width: 820px) {
   .bp-root {
-    height: auto;
+    height: 100vh;
     min-height: 100vh;
-    overflow: auto;
+    overflow: hidden;
   }
   .bp-analysis-header,
   .bp-filter-strip {
@@ -4825,6 +5233,9 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   .bp-pulls-grid {
     grid-template-columns: 1fr;
   }
+  .bp-workspace {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
   .bp-workspace,
   .bp-pulls-workspace,
   .bp-main,
@@ -4832,7 +5243,7 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
   .bp-overview-grid,
   .bp-panel {
     min-height: 0;
-    overflow: visible;
+    overflow: hidden;
   }
   .bp-rail {
     max-height: 220px;
@@ -4846,8 +5257,9 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
     min-height: 0;
   }
   .bp-scroll {
+    min-height: 0;
     overflow-x: auto;
-    overflow-y: visible;
+    overflow-y: auto;
   }
   .bp-table {
     min-width: 620px;
@@ -4862,16 +5274,16 @@ td.col-name { text-align: left; position: relative; max-width: 160px; }
 
 @media (max-height: 680px) {
   .bp-root {
-    height: auto;
+    height: 100vh;
     min-height: 100vh;
-    overflow: auto;
+    overflow: hidden;
   }
   .bp-pulls-workspace,
   .bp-workspace,
   .bp-main,
   .bp-pulls-grid {
     min-height: 0;
-    overflow: visible;
+    overflow: hidden;
   }
   .bp-pull-list-panel,
   .bp-rail,

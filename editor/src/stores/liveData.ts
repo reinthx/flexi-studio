@@ -17,39 +17,8 @@ import {
 } from '@shared/index'
 import type { CombatDataEvent, ChangePrimaryPlayerEvent, PartyChangedEvent, Frame, BarFrame, Profile } from '@shared/index'
 import { formatValue } from '@shared/formatValue'
+import { buildMetricFractions, createMetricFractionContext } from '@shared/metricFractions'
 import { normalizeJob } from '@shared/jobMap'
-
-const METRIC_STRIP_SOURCES = ['encdps', 'enchps', 'dtps', 'rdps', 'damage%', 'healed%', 'crithit%', 'threat'] as const
-
-function parseNumeric(value: string | undefined): number {
-  const parsed = parseFloat(value ?? '0')
-  return Number.isFinite(parsed) ? parsed : 0
-}
-
-function getMetricValue(c: Record<string, string>, source: string): number {
-  if (source === 'dtps') {
-    const duration = parseNumeric(c['DURATION'])
-    return duration > 0 ? parseNumeric(c['damagetaken']) / duration : 0
-  }
-  if (source === 'threat') {
-    return parseNumeric(c['threat%'] ?? c['Threat%'] ?? c['threat'] ?? c['Threat'])
-  }
-  return parseNumeric(c[source])
-}
-
-function buildMetricFractions(combatants: Array<Record<string, string>>, c: Record<string, string>): Record<string, number> {
-  const fractions: Record<string, number> = {}
-  for (const source of METRIC_STRIP_SOURCES) {
-    const raw = getMetricValue(c, source)
-    if (source === 'damage%' || source === 'healed%' || source === 'crithit%' || (source === 'threat' && (c['threat%'] || c['Threat%']))) {
-      fractions[source] = Math.max(0, Math.min(1, raw / 100))
-      continue
-    }
-    const max = Math.max(...combatants.map(item => getMetricValue(item, source)), 0) || 1
-    fractions[source] = Math.max(0, Math.min(1, raw / max))
-  }
-  return fractions
-}
 
 export const useLiveDataStore = defineStore('editorLiveData', () => {
   const selfName = ref('')
@@ -99,6 +68,7 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
 
     const effectiveDpsType = (g.dpsType as any) === 'role' ? 'encdps' : g.dpsType
     const maxVal = parseFloat(filtered[0]?.[effectiveDpsType] ?? '1') || 1
+    const metricFractionContext = createMetricFractionContext(filtered)
 
     const bars: BarFrame[] = filtered.map((c) => {
       const rawVal = parseFloat(c[effectiveDpsType] ?? '0')
@@ -119,7 +89,7 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
         rawEnchps: parseFloat(c.enchps ?? '0'),
         rawRdps: parseFloat(c['rdps'] ?? '0'),
         maxHit: (c.maxhit ?? '---').replace('-', ' '),
-        metricFractions: buildMetricFractions(filtered, c),
+        metricFractions: buildMetricFractions(metricFractionContext, c),
         alpha: 1,
       }
     })

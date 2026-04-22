@@ -145,6 +145,12 @@ const FILE_FORMAT_MAP: Record<string, string> = {
   '.otf': 'opentype',
 }
 
+function fontFormatForPath(path: string): string {
+  const lowerPath = path.toLowerCase()
+  const ext = Object.keys(FILE_FORMAT_MAP).find(e => lowerPath.endsWith(e))
+  return ext ? FILE_FORMAT_MAP[ext] : 'truetype'
+}
+
 /**
  * Load a font directly from a File object (e.g. from a file input / webkitdirectory).
  * Creates a blob URL — works from any origin, no server required.
@@ -274,7 +280,7 @@ export function loadCustomFont(family: string): void {
   const builtInPath = CUSTOM_FONTS[family]
   if (builtInPath) {
     loadedCustomFonts.add(family)
-    injectFontFace(`@font-face { font-family: '${CSS.escape(family)}'; src: url('${builtInPath}') format('truetype'); }`)
+    injectFontFace(`@font-face { font-family: '${CSS.escape(family)}'; src: url('${builtInPath}') format('${fontFormatForPath(builtInPath)}'); }`)
     return
   }
 

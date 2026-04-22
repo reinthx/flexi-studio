@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { HeaderConfig, GlobalConfig, CombatantFilter } from '@shared/configSchema'
-import { renderTemplate } from '../lib/templateRenderer'
+import { renderTemplate } from '@shared/templateRenderer'
 import EncounterHistory from './EncounterHistory.vue'
 import HeaderBar from '@shared/HeaderBar.vue'
 

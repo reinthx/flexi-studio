@@ -49,43 +49,13 @@ import type {
 import { TIMELINE_BUCKET_SEC } from '@shared'
 import { formatValue } from '@shared'
 import { buildDeathEvents } from '@shared/deathRecap'
+import { buildMetricFractions, createMetricFractionContext } from '@shared/metricFractions'
 import { normalizeJob } from '@shared/jobMap'
 import { useOverlayConfig } from './overlayConfig'
 
 // Poll config from localStorage every 500ms as fallback
 // (storage events don't fire on same-origin in some browsers)
 const CONFIG_POLL_INTERVAL_MS = 500
-const METRIC_STRIP_SOURCES = ['encdps', 'enchps', 'dtps', 'rdps', 'damage%', 'healed%', 'crithit%', 'threat'] as const
-
-function parseNumeric(value: string | undefined): number {
-  const parsed = parseFloat(value ?? '0')
-  return Number.isFinite(parsed) ? parsed : 0
-}
-
-function getMetricValue(c: Record<string, string>, source: string): number {
-  if (source === 'dtps') {
-    const duration = parseNumeric(c['DURATION'])
-    return duration > 0 ? parseNumeric(c['damagetaken']) / duration : 0
-  }
-  if (source === 'threat') {
-    return parseNumeric(c['threat%'] ?? c['Threat%'] ?? c['threat'] ?? c['Threat'])
-  }
-  return parseNumeric(c[source])
-}
-
-function buildMetricFractions(combatants: Array<Record<string, string>>, c: Record<string, string>): Record<string, number> {
-  const fractions: Record<string, number> = {}
-  for (const source of METRIC_STRIP_SOURCES) {
-    const raw = getMetricValue(c, source)
-    if (source === 'damage%' || source === 'healed%' || source === 'crithit%' || (source === 'threat' && (c['threat%'] || c['Threat%']))) {
-      fractions[source] = Math.max(0, Math.min(1, raw / 100))
-      continue
-    }
-    const max = Math.max(...combatants.map(item => getMetricValue(item, source)), 0) || 1
-    fractions[source] = Math.max(0, Math.min(1, raw / max))
-  }
-  return fractions
-}
 
 export const useLiveDataStore = defineStore('liveData', () => {
   // ─── State ───────────────────────────────────────────────────────────────────
@@ -162,6 +132,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
   const rDpsReceived     = new Map<string, number>()  // dealerName → raw damage boosted by others' buffs
 
   let pullStartTime = 0
+  let pullStartLogTime = 0
+  let currentLogTime: number | null = null
+  const networkEnemyInstances = new Map<string, { id: string; lastSeen: number; maxHp: number }>()
+  const NETWORK_PULL_BOUNDARY_GAP_MS = 20_000
+  const NETWORK_PULL_BOUNDARY_MIN_HP = 500_000
   const lastKnownHp = new Map<string, { currentHp: number; maxHp: number }>()
 
   // BroadcastChannel to push ability data to popout windows.
@@ -183,6 +158,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     deaths?: number
     damageTaken?: number
     primaryEnemyName?: string
+    primaryEnemyCurrentHp?: number
     primaryEnemyMaxHp?: number
     bossPercent?: number
     bossPercentLabel?: string
@@ -240,7 +216,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         deaths: currentDeaths.value.length,
         damageTaken: Object.values(currentDtakenData.value).reduce((sum, abilities) =>
           sum + Object.values(abilities).reduce((s, ability) => s + ability.totalDamage, 0), 0),
-        ...estimateBossPercent(currentResourceData.value, currentCombatantIds.value, currentEnemyDeaths.value, false),
+        ...estimateBossPercent(currentResourceData.value, currentCombatantIds.value, currentEnemyDeaths.value, false, currentAbilityData.value),
       },
     ]
     return [...list, ...buildHistoricalPullList()]
@@ -281,7 +257,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         dtps: parseFloat(p.encounter?.DTRPS ?? '0') || damageTaken / duration,
         deaths: p.deaths?.length ?? p.combatants.reduce((sum, c) => sum + parseFloat(c.deaths ?? '0'), 0),
         damageTaken,
-        ...estimateBossPercent(p.resourceData ?? {}, p.combatantIds ?? {}, p.enemyDeaths ?? {}, true),
+        ...estimateBossPercent(p.resourceData ?? {}, p.combatantIds ?? {}, p.enemyDeaths ?? {}, true, p.abilityData ?? {}),
       })
       previousEncounter = encounterId
     }
@@ -303,10 +279,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
     ids: Record<string, string>,
     enemyDeaths: Record<string, number>,
     ended: boolean,
+    abilityData: Record<string, CombatantAbilityData> = {},
   ): {
     bossPercent?: number
     bossPercentLabel?: string
     primaryEnemyName?: string
+    primaryEnemyCurrentHp?: number
     primaryEnemyMaxHp?: number
     bossKilled?: boolean
     enemyCount?: number
@@ -314,24 +292,58 @@ export const useLiveDataStore = defineStore('liveData', () => {
     pullOutcome?: PullListEntry['pullOutcome']
     pullOutcomeLabel?: string
   } {
-    const enemyNames = new Set<string>()
-    for (const [name] of Object.entries(resources)) {
-      if (ids[name]?.startsWith('40')) enemyNames.add(name)
+    const enemyCandidates = new Map<string, { name: string; id: string }>()
+    const addEnemyCandidate = (name: string, id = '') => {
+      if (!name) return
+      if (id && !id.startsWith('40')) return
+      const knownId = id || ids[name] || ''
+      if (knownId && !knownId.startsWith('40')) return
+      if (!knownId && ids[name] && !ids[name].startsWith('40')) return
+      const key = knownId ? `${name}|${knownId}` : name
+      enemyCandidates.set(key, { name, id: knownId })
     }
-    for (const name of Object.keys(enemyDeaths)) {
-      if (ids[name]?.startsWith('40')) enemyNames.add(name)
+    const parseEnemyKey = (key: string) => {
+      const [name, id = ''] = key.split('|')
+      return { name, id }
+    }
+    for (const [name] of Object.entries(resources)) {
+      if (ids[name]?.startsWith('40')) addEnemyCandidate(name, ids[name])
+    }
+    for (const key of Object.keys(enemyDeaths)) {
+      const { name, id } = parseEnemyKey(key)
+      addEnemyCandidate(name, id)
+    }
+    const evidencedEnemyNames = new Set(Array.from(enemyCandidates.values()).map(candidate => candidate.name))
+    for (const abilities of Object.values(abilityData)) {
+      for (const ability of Object.values(abilities)) {
+        for (const instance of Object.values(ability.targetInstances ?? {})) {
+          if (!evidencedEnemyNames.has(instance.name)) continue
+          addEnemyCandidate(instance.name, instance.id)
+        }
+      }
     }
 
-    const enemies = Array.from(enemyNames)
-      .map(name => {
+    const candidateNameCounts = new Map<string, number>()
+    for (const candidate of enemyCandidates.values()) {
+      candidateNameCounts.set(candidate.name, (candidateNameCounts.get(candidate.name) ?? 0) + 1)
+    }
+
+    const enemies = Array.from(enemyCandidates.entries())
+      .map(([key, candidate]) => {
+        const { name, id } = candidate
         const samples = resources[name] ?? []
         const latest = samples.at(-1)
-        const killed = enemyDeaths[name] !== undefined || samples.some(sample => sample.currentHp <= 0 || sample.hp <= 0)
+        const duplicateName = (candidateNameCounts.get(name) ?? 0) > 1
+        const killed = enemyDeaths[key] !== undefined ||
+          (!duplicateName && (enemyDeaths[name] !== undefined || samples.some(sample => sample.currentHp <= 0 || sample.hp <= 0)))
         const maxHp = latest?.maxHp ?? 0
+        const currentHp = latest && maxHp > 0
+          ? (killed ? 0 : Math.max(0, Math.min(latest.currentHp, maxHp)))
+          : undefined
         const percent = latest && maxHp > 0
           ? (killed ? 0 : Math.max(0, Math.min(100, latest.hp * 100)))
           : undefined
-        return { name, percent, maxHp, killed }
+        return { key, name, id, percent, currentHp, maxHp, killed }
       })
       .sort((a, b) => b.maxHp - a.maxHp || a.name.localeCompare(b.name))
 
@@ -341,25 +353,36 @@ export const useLiveDataStore = defineStore('liveData', () => {
         pullOutcomeLabel: ended ? 'Unknown' : 'Live',
       }
     }
-    const primary = enemies.find(enemy => enemy.percent !== undefined) ?? enemies[0]
-    const defeatedEnemyCount = enemies.filter(enemy => enemy.killed).length
-    const allDefeated = defeatedEnemyCount === enemies.length
-    const pullOutcome: PullListEntry['pullOutcome'] = allDefeated ? 'clear' : ended ? 'wipe' : 'live'
-    const defeatedLabel = enemies.length > 1 ? `${defeatedEnemyCount}/${enemies.length} defeated` : ''
+    const maxEnemyHp = Math.max(...enemies.map(enemy => enemy.maxHp), 0)
+    const objectiveEnemies = maxEnemyHp > 0
+      ? enemies.filter(enemy => enemy.maxHp > 0 && enemy.maxHp >= maxEnemyHp * 0.25)
+      : enemies
+    const defeatedEnemyCount = objectiveEnemies.filter(enemy => enemy.killed).length
+    const allDefeated = defeatedEnemyCount === objectiveEnemies.length
+    const primary = allDefeated
+      ? objectiveEnemies.find(enemy => enemy.percent !== undefined) ?? objectiveEnemies[0] ?? enemies[0]
+      : objectiveEnemies.find(enemy => !enemy.killed && enemy.percent !== undefined)
+        ?? objectiveEnemies.find(enemy => !enemy.killed)
+        ?? objectiveEnemies.find(enemy => enemy.percent !== undefined)
+        ?? objectiveEnemies[0]
+        ?? enemies[0]
+    const pullOutcome: PullListEntry['pullOutcome'] = !ended ? 'live' : allDefeated ? 'clear' : 'wipe'
+    const defeatedLabel = objectiveEnemies.length > 1 ? `${defeatedEnemyCount}/${objectiveEnemies.length} defeated` : ''
     const progressLabel = primary.percent !== undefined
-      ? enemies.length > 1
+      ? objectiveEnemies.length > 1
         ? `${primary.percent.toFixed(1)}% ${primary.name}${defeatedEnemyCount > 0 ? ` · ${defeatedLabel}` : ''}`
         : `${primary.percent.toFixed(1)}%`
       : defeatedLabel
     return {
       bossPercent: primary.percent,
-      bossPercentLabel: allDefeated
-        ? (enemies.length > 1 ? `Cleared · ${defeatedLabel}` : 'Defeated')
+      bossPercentLabel: ended && allDefeated
+        ? (objectiveEnemies.length > 1 ? `Cleared · ${defeatedLabel}` : 'Defeated')
         : progressLabel,
       primaryEnemyName: primary.name,
+      primaryEnemyCurrentHp: primary.currentHp,
       primaryEnemyMaxHp: primary.maxHp > 0 ? primary.maxHp : undefined,
-      bossKilled: allDefeated,
-      enemyCount: enemies.length,
+      bossKilled: ended && allDefeated,
+      enemyCount: objectiveEnemies.length,
       defeatedEnemyCount,
       pullOutcome,
       pullOutcomeLabel: pullOutcome === 'clear' ? 'Clear' : pullOutcome === 'wipe' ? 'Wipe' : 'Live',
@@ -374,6 +397,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return parseInt(s, 10) || 0
   }
 
+  function snapshotHitData(): Record<string, HitRecord[]> {
+    return deepClone(Object.fromEntries(hitEventBuffer.entries()))
+  }
+
   function buildBreakdownPayload(selectedCombatant?: string, requestedPullIndex = viewingPull.value) {
     const pullIndex = requestedPullIndex
     const pull = pullIndex === null ? null : sessionPulls.value[pullIndex]
@@ -383,6 +410,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const dtakenTimeline = pullIndex === null ? deepClone(currentDtakenTimeline.value)    : deepClone(pull?.dtakenTimeline   ?? {})
     const damageTakenData = pullIndex === null ? deepClone(currentDtakenData.value)       : deepClone(pull?.damageTakenData  ?? {})
     const healingReceivedData = pullIndex === null ? deepClone(currentHealingReceivedData.value) : deepClone(pull?.healingReceivedData ?? {})
+    const hitData = pullIndex === null ? snapshotHitData() : deepClone(pull?.hitData ?? {})
     const rdpsByCombatant = pullIndex === null
       ? deepClone(currentRdpsByCombatant.value)
       : Object.fromEntries((pull?.combatants ?? []).map(c => [c.name, parseFloat(c.rdps ?? '0') || 0]))
@@ -415,7 +443,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       timestamp,
       abilityData,
       dpsTimeline, hpsTimeline, dtakenTimeline,
-      damageTakenData, healingReceivedData, dpsByCombatant, damageByCombatant, rdpsByCombatant, rdpsGiven, rdpsTaken, deaths, combatantIds, combatantJobs, castData, resourceData,
+      damageTakenData, healingReceivedData, hitData, dpsByCombatant, damageByCombatant, rdpsByCombatant, rdpsGiven, rdpsTaken, deaths, combatantIds, combatantJobs, castData, resourceData,
       selfName: selfName.value,
       blurNames: profile.value.global.blurNames ?? false,
       partyNames: Array.from(partyNamesHistorical),
@@ -599,6 +627,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
     const effectiveDpsType = ((g.dpsType as any) === 'role' ? 'encdps' : g.dpsType)
     const maxVal = parseFloat(filtered[0]?.[effectiveDpsType] ?? '1') || 1
+    const metricFractionContext = createMetricFractionContext(filtered)
 
     // For DTPS, we need to calculate from damagetaken / DURATION (integer seconds from ACT)
     const getDtpsValue = (c: Record<string, string>) => {
@@ -653,7 +682,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         rawEnchps: parseFloat(c.enchps ?? '0'),
         rawRdps: parseFloat(c['rdps'] ?? '0'),
         maxHit: (c.maxhit ?? '---').replace('-', ' '),
-        metricFractions: buildMetricFractions(filtered, c),
+        metricFractions: buildMetricFractions(metricFractionContext, c),
         alpha: 1,
         rank: i + 1,
       }
@@ -697,7 +726,23 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   function currentPullOffsetMs(): number {
+    if (currentLogTime !== null) {
+      if (pullStartLogTime <= 0) pullStartLogTime = currentLogTime
+      return Math.max(0, currentLogTime - pullStartLogTime)
+    }
     return pullStartTime > 0 ? Date.now() - pullStartTime : 0
+  }
+
+  function maybeResetForNetworkEnemyInstance(name: string, id: string, maxHp: number): void {
+    if (!name || !isEnemyId(id) || currentLogTime === null) return
+    if (!Number.isFinite(maxHp) || maxHp < NETWORK_PULL_BOUNDARY_MIN_HP) return
+
+    const previous = networkEnemyInstances.get(name)
+    if (previous && previous.id !== id && currentLogTime - previous.lastSeen > NETWORK_PULL_BOUNDARY_GAP_MS) {
+      resetAbilityData()
+    }
+
+    networkEnemyInstances.set(name, { id, lastSeen: currentLogTime, maxHp })
   }
 
   function activeBuffWindowsFor(name: string, nowMs: number): ActiveRaidBuff[] {
@@ -840,6 +885,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     abilityName: string,
     damage: number,
     targetName: string,
+    targetId = '',
     hitSeverity = 0,
   ): void {
     if (!currentAbilityData.value[effectiveName]) {
@@ -885,6 +931,14 @@ export const useLiveDataStore = defineStore('liveData', () => {
       targetStats.total += damage
       targetStats.hits += 1
       stats.targets[targetName] = targetStats
+      if (targetId) {
+        stats.targetInstances ??= {}
+        const instanceKey = `${targetName}|${targetId}`
+        const targetInstance = stats.targetInstances[instanceKey] ?? { name: targetName, id: targetId, total: 0, hits: 0 }
+        targetInstance.total += damage
+        targetInstance.hits += 1
+        stats.targetInstances[instanceKey] = targetInstance
+      }
     }
 
     recordTimelineBucket(currentTimeline.value, effectiveName, damage)
@@ -955,11 +1009,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
     abilityId: string,
     abilityName: string,
     targetName: string,
+    targetId: string,
     castType: 'instant' | 'cast' | 'tick',
     durationMs?: number,
   ): void {
     if (!sourceName || isOwnChocobo(sourceName)) return
-    const offsetMs = pullStartTime > 0 ? Date.now() - pullStartTime : 0
+    const offsetMs = currentPullOffsetMs()
     if (!currentCastData.value[sourceName]) {
       currentCastData.value[sourceName] = []
     }
@@ -972,6 +1027,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       abilityName,
       source: sourceName,
       target: targetName || '',
+      targetId: targetId || undefined,
       type: castType,
       durationMs,
       endT: durationMs !== undefined ? offsetMs + durationMs : undefined,
@@ -985,8 +1041,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const casts = currentCastData.value[sourceName] ?? []
     for (let i = casts.length - 1; i >= Math.max(0, casts.length - 12); i--) {
       const cast = casts[i]
-      if (cast.type !== 'cast') continue
       if (cast.abilityId !== abilityId) continue
+      if (cast.type === 'instant' && Math.abs(nowMs - cast.t) <= 750) return true
+      if (cast.type !== 'cast') continue
       if ((cast.target || '') !== (targetName || '')) continue
       const expectedEnd = cast.endT ?? cast.t
       if (Math.abs(nowMs - expectedEnd) <= 2500) return true
@@ -996,7 +1053,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   function attachBuffDuration(sourceName: string, targetName: string, effectName: string, durationMs: number): void {
     if (!sourceName || !effectName || !Number.isFinite(durationMs) || durationMs <= 0) return
-    const t = pullStartTime > 0 ? Date.now() - pullStartTime : 0
+    const t = currentPullOffsetMs()
     const normalizedEffect = effectName.trim().toLowerCase()
     const sourceCasts = currentCastData.value[sourceName] ?? []
     const candidateSources = sourceName === targetName
@@ -1020,9 +1077,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   // Write damage/heal amount into the correct TIMELINE_BUCKET_SEC-second slot.
   function recordTimelineBucket(timeline: DpsTimeline, name: string, amount: number): void {
-    const bucket = pullStartTime > 0
-      ? Math.floor((Date.now() - pullStartTime) / (TIMELINE_BUCKET_SEC * 1000))
-      : 0
+    const bucket = Math.floor(currentPullOffsetMs() / (TIMELINE_BUCKET_SEC * 1000))
     if (!timeline[name]) timeline[name] = []
     const tl = timeline[name]
     while (tl.length <= bucket) tl.push(0)
@@ -1041,7 +1096,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
   let lastHpSampleTime = new Map<string, number>()
   function recordHpSample(name: string, currentHp: number, maxHp: number): void {
     if (!name || maxHp <= 0) return
-    const t = pullStartTime > 0 ? Date.now() - pullStartTime : 0
+    const t = currentPullOffsetMs()
     const lastT = lastHpSampleTime.get(name) ?? 0
     if (t - lastT < 1000) return
     lastHpSampleTime.set(name, t)
@@ -1096,7 +1151,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   function appendResourceSample(name: string, currentHp: number, maxHp: number, throttle: boolean): ResourceSample | null {
     if (!name || !Number.isFinite(currentHp) || !Number.isFinite(maxHp) || maxHp <= 0) return null
-    const t = pullStartTime > 0 ? Date.now() - pullStartTime : 0
+    const t = currentPullOffsetMs()
     if (throttle) {
       const lastT = lastResourceSampleTime.get(name) ?? -Infinity
       if (t - lastT < 1000) return null
@@ -1152,7 +1207,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     maxHp?: number,
   ): void {
     if (!targetName || amount === 0) return
-    const t = pullStartTime > 0 ? Date.now() - pullStartTime : 0
+    const t = currentPullOffsetMs()
     if (!hitEventBuffer.has(targetName)) hitEventBuffer.set(targetName, [])
     const buf = hitEventBuffer.get(targetName)!
     const safeMaxHp = Number.isFinite(maxHp) && (maxHp ?? 0) > 0 ? maxHp : undefined
@@ -1246,6 +1301,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
   function onLogLine(event: LogLineEvent): void {
     const parts = event.rawLine.split('|')
     const lineType = parts[0]
+    const parsedLogTime = Date.parse(parts[1] ?? '')
+    currentLogTime = Number.isFinite(parsedLogTime) ? parsedLogTime : null
 
     if (lineType === '20') {
       // NetworkStartsCasting
@@ -1261,7 +1318,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       if (!sourceName || !abilityId || !Number.isFinite(castTimeSec) || castTimeSec <= 0) return
       recordCombatantId(sourceName, sourceId)
       recordCombatantId(targetName, targetId)
-      recordCastEvent(sourceName, abilityId, abilityName, targetName, 'cast', Math.round(castTimeSec * 1000))
+      recordCastEvent(sourceName, abilityId, abilityName, targetName, targetId, 'cast', Math.round(castTimeSec * 1000))
       scheduleBroadcast()
 
     } else if (lineType === '21' || lineType === '22') {
@@ -1285,10 +1342,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const effectiveName = petOwnerName || sourceName
       const flagByte     = actionEffectKind(flags)
 
+      maybeResetForNetworkEnemyInstance(sourceName, sourceId, srcMaxHp)
+      maybeResetForNetworkEnemyInstance(targetName, targetId, tgtMaxHp)
       recordCombatantId(sourceName, sourceId)
       recordCombatantId(targetName, targetId)
       if (effectiveName && abilityId) {
-        recordCastEvent(effectiveName, abilityId, abilityName, targetName, 'instant')
+        recordCastEvent(effectiveName, abilityId, abilityName, targetName, targetId, 'instant')
       }
 
       let didRecord = false
@@ -1296,7 +1355,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         // Damage hit — attribute to source for DPS, to target for DTPS
         const damage = decodeLogDamage(damageHex)
         if (damage > 0 && effectiveName && abilityId) {
-          recordAbilityHit(effectiveName, abilityId, abilityName, damage, targetName, actionEffectSeverity(flags))
+          recordAbilityHit(effectiveName, abilityId, abilityName, damage, targetName, targetId, actionEffectSeverity(flags))
           didRecord = true
         }
         if (damage > 0 && targetName) {
@@ -1378,8 +1437,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const abilityName = tickAbilityName('DoT', effectId, sourceId, sourceName, targetId)
         const damage = decodeTickAmount(damageHex, tgtMaxHp)
         if (damage === 0) return
-        recordAbilityHit(sourceName, `dot:${effectId}`, abilityName, damage, targetName)
-        recordCastEvent(sourceName, `dot:${effectId}`, abilityName, targetName, 'tick')
+        recordAbilityHit(sourceName, `dot:${effectId}`, abilityName, damage, targetName, targetId)
+        recordCastEvent(sourceName, `dot:${effectId}`, abilityName, targetName, targetId, 'tick')
         if (targetName) {
           recordDamageTaken(targetName, `dot:${effectId}`, abilityName, damage)
           recordTimelineBucket(currentDtakenTimeline.value, targetName, damage)
@@ -1397,7 +1456,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         if (heal === 0) return
         const { effective: appliedHeal, overheal } = healingAmounts(targetName, heal, tgtCurrentHp, tgtMaxHp)
         if (appliedHeal > 0) recordTimelineBucket(currentHealTimeline.value, sourceName, appliedHeal)
-        recordCastEvent(sourceName, `hot:${effectId}`, abilityName, targetName, 'tick')
+        recordCastEvent(sourceName, `hot:${effectId}`, abilityName, targetName, targetId, 'tick')
         if (targetName) {
           if (appliedHeal > 0 || overheal > 0) recordHealingReceived(targetName, `hot:${effectId}`, abilityName, appliedHeal, sourceName, overheal)
           if (appliedHeal > 0) recordHitEvent(targetName, 'heal', abilityName, sourceName, appliedHeal, tgtCurrentHp, tgtMaxHp)
@@ -1413,10 +1472,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const targetId   = parts[2]
       const targetName = parts[3]
       if (!targetId || !targetName) return
-      const t = pullStartTime > 0 ? Date.now() - pullStartTime : 0
+      const t = currentPullOffsetMs()
       if (targetId.startsWith('40')) {
         recordCombatantId(targetName, targetId)
-        currentEnemyDeaths.value[targetName] = t
+        currentEnemyDeaths.value[targetId ? `${targetName}|${targetId}` : targetName] = t
         const latest = currentResourceData.value[targetName]?.at(-1)
         if (latest) appendResourceSample(targetName, 0, latest.maxHp, false)
         scheduleBroadcast()
@@ -1489,7 +1548,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const raiseEffects = new Set(['raise', 'angel whisper', 'resurrection', 'life ascension', 'reraise iii'])
       const isRaise = normalizedEffectName ? raiseEffects.has(normalizedEffectName) : false
       if (isRaise) {
-        const rTime = pullStartTime > 0 ? Date.now() - pullStartTime : 0
+        const rTime = currentPullOffsetMs()
         resurrectTimes.value[targetName] = rTime
         // Update the death record if we have a pending one
         const deathIdx = pendingDeathUpdates.get(targetName)
@@ -1553,7 +1612,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
     activeRaidBuffs.clear()
     rDpsContributed.clear()
     rDpsReceived.clear()
+    networkEnemyInstances.clear()
     pullStartTime = Date.now()
+    pullStartLogTime = 0
     broadcastEncounterData()
   }
 
@@ -1602,6 +1663,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       dtakenTimeline:   deepClone(currentDtakenTimeline.value),
       damageTakenData:  deepClone(currentDtakenData.value),
       healingReceivedData: deepClone(currentHealingReceivedData.value),
+      hitData:          snapshotHitData(),
       rdpsGiven:        mapToRateRecord(rDpsContributed, stashDuration),
       rdpsTaken:        mapToRateRecord(rDpsReceived, stashDuration),
       deaths:           deepClone(currentDeaths.value),
@@ -1852,6 +1914,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const historicalParty = pull.partyData ?? []
     const historicalIsAlliance = historicalParty.length > 8
     const historicalNameToIdx = new Map(historicalParty.map((p, i) => [p.name, i]))
+    const metricFractionContext = createMetricFractionContext(pull.combatants)
 
     const bars: BarFrame[] = pull.combatants.map((c, i) => {
       const rawVal = profile.value.global.dpsType === 'dtps'
@@ -1890,7 +1953,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         rawEnchps: parseFloat(c.enchps ?? '0'),
         rawRdps: parseFloat(c['rdps'] ?? '0'),
         maxHit: (c.maxhit ?? '---').replace('-', ' '),
-        metricFractions: buildMetricFractions(pull.combatants, c),
+        metricFractions: buildMetricFractions(metricFractionContext, c),
         alpha: 1,
         rank: i + 1,
       }
