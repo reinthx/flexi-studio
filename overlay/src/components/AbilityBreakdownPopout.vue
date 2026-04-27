@@ -132,6 +132,22 @@ const pullHasRaidBuffCast = computed(() =>
   )
 )
 
+const RAID_BUFF_JOBS = new Set([
+  'AST', 'BRD', 'DNC', 'DRG', 'MNK', 'NIN', 'PCT', 'RDM', 'RPR', 'SCH', 'SMN',
+])
+
+const partyHasRaidBuffJobs = computed(() => {
+  const jobs = new Set<string>()
+  for (const member of partyData.value) {
+    if (member.name) jobs.add(actorJob(member.name))
+  }
+  for (const name of visibleCombatants.value) {
+    const job = actorJob(name)
+    if (job) jobs.add(job)
+  }
+  return Array.from(jobs).some(job => RAID_BUFF_JOBS.has(job))
+})
+
 const buffWarnings = computed(() => {
   if (activeView.value !== 'pulls') return []
   const warnings: string[] = []
@@ -144,7 +160,7 @@ const buffWarnings = computed(() => {
       abilityNamesLower.has('benefic') || abilityNamesLower.has('diagnosis') || abilityNamesLower.has('heal') || abilityNamesLower.has('heal ii')
     if (!hasHeal) warnings.push('No direct heals cast')
   }
-  if (!pullHasRaidBuffCast.value && !pullHasRaidBuffCredit.value) {
+  if (partyHasRaidBuffJobs.value && !pullHasRaidBuffCast.value && !pullHasRaidBuffCredit.value) {
     warnings.push('No raid buffs detected')
   }
   return warnings
@@ -1996,6 +2012,44 @@ function pullEnemyHpDetail(entry: PullEntry | null | undefined): string {
   return 'needs enemy HP samples'
 }
 
+const enemyProgressHeadline = computed(() => {
+  const entry = selectedPullEntry.value
+  if (!entry) return '—'
+  if (entry.pullOutcome === 'clear') {
+    return entry.primaryEnemyName ? `Cleared ${entry.primaryEnemyName}` : 'Cleared'
+  }
+  if (entry.bossPercent !== undefined && entry.primaryEnemyName) {
+    return `${entry.bossPercent.toFixed(1)}% ${entry.primaryEnemyName}`
+  }
+  return entry.bossPercentLabel ?? '—'
+})
+
+const enemyProgressMeta = computed(() => {
+  const entry = selectedPullEntry.value
+  if (!entry) return 'No enemy progress captured'
+  if ((entry.enemyCount ?? 0) > 1 && entry.defeatedEnemyCount !== undefined) {
+    return `${entry.defeatedEnemyCount}/${entry.enemyCount} defeated`
+  }
+  if (entry.pullOutcomeLabel) return entry.pullOutcomeLabel
+  return entry.bossPercentLabel ?? 'No enemy progress captured'
+})
+
+const enemyProgressDetail = computed(() => {
+  const entry = selectedPullEntry.value
+  if (!entry) return 'needs enemy HP samples'
+  if (entry.pullOutcomeLabel) {
+    return `${entry.pullOutcomeLabel} · ${pullEnemyHpDetail(entry)}`
+  }
+  if (bestProgressPullEntry.value && entry.bossPercent !== undefined) {
+    const delta = (entry.bossPercent ?? 0) - (bestProgressPullEntry.value.bossPercent ?? 0)
+    const progress = entry.index === bestProgressPullEntry.value.index
+      ? 'best progress'
+      : `${delta.toFixed(1)} pts from best`
+    return `${progress} · ${pullEnemyHpDetail(entry)}`
+  }
+  return pullEnemyHpDetail(entry)
+})
+
 const previousPullEntry = computed(() => {
   const current = selectedPullEntry.value
   if (!current || current.index === null) return null
@@ -2501,7 +2555,7 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="activeView === 'pulls'">
-      <div class="bp-pulls-workspace">
+      <div class="bp-pulls-workspace bp-pulls-workspace--scrollable">
         <aside class="bp-pull-list-panel">
           <div class="bp-panel-title">Session Pulls</div>
           <button
@@ -2531,34 +2585,15 @@ onUnmounted(() => {
           </button>
         </aside>
 
-        <main class="bp-main">
+        <main class="bp-main bp-main--pulls-pane">
           <div class="bp-card-grid">
-            <div class="bp-card">
-              <div class="bp-card-label">Duration</div>
-              <div class="bp-card-value">{{ selectedPullEntry?.duration || encounterDurationLabel }}</div>
-              <div class="bp-card-detail">
-                <template v-if="previousPullEntry">
-                  {{ formatEntryDelta(parseEntryDuration(selectedPullEntry) - parseEntryDuration(previousPullEntry), fmtSeconds) }} vs previous
-                </template>
-                <template v-else>current pull context</template>
-              </div>
-            </div>
-            <div class="bp-card bp-card--taken">
+            <div class="bp-card bp-card--taken bp-card--progress">
               <div class="bp-card-label">Enemy Progress</div>
-              <div class="bp-card-value">{{ selectedPullEntry?.bossPercentLabel ?? '—' }}</div>
-              <div class="bp-card-detail">
-                <template v-if="selectedPullEntry?.pullOutcomeLabel">
-                  <span :class="pullOutcomeClass(selectedPullEntry)">{{ selectedPullEntry.pullOutcomeLabel }}</span>
-                  <span> · {{ pullEnemyHpDetail(selectedPullEntry) }}</span>
-                </template>
-                <template v-else-if="bestProgressPullEntry && selectedPullEntry?.bossPercent !== undefined">
-                  {{ selectedPullEntry.index === bestProgressPullEntry.index ? 'best progress' : `${((selectedPullEntry.bossPercent ?? 0) - (bestProgressPullEntry.bossPercent ?? 0)).toFixed(1)} pts from best` }}
-                  <span> · {{ pullEnemyHpDetail(selectedPullEntry) }}</span>
-                </template>
-                <template v-else>
-                  <span>{{ pullEnemyHpDetail(selectedPullEntry) }}</span>
-                </template>
+              <div class="bp-card-progress-copy">
+                <div class="bp-card-value bp-card-value--progress">{{ enemyProgressHeadline }}</div>
+                <div class="bp-card-detail bp-card-detail--progress">{{ enemyProgressMeta }}</div>
               </div>
+              <div class="bp-card-detail bp-card-detail--split">{{ enemyProgressDetail }}</div>
             </div>
             <div class="bp-card bp-card--done">
               <div class="bp-card-label">Party rDPS</div>
@@ -2609,6 +2644,18 @@ onUnmounted(() => {
 
             <section class="bp-panel bp-panel--wide">
               <div class="bp-panel-title">Damage Attribution</div>
+              <div class="bp-panel-toolbar bp-panel-toolbar--summary">
+                <div class="bp-toolbar-stat">
+                  <span class="bp-toolbar-stat-label">Duration</span>
+                  <strong>{{ selectedPullEntry?.duration || encounterDurationLabel }}</strong>
+                </div>
+                <div class="bp-toolbar-context">
+                  <template v-if="previousPullEntry">
+                    {{ formatEntryDelta(parseEntryDuration(selectedPullEntry) - parseEntryDuration(previousPullEntry), fmtSeconds) }} vs previous
+                  </template>
+                  <template v-else>current pull context</template>
+                </div>
+              </div>
               <div class="bp-pull-attribution-chart" :class="{ empty: pullGroupDpsBars.length === 0 }">
                 <button
                   v-for="bar in pullGroupDpsBars"
@@ -2638,7 +2685,13 @@ onUnmounted(() => {
                   </tr></thead>
                   <tbody>
                     <tr v-for="row in pullDamageRows" :key="`pull-damage-${row.name}`" :class="{ 'bp-row-active': resolvedSelected === row.name }" @click="selectActor(row.name); activeView = 'done'">
-                      <td class="col-name"><div class="row-fill" :style="{ width: row.width }" /><span class="aname" :style="nameStyle(row.name)">{{ row.name }}</span></td>
+                      <td class="col-name">
+                        <div class="row-fill" :style="{ width: row.width }" />
+                        <span class="aname bp-player-cell" :style="nameStyle(row.name)">
+                          <img v-if="actorJobIcon(row.name)" :src="actorJobIcon(row.name)" alt="" class="bp-job-icon bp-player-cell-icon" />
+                          <span class="bp-player-cell-name">{{ row.name }}</span>
+                        </span>
+                      </td>
                       <td class="col-num">{{ f(row.total) }}</td>
                       <td class="col-pct">{{ row.pct }}%</td>
                       <td class="col-num">{{ f(row.dps) }}</td>
@@ -3663,6 +3716,22 @@ td.col-abilities,
 th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .row-fill { position: absolute; inset: 0; right: auto; background: rgba(255,255,255,0.05); pointer-events: none; min-width: 2px; }
 .aname { position: relative; z-index: 1; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-player-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+}
+.bp-player-cell-icon {
+  flex-shrink: 0;
+}
+.bp-player-cell-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ability-cell {
   display: inline-flex;
   align-items: center;
@@ -4732,12 +4801,25 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   grid-template-columns: 300px minmax(0, 1fr);
   overflow: hidden;
 }
+.bp-pulls-workspace--scrollable {
+  align-items: start;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.bp-pulls-workspace--scrollable > .bp-pull-list-panel,
+.bp-pulls-workspace--scrollable > .bp-main {
+  align-self: start;
+  min-height: auto;
+}
 .bp-pull-list-panel {
   min-height: 0;
   overflow-y: auto;
   padding: 12px;
   border-right: 1px solid rgba(255,255,255,0.08);
   background: rgba(255,255,255,0.015);
+}
+.bp-pulls-workspace--scrollable .bp-pull-list-panel {
+  overflow: visible;
 }
 .bp-pull-row {
   width: 100%;
@@ -4846,6 +4928,12 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   flex-direction: column;
   overflow: hidden;
 }
+.bp-main--pulls-pane {
+  overflow: visible;
+}
+.bp-main--pulls-pane .bp-pulls-grid {
+  overflow: visible;
+}
 .bp-rail-title,
 .bp-inspector-title,
 .bp-panel-title,
@@ -4946,6 +5034,7 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .bp-card--taken { box-shadow: inset 0 0 0 1px rgba(220,70,70,0.08); }
 .bp-card--deaths { box-shadow: inset 0 0 0 1px rgba(255,80,80,0.08); }
 .bp-card--casts { box-shadow: inset 0 0 0 1px rgba(162,155,254,0.08); }
+.bp-card--progress { grid-column: span 2; }
 .bp-card-label {
   font-size: 10px;
   text-transform: uppercase;
@@ -4960,6 +5049,22 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .bp-card-detail {
   font-size: 11px;
   color: rgba(255,255,255,0.5);
+}
+.bp-card-progress-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.bp-card-value--progress {
+  font-size: 20px;
+  line-height: 1.25;
+}
+.bp-card-detail--progress {
+  font-size: 13px;
+  color: rgba(255,255,255,0.72);
+}
+.bp-card-detail--split {
+  line-height: 1.4;
 }
 .bp-overview-grid {
   flex: 1;
@@ -4991,6 +5096,32 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   gap: 10px;
   padding: 10px 12px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.bp-panel-toolbar--summary {
+  flex-wrap: wrap;
+}
+.bp-toolbar-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.bp-toolbar-stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255,255,255,0.35);
+}
+.bp-toolbar-stat strong {
+  font-size: 18px;
+  color: rgba(255,255,255,0.92);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.bp-toolbar-context {
+  margin-left: auto;
+  font-size: 11px;
+  color: rgba(255,255,255,0.48);
 }
 .bp-empty-panel,
 .bp-inspector-copy {
@@ -5267,6 +5398,15 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   .bp-card-grid {
     border-bottom: none;
   }
+  .bp-card--progress {
+    grid-column: auto;
+  }
+  .bp-pulls-workspace--scrollable {
+    overflow-y: auto;
+  }
+  .bp-toolbar-context {
+    margin-left: 0;
+  }
   .bp-pull-attribution-chart {
     height: 110px;
   }
@@ -5284,6 +5424,9 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   .bp-pulls-grid {
     min-height: 0;
     overflow: hidden;
+  }
+  .bp-pulls-workspace--scrollable {
+    overflow-y: auto;
   }
   .bp-pull-list-panel,
   .bp-rail,

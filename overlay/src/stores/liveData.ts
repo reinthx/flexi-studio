@@ -306,11 +306,31 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const [name, id = ''] = key.split('|')
       return { name, id }
     }
-    for (const [name] of Object.entries(resources)) {
-      if (ids[name]?.startsWith('40')) addEnemyCandidate(name, ids[name])
+    const exactEnemyDeathKeys = new Set(Object.keys(enemyDeaths).filter(key => key.includes('|')))
+    const exactEnemyDeathNames = new Set(
+      Array.from(exactEnemyDeathKeys).map(key => parseEnemyKey(key).name),
+    )
+    const hasLiveNameSample = (name: string) => {
+      const latest = resources[name]?.at(-1)
+      return latest !== undefined && latest.maxHp > 0 && latest.currentHp > 0 && latest.hp > 0
+    }
+    const shouldAddEvidencedCandidate = (name: string, id = '') => {
+      if (!id) return true
+      if (!exactEnemyDeathNames.has(name)) return true
+      if (exactEnemyDeathKeys.has(`${name}|${id}`)) return true
+      return hasLiveNameSample(name)
+    }
+    for (const [name, samples] of Object.entries(resources)) {
+      const id = ids[name]
+      if (!id?.startsWith('40')) continue
+      const latest = samples.at(-1)
+      const latestHasHp = latest !== undefined && latest.maxHp > 0 && latest.currentHp > 0 && latest.hp > 0
+      if (!shouldAddEvidencedCandidate(name, id) && !latestHasHp) continue
+      addEnemyCandidate(name, id)
     }
     for (const key of Object.keys(enemyDeaths)) {
       const { name, id } = parseEnemyKey(key)
+      if (!id && exactEnemyDeathNames.has(name)) continue
       addEnemyCandidate(name, id)
     }
     const evidencedEnemyNames = new Set(Array.from(enemyCandidates.values()).map(candidate => candidate.name))
@@ -318,6 +338,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       for (const ability of Object.values(abilities)) {
         for (const instance of Object.values(ability.targetInstances ?? {})) {
           if (!evidencedEnemyNames.has(instance.name)) continue
+          if (!shouldAddEvidencedCandidate(instance.name, instance.id)) continue
           addEnemyCandidate(instance.name, instance.id)
         }
       }
@@ -353,10 +374,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         pullOutcomeLabel: ended ? 'Unknown' : 'Live',
       }
     }
-    const maxEnemyHp = Math.max(...enemies.map(enemy => enemy.maxHp), 0)
-    const objectiveEnemies = maxEnemyHp > 0
-      ? enemies.filter(enemy => enemy.maxHp > 0 && enemy.maxHp >= maxEnemyHp * 0.25)
-      : enemies
+    const objectiveEnemies = enemies
     const defeatedEnemyCount = objectiveEnemies.filter(enemy => enemy.killed).length
     const allDefeated = defeatedEnemyCount === objectiveEnemies.length
     const primary = allDefeated
@@ -1476,6 +1494,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       if (targetId.startsWith('40')) {
         recordCombatantId(targetName, targetId)
         currentEnemyDeaths.value[targetId ? `${targetName}|${targetId}` : targetName] = t
+        currentEnemyDeaths.value[targetName] = t
         const latest = currentResourceData.value[targetName]?.at(-1)
         if (latest) appendResourceSample(targetName, 0, latest.maxHp, false)
         scheduleBroadcast()

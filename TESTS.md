@@ -5,8 +5,10 @@ This project uses Vitest for unit and focused integration tests.
 ## Commands
 
 - `pnpm test` runs the full test suite once.
+- `pnpm test:e2e` builds production artifacts and runs Playwright browser smoke tests.
 - `pnpm test:coverage` runs the full test suite with V8 coverage and writes reports to `coverage/`.
 - `pnpm typecheck` runs package type checks.
+- `pnpm release:check` runs typecheck, Vitest, browser smoke tests, and the GitHub Pages build.
 
 ## What The Suite Covers
 
@@ -36,6 +38,12 @@ This project uses Vitest for unit and focused integration tests.
 - Ability breakdown transformations for death sorting, death events, event rows, and view-state toggles.
 - Meter bar parity expectations with the editor preview: measured bar width for shape-cut geometry, color overrides, Rank 1 options, and text effects, including source-level wiring guards.
 
+### Browser Smoke
+
+- Built editor artifact renders the editor shell, primary controls, and preview meter.
+- Built overlay artifact renders the standalone overlay shell.
+- Built overlay artifact renders the breakdown popout through a direct preview route and loads a seeded encounter snapshot.
+
 ## Current Coverage Intent
 
 Coverage is configured for source files in `shared/src`, `editor/src`, and `overlay/src`, while excluding tests, declarations, vendor bundles, entrypoints, and simple shared shim files.
@@ -45,7 +53,7 @@ The most valuable covered surfaces are pure logic, stores, parsing helpers, pers
 ## Known Blind Spots
 
 - Most Vue single-file components are not covered by DOM/component tests yet.
-- Editor/overlay visual parity is partly protected by shared renderer unit tests and source-level component wiring tests. The current high-risk cases still need browser-level checks: pixel-level shape-cut right-edge completion, Rank 1 top-bar styling, texture tint/fill rendering, and editor preview resize behavior.
+- Editor/overlay visual parity is partly protected by shared renderer unit tests, source-level component wiring tests, and browser smoke tests. The current high-risk cases still need pixel-level or component-specific assertions: shape-cut right-edge completion, Rank 1 top-bar styling, texture tint/fill rendering, text outline/shadow clipping, and editor preview resize behavior.
 - `overlay/src/stores/liveData.ts` still has many untested ACT LogLine parsing paths, including detailed damage/healing lines, DoT/HoT attribution, deaths/raises, rDPS contribution windows, and malformed lines.
 - `AbilityBreakdownPopout.vue` is large and mostly untested; it should be covered through extracted helpers or focused component tests before broad UI assertions.
 - Editor controls such as `DragNumber`, `BarSlider`, `ColorPicker`, and `PresetPanel` need interaction tests.
@@ -56,6 +64,6 @@ The most valuable covered surfaces are pure logic, stores, parsing helpers, pers
 1. Extract more pure helpers from overlay live data LogLine parsing and cover them directly.
 2. Add component tests for the small editor controls with tricky input behavior.
 3. Replace the current source-level `PreviewArea`/`MeterBar` wiring guards with mounted component tests once jsdom/Vue Test Utils or equivalent browser testing is available.
-4. Add screenshot/browser checks for a shape-cut preset in both editor preview and overlay, specifically asserting the right edge is filled, texture tints apply to the first/rank-1 bar, and text outlines/shadows are not clipped.
+4. Expand Playwright checks for a shape-cut preset in both editor preview and overlay, specifically asserting the right edge is filled, texture tints apply to the first/rank-1 bar, and text outlines/shadows are not clipped.
 5. Add focused overlay component tests for `MeterHeader`, `MeterView`, and the ability breakdown popout snapshot/load flow.
-6. Add a release check that runs `pnpm test`, `pnpm typecheck`, `pnpm build:editor`, and `pnpm build:overlay`.
+6. Add ACT/OverlayPlugin smoke evidence to each launch, because browser tests cannot fully emulate CEF and live ACT event delivery.

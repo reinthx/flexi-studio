@@ -621,4 +621,74 @@ describe('overlay liveData store', () => {
 
     store.stop()
   })
+
+  it('marks same-name multi-enemy packs as clear when the stale first-seen id has no remaining HP', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      2: '10AAAAAA',
+      3: 'Alice',
+      4: '0001',
+      5: 'Heavy Swing',
+      6: '40000001',
+      7: 'Training Add',
+      8: '03',
+      9: '03E80000',
+      24: '5000',
+      25: '10000',
+    }))
+    for (const [id, name] of [
+      ['40000002', 'Training Add'],
+      ['40000003', 'Training Sentry'],
+      ['40000004', 'Training Guard'],
+      ['40000005', 'Training Mage'],
+    ]) {
+      mocks.listeners.LogLine(logLine({
+        0: '21',
+        2: '10AAAAAA',
+        3: 'Alice',
+        4: '0002',
+        5: 'Tomahawk',
+        6: id,
+        7: name,
+        8: '03',
+        9: '03E80000',
+        24: '0',
+        25: '10000',
+      }))
+      mocks.listeners.LogLine(logLine({
+        0: '25',
+        2: id,
+        3: name,
+        4: '10AAAAAA',
+        5: 'Alice',
+      }))
+    }
+
+    mocks.listeners.CombatData(combatData(false, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    store.broadcastForCombatant('Alice')
+    const payload = JSON.parse(localStorage.getItem('flexi-breakdown-snapshot') ?? '{}')
+    const historicalPull = payload.pullList.find((entry: { index: number | null }) => entry.index === 0)
+
+    expect(historicalPull).toMatchObject({
+      pullOutcome: 'clear',
+      pullOutcomeLabel: 'Clear',
+      bossKilled: true,
+      enemyCount: 4,
+      defeatedEnemyCount: 4,
+    })
+    expect(historicalPull.bossPercentLabel).toContain('Cleared')
+    expect(historicalPull.bossPercentLabel).toContain('4/4 defeated')
+
+    store.stop()
+  })
 })

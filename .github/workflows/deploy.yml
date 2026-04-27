@@ -38,6 +38,12 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Browser smoke tests
+        run: pnpm run test:e2e
+
       - name: Build unified GitHub Pages app
         run: pnpm run build:github
 

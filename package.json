@@ -15,12 +15,15 @@
     "update-assets": "node scripts/update-assets.js",
     "preview": "cd dist/editor && npx http-server -p 3000",
     "preview:overlay": "cd dist/overlay && npx http-server -p 3001",
+    "release:check": "pnpm typecheck && pnpm test && pnpm test:e2e && pnpm build:github",
     "test": "vitest run",
+    "test:e2e": "pnpm build && playwright test",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@vitest/coverage-v8": "2.1.9",
     "concurrently": "^9.2.1",
     "pako": "^2.1.0",
