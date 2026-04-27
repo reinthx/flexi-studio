@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { HeaderConfig, GlobalConfig, CombatantFilter } from '@shared/configSchema'
-import { renderTemplate } from '../lib/templateRenderer'
+import { renderTemplate } from '@shared/templateRenderer'
 import EncounterHistory from './EncounterHistory.vue'
 import HeaderBar from '@shared/HeaderBar.vue'
 
@@ -12,11 +12,13 @@ const props = defineProps<{
   totalDPS: string
   totalHPS: string
   totalDTPS?: string
+  totalRDPS?: string
   pullNumber: number
   pullCount: number
   global: GlobalConfig
   showSettings?: boolean
   onSettings?: () => void
+  onBreakdown?: () => void
   onSetCombatantFilter?: (filter: CombatantFilter) => void
   onToggleBlurNames?: () => void
   onTogglePin?: () => void
@@ -31,6 +33,7 @@ const tokens = computed(() => ({
   totalDPS:   props.totalDPS,
   totalHPS:   props.totalHPS,
   totalDTPS:  props.totalDTPS ?? '',
+  totalRDPS:  props.totalRDPS ?? '',
   pullNumber: String(props.pullNumber),
   pullCount:  String(props.pullCount),
 }))
@@ -38,12 +41,13 @@ const tokens = computed(() => ({
 const text = computed(() => renderTemplate(props.config.template, tokens.value))
 
 const currentFilter = computed((): CombatantFilter => {
-  return props.global?.combatantFilter ?? (props.global?.selfOnly ? 'self' : props.global?.partyOnly ? 'party' : 'all')
+  return props.global?.combatantFilter ?? (props.global?.selfOnly ? 'self' : props.global?.partyOnly ? 'alliance' : 'all')
 })
 
 const filterLabel = computed(() => {
   switch (currentFilter.value) {
     case 'self': return 'SELF'
+    case 'alliance': return 'ALLIANCE'
     case 'party': return 'PARTY'
     default: return 'ALL'
   }
@@ -51,7 +55,7 @@ const filterLabel = computed(() => {
 
 function cycleFilter() {
   if (!props.onSetCombatantFilter) return
-  const next = currentFilter.value === 'all' ? 'party' : currentFilter.value === 'party' ? 'self' : 'all'
+  const next = currentFilter.value === 'all' ? 'alliance' : currentFilter.value === 'alliance' ? 'party' : currentFilter.value === 'party' ? 'self' : 'all'
   props.onSetCombatantFilter(next)
 }
 
@@ -79,9 +83,9 @@ const isMergePets = computed(() => props.global?.mergePets ?? true)
       </button>
       <button
         class="pill-btn filter-btn"
-        :class="{ 'filter-all': currentFilter === 'all', 'filter-party': currentFilter === 'party', 'filter-self': currentFilter === 'self' }"
+        :class="{ 'filter-all': currentFilter === 'all', 'filter-alliance': currentFilter === 'alliance', 'filter-party': currentFilter === 'party', 'filter-self': currentFilter === 'self' }"
         @click="cycleFilter"
-        title="Cycle: All → Party → Self"
+        title="Cycle: All → Alliance → Party → Self"
       >
         {{ filterLabel }}
       </button>
@@ -95,11 +99,19 @@ const isMergePets = computed(() => props.global?.mergePets ?? true)
       </button>
       <button
         v-if="showSettings && onSettings"
-        class="settings-btn"
+        class="pill-btn"
         @click="onSettings"
-        title="Open editor"
+        title="Open Editor"
       >
-        ⚙
+        Editor
+      </button>
+      <button
+        v-if="showSettings && onBreakdown"
+        class="pill-btn"
+        @click="onBreakdown"
+        title="Open Pull Dashboard"
+      >
+        Pulls
       </button>
       <button
         class="pill-btn pin-btn"

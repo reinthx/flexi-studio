@@ -13,6 +13,7 @@ import type {
   ChangeZoneEvent,
   PartyChangedEvent,
   BroadcastMessageEvent,
+  LogLineEvent,
 } from './configSchema'
 
 export type OverlayEventMap = {
@@ -21,6 +22,8 @@ export type OverlayEventMap = {
   ChangeZone: ChangeZoneEvent
   PartyChanged: PartyChangedEvent
   BroadcastMessage: BroadcastMessageEvent
+  // Modern OverlayPlugin only — not available in legacy CEF mode
+  LogLine: LogLineEvent
 }
 
 type EventName = keyof OverlayEventMap
@@ -108,6 +111,8 @@ function detectMode(): ConnectionMode {
     return 'modern'
   }
 
+  if (typeof window.OverlayPluginApi?.callHandler === 'function') return 'legacy'
+
   if (typeof import.meta !== 'undefined' && (import.meta as { env?: { DEV?: boolean } }).env?.DEV) return 'mock'
 
   return 'legacy'
@@ -121,12 +126,15 @@ export function addListener<K extends EventName>(
 ): void {
   const mode = detectMode()
 
-  registerLegacyListeners()
-  if (!legacyCallbacks.has(event)) legacyCallbacks.set(event, new Set())
-  legacyCallbacks.get(event)!.add(callback as EventCallback<EventName>)
-
   if (mode === 'modern') {
     window.addOverlayListener!(event, callback)
+    return
+  }
+
+  if (mode === 'legacy') {
+    registerLegacyListeners()
+    if (!legacyCallbacks.has(event)) legacyCallbacks.set(event, new Set())
+    legacyCallbacks.get(event)!.add(callback as EventCallback<EventName>)
     return
   }
 
@@ -140,18 +148,16 @@ export function removeListener<K extends EventName>(
   callback: EventCallback<K>,
 ): void {
   const mode = detectMode()
+  legacyCallbacks.get(event)?.delete(callback as EventCallback<EventName>)
 
   if (mode === 'modern') {
     window.removeOverlayListener!(event, callback)
     return
   }
 
-  if (mode === 'legacy') {
-    legacyCallbacks.get(event)?.delete(callback as EventCallback<EventName>)
-    return
+  if (mode === 'mock') {
+    devRemoveListener(event, callback as EventCallback<EventName>)
   }
-
-  devRemoveListener(event, callback as EventCallback<EventName>)
 }
 
 export async function callHandler(params: Record<string, unknown>): Promise<unknown> {
@@ -267,8 +273,6 @@ const MOCK_COMBATANTS: Array<{ name: string; job: string; baseDps: number; baseH
   { name: 'Sammy Samface',     job: 'SAM', baseDps: 32400, baseHps: 500 },
 ]
 
-export const MOCK_NAMES = MOCK_COMBATANTS.map(c => c.name)
-
 function buildMockCombatData(): CombatDataEvent {
   const variance = () => 1 + (Math.random() - 0.5) * 0.05
 
@@ -295,6 +299,7 @@ function buildMockCombatData(): CombatDataEvent {
       encdps: String(c.dps),
       enchps: String(c.hps),
       dtps: dtps,
+      rdps: String(Math.round(c.dps * (1 + Math.random() * 0.08))),
       'damage%': ((c.dps / totalDps) * 100).toFixed(1),
       'healed%': ((c.hps / totalHps) * 100).toFixed(1),
       'crithit%': (18 + Math.random() * 10).toFixed(1),
@@ -315,6 +320,7 @@ function buildMockCombatData(): CombatDataEvent {
       ENCDPS: String(totalDps),
       ENCHPS: String(totalHps),
       DTRPS: durationSeconds > 0 ? String(Math.round(totalDamageTaken / durationSeconds)) : '0',
+      RDPS: String(Math.round(totalDps * 1.04)),
     },
     Combatant,
   }

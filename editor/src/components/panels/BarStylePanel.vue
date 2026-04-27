@@ -7,11 +7,16 @@ import LabelEditor from '../controls/LabelEditor.vue'
 import IconEditor from '../controls/IconEditor.vue'
 import ShadowEditor from '../controls/ShadowEditor.vue'
 import BarSlider from '../controls/BarSlider.vue'
+import ColorPicker from '../controls/ColorPicker.vue'
 import DragNumber from '../controls/DragNumber.vue'
-import type { BarFill, BarShape, BarLabel, BarShadow, IconConfig } from '@shared/configSchema'
+import type { BarFill, BarShape, BarLabel, BarShadow, IconConfig, BarOutline, MetricStripConfig, MetricStripSource } from '@shared/configSchema'
 
 const config = useConfigStore()
 const def = computed(() => config.profile.default)
+const isHorizontal = computed(() => config.profile.global.orientation === 'horizontal')
+const sizeLabel = computed(() => isHorizontal.value ? 'Width' : 'Height')
+const sizeMax = computed(() => isHorizontal.value ? 480 : 200)
+const horizontalHeight = computed(() => def.value.horizontalHeight ?? 72)
 
 function setFill(fill: BarFill)    { config.setDefaultFill(fill) }
 function setBg(bg: BarFill)        { config.setDefaultBg(bg) }
@@ -19,7 +24,40 @@ function setShape(shape: BarShape) { config.patchDefault({ shape }) }
 function setLabel(label: BarLabel) { config.patchDefault({ label }) }
 function setIcon(icon: IconConfig) { config.patchDefault({ label: { ...def.value.label, iconConfig: icon } }) }
 function setHeight(v: number)      { config.patchDefault({ height: v }) }
+function setHorizontalHeight(v: number) { config.patchDefault({ horizontalHeight: v }) }
 function setGap(v: number)         { config.patchDefault({ gap: v }) }
+
+const metricStrip = computed<MetricStripConfig>(() => def.value.metricStrip ?? {
+  enabled: false,
+  source: 'current',
+  height: 3,
+  width: 100,
+  offsetX: 0,
+  fill: { type: 'solid', color: '#ffffff', opacity: 0.9 },
+  fillSource: 'custom',
+  bg: { type: 'solid', color: 'rgba(0,0,0,0.35)', opacity: 1 },
+  bgSource: 'none',
+  inheritShape: true,
+  inheritShadow: true,
+  opacity: 1,
+  anchor: 'bottom',
+  placement: 'inside',
+  gap: 0,
+})
+const metricStripSources: Array<{ value: MetricStripSource; label: string }> = [
+  { value: 'current', label: 'Current Metric' },
+  { value: 'encdps', label: 'DPS' },
+  { value: 'enchps', label: 'HPS' },
+  { value: 'dtps', label: 'DTPS' },
+  { value: 'rdps', label: 'rDPS' },
+  { value: 'damage%', label: 'Damage %' },
+  { value: 'healed%', label: 'Healed %' },
+  { value: 'crithit%', label: 'Crit %' },
+  { value: 'threat', label: 'Threat' },
+]
+function patchMetricStrip(p: Partial<MetricStripConfig>) {
+  config.patchDefault({ metricStrip: { ...metricStrip.value, ...p } })
+}
 
 // Fill shadow
 const fillShadow = computed(() => def.value.shape.fillShadow ?? { enabled: false, color: '#000000', blur: 4, thickness: 0, offsetX: 0, offsetY: 1 })
@@ -27,10 +65,43 @@ function setFillShadow(s: BarShadow) {
   config.patchDefault({ shape: { ...def.value.shape, fillShadow: s } })
 }
 
+const fillOutline = computed<BarOutline>(() => def.value.shape.outline ?? {
+  color: 'rgba(255,255,255,0.15)',
+  thickness: { top: 0, right: 0, bottom: 1, left: 0 },
+  target: 'fill',
+})
+const fillOutlineEnabled = computed(() => {
+  const t = fillOutline.value.thickness
+  return (fillOutline.value.target === 'fill' || fillOutline.value.target === 'both')
+    && !!(t.top || t.right || t.bottom || t.left)
+})
+const fillOutlineWidth = computed(() => {
+  const t = fillOutline.value.thickness
+  return Math.max(t.top ?? 0, t.right ?? 0, t.bottom ?? 0, t.left ?? 0)
+})
+function patchFillOutline(p: Partial<BarOutline>) {
+  config.patchDefault({ shape: { ...def.value.shape, outline: { ...fillOutline.value, target: 'fill', ...p } } })
+}
+function setFillOutlineEnabled(enabled: boolean) {
+  patchFillOutline({
+    thickness: enabled
+      ? { top: 1, right: 1, bottom: 1, left: 1 }
+      : { top: 0, right: 0, bottom: 0, left: 0 },
+  })
+}
+function setFillOutlineWidth(width: number) {
+  patchFillOutline({ thickness: { top: width, right: width, bottom: width, left: width } })
+}
+
 // Background shadow — uses opacity mode (checkbox sets alpha to 0)
 const bgShadow = computed(() => def.value.shape.shadow ?? { enabled: true, color: 'rgba(0,0,0,0.6)', blur: 4, thickness: 0, offsetX: 0, offsetY: 2 })
 function setBgShadow(s: BarShadow) {
   config.patchDefault({ shape: { ...def.value.shape, shadow: s } })
+}
+
+const bgStroke = computed(() => def.value.shape.bgStroke ?? { enabled: false, color: '#ffffff', width: 1 })
+function patchBgStroke(p: Partial<NonNullable<BarShape['bgStroke']>>) {
+  config.patchDefault({ shape: { ...def.value.shape, bgStroke: { ...bgStroke.value, ...p } } })
 }
 
 // Preview fill color for ShapeEditor
@@ -42,7 +113,7 @@ const shapeFillColor = computed(() => {
 })
 
 const open = reactive<Record<string, boolean>>({
-  fill: false, bg: false, shape: false, label: false, icon: false, size: false,
+  fill: false, bg: false, metricStrip: false, shape: false, label: false, icon: false, size: false,
 })
 
 // Value badges
@@ -58,6 +129,13 @@ const bgBadge = computed(() => {
   const type = f.type[0].toUpperCase() + f.type.slice(1)
   const opStr = (f.opacity !== undefined && f.opacity < 1) ? ` · ${Math.round(f.opacity * 100)}%` : ''
   return type + opStr
+})
+
+const metricStripBadge = computed(() => {
+  if (!metricStrip.value.enabled) return 'Off'
+  const source = metricStripSources.find(s => s.value === metricStrip.value.source)?.label ?? 'Current Metric'
+  const placement = (metricStrip.value.placement ?? 'inside') === 'outside' ? 'Outside' : 'Inside'
+  return `${source} · ${placement}`
 })
 
 const shapeBadge = computed(() => {
@@ -86,7 +164,7 @@ const iconBadge = computed(() => {
 })
 
 const sizeBadge = computed(() => {
-  return `${def.value.height}px · ${def.value.gap}px gap`
+  return `${sizeLabel.value} ${def.value.height}px · ${def.value.gap}px gap`
 })
 </script>
 
@@ -101,7 +179,7 @@ const sizeBadge = computed(() => {
         <span class="chevron" :class="{ open: open.fill }">›</span>
       </div>
       <div v-if="open.fill" class="section-body">
-        <FillEditor :model-value="def.fill" @update:model-value="setFill" />
+        <FillEditor :model-value="def.fill" :orientation="config.profile.global.orientation" @update:model-value="setFill" />
         <div class="sub-divider">Position</div>
         <div class="row">
           <label class="ctrl-label">Offset Y</label>
@@ -120,10 +198,10 @@ const sizeBadge = computed(() => {
         <template v-if="def.shape.segmentFill?.enabled">
           <div class="row">
             <label class="ctrl-label">Width</label>
-            <BarSlider :model-value="def.shape.segmentFill?.segmentWidth ?? 8" :min="2" :max="40" :step="1" unit="px"
+            <BarSlider :model-value="def.shape.segmentFill?.segmentWidth ?? 8" :min="2" :max="80" :step="1" unit="px"
               track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
               @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, gap: 2, angle: 90 }), segmentWidth: v } } })" />
-            <DragNumber :model-value="def.shape.segmentFill?.segmentWidth ?? 8" :min="2" :max="40" :step="1" unit="px" :speed="1"
+            <DragNumber :model-value="def.shape.segmentFill?.segmentWidth ?? 8" :min="2" :max="80" :step="1" unit="px" :speed="1"
               @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, gap: 2, angle: 90 }), segmentWidth: v } } })" />
           </div>
           <div class="row">
@@ -160,6 +238,31 @@ const sizeBadge = computed(() => {
               @update:model-value="v => config.patchDefault({ shape: { ...def.shape, segmentFill: { ...(def.shape.segmentFill ?? { enabled: true, segmentWidth: 8, gap: 2 }), endHeight: v || undefined } } })" />
           </div>
         </template>
+        <div class="sub-divider">Outline</div>
+        <div class="row">
+          <label class="ctrl-label">Enabled</label>
+          <input
+            type="checkbox"
+            :checked="fillOutlineEnabled"
+            @change="e => setFillOutlineEnabled((e.target as HTMLInputElement).checked)"
+          />
+          <template v-if="fillOutlineEnabled">
+            <ColorPicker
+              :model-value="fillOutline.color"
+              label="Outline"
+              @update:model-value="c => patchFillOutline({ color: c })"
+            />
+            <DragNumber
+              :model-value="fillOutlineWidth"
+              :min="0"
+              :max="12"
+              :step="1"
+              unit="px"
+              :speed="1"
+              @update:model-value="setFillOutlineWidth"
+            />
+          </template>
+        </div>
         <div class="sub-divider">Shadow</div>
         <ShadowEditor :model-value="fillShadow" @update:model-value="setFillShadow" />
       </div>
@@ -173,9 +276,178 @@ const sizeBadge = computed(() => {
         <span class="chevron" :class="{ open: open.bg }">›</span>
       </div>
       <div v-if="open.bg" class="section-body">
-        <FillEditor :model-value="def.bg" @update:model-value="setBg" />
+        <FillEditor :model-value="def.bg" :orientation="config.profile.global.orientation" @update:model-value="setBg" />
+        <div class="sub-divider">Effects</div>
+        <div class="row">
+          <label class="ctrl-label">Outline</label>
+          <input
+            type="checkbox"
+            :checked="bgStroke.enabled"
+            @change="e => patchBgStroke({ enabled: (e.target as HTMLInputElement).checked })"
+          />
+          <template v-if="bgStroke.enabled">
+            <ColorPicker
+              :model-value="bgStroke.color"
+              label="Outline"
+              @update:model-value="c => patchBgStroke({ color: c })"
+            />
+            <DragNumber
+              :model-value="bgStroke.width"
+              :min="0"
+              :max="12"
+              :step="1"
+              unit="px"
+              :speed="1"
+              @update:model-value="v => patchBgStroke({ width: v })"
+            />
+          </template>
+        </div>
         <div class="sub-divider">Shadow</div>
         <ShadowEditor :model-value="bgShadow" enable-mode="opacity" @update:model-value="setBgShadow" />
+      </div>
+    </div>
+
+    <!-- Metric Strip -->
+    <div class="section section--metric-strip">
+      <div class="section-header" @click="open.metricStrip = !open.metricStrip">
+        <span class="section-title">Metric Strip</span>
+        <span class="badge">{{ metricStripBadge }}</span>
+        <span class="chevron" :class="{ open: open.metricStrip }">›</span>
+      </div>
+      <div v-if="open.metricStrip" class="section-body">
+        <div class="row">
+          <label class="ctrl-label">Enabled</label>
+          <input
+            type="checkbox"
+            :checked="metricStrip.enabled"
+            @change="e => patchMetricStrip({ enabled: (e.target as HTMLInputElement).checked })"
+          />
+        </div>
+        <template v-if="metricStrip.enabled">
+          <div class="row">
+            <label class="ctrl-label">Source</label>
+            <select
+              class="ctrl-select"
+              :value="metricStrip.source"
+              @change="e => patchMetricStrip({ source: (e.target as HTMLSelectElement).value as MetricStripSource })"
+            >
+              <option v-for="source in metricStripSources" :key="source.value" :value="source.value">
+                {{ source.label }}
+              </option>
+            </select>
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Height</label>
+            <BarSlider :model-value="metricStrip.height" :min="1" :max="24" :step="1" unit="px"
+              track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
+              @update:model-value="v => patchMetricStrip({ height: v })" />
+            <DragNumber :model-value="metricStrip.height" :min="1" :max="24" :step="1" unit="px" :speed="1"
+              @update:model-value="v => patchMetricStrip({ height: v })" />
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Width</label>
+            <BarSlider :model-value="metricStrip.width ?? 100" :min="1" :max="100" :step="1" unit="%"
+              track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
+              @update:model-value="v => patchMetricStrip({ width: v })" />
+            <DragNumber :model-value="metricStrip.width ?? 100" :min="1" :max="100" :step="1" unit="%" :speed="1"
+              @update:model-value="v => patchMetricStrip({ width: v })" />
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Offset X</label>
+            <BarSlider :model-value="metricStrip.offsetX ?? 0" :min="-200" :max="200" :step="1" unit="px"
+              track-color="linear-gradient(to right, var(--accent), #1a1a2e, var(--accent))"
+              @update:model-value="v => patchMetricStrip({ offsetX: v })" />
+            <DragNumber :model-value="metricStrip.offsetX ?? 0" :min="-200" :max="200" :step="1" unit="px" :speed="1"
+              @update:model-value="v => patchMetricStrip({ offsetX: v })" />
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Position</label>
+            <select
+              class="ctrl-select"
+              :value="metricStrip.anchor"
+              @change="e => patchMetricStrip({ anchor: (e.target as HTMLSelectElement).value as MetricStripConfig['anchor'] })"
+            >
+              <option value="bottom">Bottom</option>
+              <option value="top">Top</option>
+            </select>
+            <label class="ctrl-label" style="width:auto">Opacity</label>
+            <DragNumber :model-value="metricStrip.opacity" :min="0" :max="1" :step="0.01" :speed="0.005"
+              @update:model-value="v => patchMetricStrip({ opacity: v })" />
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Placement</label>
+            <select
+              class="ctrl-select"
+              :value="metricStrip.placement ?? 'inside'"
+              @change="e => patchMetricStrip({ placement: (e.target as HTMLSelectElement).value as MetricStripConfig['placement'] })"
+            >
+              <option value="inside">Inside Bar</option>
+              <option value="outside">Outside Bar</option>
+            </select>
+            <template v-if="(metricStrip.placement ?? 'inside') === 'outside'">
+              <label class="ctrl-label" style="width:auto">Gap</label>
+              <DragNumber :model-value="metricStrip.gap ?? 0" :min="0" :max="40" :step="1" unit="px" :speed="1"
+                @update:model-value="v => patchMetricStrip({ gap: v })" />
+            </template>
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Fill Style</label>
+            <select
+              class="ctrl-select"
+              :value="metricStrip.fillSource ?? 'custom'"
+              @change="e => patchMetricStrip({ fillSource: (e.target as HTMLSelectElement).value as MetricStripConfig['fillSource'] })"
+            >
+              <option value="custom">Own Style</option>
+              <option value="bar">Inherit Bar</option>
+              <option value="background">Inherit Background</option>
+            </select>
+          </div>
+          <div class="row">
+            <label class="ctrl-label">Track Bg</label>
+            <select
+              class="ctrl-select"
+              :value="metricStrip.bgSource ?? 'none'"
+              @change="e => patchMetricStrip({ bgSource: (e.target as HTMLSelectElement).value as MetricStripConfig['bgSource'] })"
+            >
+              <option value="none">None</option>
+              <option value="custom">Own Style</option>
+              <option value="bar">Inherit Bar</option>
+              <option value="background">Inherit Background</option>
+            </select>
+          </div>
+          <FillEditor
+            v-if="metricStrip.bgSource === 'custom'"
+            :model-value="metricStrip.bg ?? { type: 'solid', color: 'rgba(0,0,0,0.35)', opacity: 1 }"
+            :orientation="config.profile.global.orientation"
+            @update:model-value="bg => patchMetricStrip({ bg })"
+          />
+          <div class="row">
+            <label class="ctrl-label">
+              <input
+                type="checkbox"
+                :checked="metricStrip.inheritShape !== false"
+                @change="e => patchMetricStrip({ inheritShape: (e.target as HTMLInputElement).checked })"
+              />
+              Inherit Shape
+            </label>
+          </div>
+          <div v-if="metricStrip.inheritShape !== false" class="row">
+            <label class="ctrl-label">
+              <input
+                type="checkbox"
+                :checked="metricStrip.inheritShadow !== false"
+                @change="e => patchMetricStrip({ inheritShadow: (e.target as HTMLInputElement).checked })"
+              />
+              Inherit Shadow
+            </label>
+          </div>
+          <FillEditor
+            v-if="(metricStrip.fillSource ?? 'custom') === 'custom'"
+            :model-value="metricStrip.fill"
+            :orientation="config.profile.global.orientation"
+            @update:model-value="fill => patchMetricStrip({ fill })"
+          />
+        </template>
       </div>
     </div>
 
@@ -224,22 +496,30 @@ const sizeBadge = computed(() => {
       </div>
       <div v-if="open.size" class="section-body">
         <div class="row">
-          <label class="ctrl-label">Height</label>
-          <BarSlider :model-value="def.height" :min="1" :max="200" :step="1" unit="px"
+          <label class="ctrl-label">{{ sizeLabel }}</label>
+          <BarSlider :model-value="def.height" :min="1" :max="sizeMax" :step="1" unit="px"
             track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
             @update:model-value="setHeight" />
-          <DragNumber :model-value="def.height" :min="1" :max="200" :step="1" unit="px" :speed="1"
+          <DragNumber :model-value="def.height" :min="1" :max="sizeMax" :step="1" unit="px" :speed="1"
             @update:model-value="setHeight" />
+        </div>
+        <div v-if="isHorizontal" class="row">
+          <label class="ctrl-label">Height</label>
+          <BarSlider :model-value="horizontalHeight" :min="16" :max="240" :step="1" unit="px"
+            track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
+            @update:model-value="setHorizontalHeight" />
+          <DragNumber :model-value="horizontalHeight" :min="16" :max="240" :step="1" unit="px" :speed="1"
+            @update:model-value="setHorizontalHeight" />
         </div>
         <div class="row">
           <label class="ctrl-label">Gap</label>
-          <BarSlider :model-value="def.gap" :min="0" :max="16" :step="1" unit="px"
+          <BarSlider :model-value="def.gap" :min="-20" :max="20" :step="1" unit="px"
             track-color="linear-gradient(to right, #1a1a2e, var(--accent))"
             @update:model-value="setGap" />
-          <DragNumber :model-value="def.gap" :min="0" :max="16" :step="1" unit="px" :speed="1"
+          <DragNumber :model-value="def.gap" :min="-20" :max="20" :step="1" unit="px" :speed="1"
             @update:model-value="setGap" />
         </div>
-        <p class="hint">Drag the ⌟ handle on the preview window to set bar length (width/height).</p>
+        <p class="hint">{{ isHorizontal ? 'Width controls each column. Height controls the bar length inside the overlay window.' : 'Resize the live overlay window to set bar length.' }}</p>
       </div>
     </div>
 
@@ -250,12 +530,13 @@ const sizeBadge = computed(() => {
 .bar-style-panel { display: flex; flex-direction: column; min-width: 0; }
 
 .section { border-bottom: 1px solid var(--border); min-width: 0; border-left: 3px solid transparent; }
-.section--fill  { border-left-color: #9b5de5; }
-.section--bg    { border-left-color: #3a86ff; }
-.section--shape { border-left-color: #06d6a0; }
-.section--label { border-left-color: #ffd166; }
-.section--icon  { border-left-color: #ef476f; }
-.section--size  { border-left-color: #8ecae6; }
+.section--fill         { border-left-color: #9b5de5; }
+.section--bg           { border-left-color: #3a86ff; }
+.section--metric-strip { border-left-color: #ff9f1c; }
+.section--shape        { border-left-color: #06d6a0; }
+.section--label        { border-left-color: #ffd166; }
+.section--icon         { border-left-color: #ef476f; }
+.section--size         { border-left-color: #8ecae6; }
 
 .section-header {
   display: flex; align-items: center; gap: 6px;

@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { usePresetsStore, type CustomPreset } from '../../stores/presets'
-import { useConfigStore } from '../../stores/config'
 
 const store = usePresetsStore()
-const config = useConfigStore()
+
+function getOrientationIcon(profile: { global?: { orientation?: string } }) {
+  return profile.global?.orientation === 'horizontal' ? '↔' : '↕'
+}
 
 // ── Confirm modal ────────────────────────────────────────────────────────────
 const showConfirmModal = ref(false)
@@ -228,14 +230,16 @@ const categoryOptions = computed(() => [
         <span class="cat-count">{{ store.builtInPresets.length }}</span>
       </div>
       <div v-if="!store.builtInCollapsed" class="category-body">
-        <div v-if="store.builtInLoading" class="loading-hint">Loading presets...</div>
+        <div v-if="store.builtInLoading" class="loading-hint">Loading presets…</div>
         <div v-else class="preset-list">
           <button
             v-for="(p, idx) in store.builtInPresets" :key="p.filename"
             class="preset-btn full"
             :class="{ active: store.activePresetKey === `builtin:${p.name}` }"
             @click="store.applyBuiltIn(idx)"
-          >{{ p.name }}</button>
+          >{{ p.name }}
+            <span class="preset-orientation">{{ getOrientationIcon(p.profile) }}</span>
+          </button>
         </div>
       </div>
     </div>
@@ -288,6 +292,7 @@ const categoryOptions = computed(() => [
               @click="store.applyCustom(globalIndex)"
             >
               {{ preset.name }}
+              <span class="preset-orientation">{{ getOrientationIcon(preset.profile) }}</span>
               <span class="preset-exports" @click.stop="exportSingle(globalIndex)">Export</span>
             </button>
             <button class="preset-btn mini" @click="updatePreset(globalIndex)" title="Save">💾</button>
@@ -328,35 +333,13 @@ const categoryOptions = computed(() => [
               @click="store.applyCustom(globalIndex)"
             >
               {{ preset.name }}
+              <span class="preset-orientation">{{ getOrientationIcon(preset.profile) }}</span>
               <span class="preset-exports" @click.stop="exportSingle(globalIndex)">Export</span>
             </button>
             <button class="preset-btn mini" @click="updatePreset(globalIndex)" title="Save">💾</button>
             <button class="preset-btn mini" @click="deletePreset(globalIndex)" title="Delete">×</button>
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- If no categories and no uncategorized (simple flat list) -->
-    <div
-      v-if="store.uncategorizedPresets.length > 0 && store.categories.length === 0"
-      class="preset-list flat-list"
-    >
-      <div
-        v-for="{ preset, globalIndex } in store.uncategorizedPresets"
-        :key="globalIndex"
-        class="preset-row"
-      >
-        <button
-          class="preset-btn full"
-          :class="{ active: store.activePresetKey === `custom:${preset.name}` }"
-          @click="store.applyCustom(globalIndex)"
-        >
-          {{ preset.name }}
-          <span class="preset-exports" @click.stop="exportSingle(globalIndex)">Export</span>
-        </button>
-        <button class="preset-btn mini" @click="updatePreset(globalIndex)" title="Save">💾</button>
-        <button class="preset-btn mini" @click="deletePreset(globalIndex)" title="Delete">×</button>
       </div>
     </div>
 
@@ -570,10 +553,6 @@ const categoryOptions = computed(() => [
   flex-direction: column;
   gap: 3px;
 }
-.flat-list {
-  margin-top: 8px;
-}
-
 /* ── Preset row (draggable) ────────────────────────────────────────────────── */
 .preset-row {
   display: flex;
@@ -643,6 +622,15 @@ const categoryOptions = computed(() => [
   font-size: 9px;
   padding: 2px 6px;
   border-radius: 3px;
+}
+.preset-orientation {
+  position: absolute;
+  right: 50px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
 }
 .preset-exports:hover {
   background: var(--border);

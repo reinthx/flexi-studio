@@ -1,43 +1,19 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
-import { copyFileSync, mkdirSync, existsSync, readdirSync, statSync, unlinkSync } from 'fs'
-import { customFontsPlugin } from '../build/customFontsPlugin'
-
-function copyFonts(fontsDirs: string[]) {
-  return {
-    name: 'copy-fonts',
-    closeBundle() {
-      const destDir = resolve(__dirname, '../dist/overlay/assets/fonts')
-      mkdirSync(destDir, { recursive: true })
-      for (const srcDir of fontsDirs) {
-        if (!existsSync(srcDir)) continue
-        for (const file of readdirSync(srcDir)) {
-          const srcPath = resolve(srcDir, file)
-          if (statSync(srcPath).isFile()) {
-            copyFileSync(srcPath, resolve(destDir, file))
-          }
-        }
-      }
-      // Remove any fonts accidentally emitted to root
-      const rootDir = resolve(__dirname, '../dist/overlay')
-      for (const file of readdirSync(rootDir)) {
-        if (['.ttf', '.otf', '.woff', '.woff2'].some(e => file.endsWith(e))) {
-          try { unlinkSync(resolve(rootDir, file)) } catch {}
-        }
-      }
-    },
-  }
-}
+import { copyFontsPlugin, customFontsPlugin } from '../build/customFontsPlugin'
 
 const builtInFontsDir = resolve(__dirname, '../fonts')
 // Set CUSTOM_FONTS_DIR in .env.local to include your own licensed fonts at build time
 const userFontsDir = process.env.CUSTOM_FONTS_DIR ?? ''
 const fontsDirs = [builtInFontsDir, userFontsDir].filter(Boolean)
 
-export default defineConfig({
+export default defineConfig(() => {
+  const outputDir = resolve(__dirname, '../dist/overlay')
+
+  return {
   base: './',
-  plugins: [vue(), copyFonts(fontsDirs), ...customFontsPlugin(fontsDirs)],
+  plugins: [vue(), copyFontsPlugin(fontsDirs, outputDir), ...customFontsPlugin(fontsDirs)],
   publicDir: false,
   resolve: {
     alias: {
@@ -51,7 +27,7 @@ export default defineConfig({
     port: 5173,
   },
   build: {
-    outDir: '../dist/overlay',
+    outDir: outputDir,
     emptyOutDir: true,
     target: 'es2015',
     chunkSizeWarningLimit: 700,
@@ -59,10 +35,7 @@ export default defineConfig({
     assetsDir: 'assets',
     rollupOptions: {
       input: resolve(__dirname, 'index.html'),
-      output: {
-        entryFileNames: 'assets/index.js',
-        format: 'iife',
-      },
     },
   },
+  }
 })

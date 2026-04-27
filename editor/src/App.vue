@@ -14,30 +14,47 @@ const liveData = useLiveDataStore()
 const config   = useConfigStore()
 const presets  = usePresetsStore()
 
-const isOverlayMode = computed(() => {
+type Route = 'overlay' | 'editor' | 'breakdown'
+
+function resolveRoute(): Route {
   const hash = window.location.hash.slice(1).toLowerCase() || '/'
-  return hash !== '/editor' && hash !== 'editor'
-})
+  if (hash === '/editor' || hash === 'editor') return 'editor'
+  if (hash === '/breakdown' || hash === 'breakdown') return 'breakdown'
+  return 'overlay'
+}
+
+const currentRoute = ref<Route>(resolveRoute())
+
+// Keep overlay mode alias for all existing v-if/v-else references
+const isOverlayMode = computed(() => currentRoute.value === 'overlay')
+
+const BreakdownPopout = defineAsyncComponent(() => import('../../overlay/src/components/AbilityBreakdownPopout.vue'))
 
 const OverlayMeter = defineAsyncComponent(() => import('../../overlay/src/components/MeterView.vue'))
 
 const applySuccess = ref(false)
 let applyTimer: ReturnType<typeof setTimeout> | null = null
 
-function applyLive() {
+async function applyLive() {
   const message = { source: 'act-flexi-editor', msg: config.profile, timestamp: Date.now() }
   localStorage.setItem('act-flexi-github-sync', JSON.stringify(message))
   setTimeout(() => {
     localStorage.removeItem('act-flexi-github-sync')
   }, 2000)
-  config.save()
+  await config.save()
   applySuccess.value = true
   if (applyTimer) clearTimeout(applyTimer)
   applyTimer = setTimeout(() => { applySuccess.value = false }, 1500)
 }
 
+function openBreakdown() {
+  const url = new URL(window.location.href)
+  url.hash = '/breakdown'
+  window.open(url.toString(), 'flexi-breakdown', 'width=1300,height=840,resizable=yes')
+}
+
 onMounted(async () => {
-  if (isOverlayMode.value) return
+  if (currentRoute.value !== 'editor') return
   liveData.setProfileGetter(() => config.profile)
   liveData.start()
   const hasData = await config.load()
@@ -49,7 +66,9 @@ onMounted(async () => {
   restoreDirectoryFonts().catch(() => {})
 })
 onUnmounted(() => {
-  if (!isOverlayMode.value) liveData.stop()
+  if (currentRoute.value === 'editor') {
+    liveData.stop()
+  }
 })
 
 // ── Right sidebar sections ────────────────────────────────────────────────────
@@ -84,6 +103,8 @@ const globalBadge = computed(() => {
   const metric = g.dpsType === 'encdps' ? 'DPS' : g.dpsType === 'enchps' ? 'HPS' : g.dpsType ?? 'DPS'
   return `${orient} · ${metric}`
 })
+
+const saveStateLabel = computed(() => applySuccess.value ? 'Live overlay updated' : config.dirty ? 'Unsaved changes' : 'Saved')
 </script>
 
 <template>
@@ -91,6 +112,9 @@ const globalBadge = computed(() => {
   <div v-if="isOverlayMode" class="overlay-mode">
     <OverlayMeter />
   </div>
+
+  <!-- Breakdown Popout -->
+  <BreakdownPopout v-else-if="currentRoute === 'breakdown'" />
 
   <!-- Editor Mode -->
   <div v-else class="editor-root">
@@ -100,8 +124,10 @@ const globalBadge = computed(() => {
         <span class="logo">Flexi Studio</span>
         <span class="divider">|</span>
         <span class="subtitle">A modern overlay for ACT</span>
+        <span class="save-state" :class="{ dirty: config.dirty, success: applySuccess }">{{ saveStateLabel }}</span>
       </div>
       <div class="top-bar-right">
+        <button class="utility-btn" @click="openBreakdown">Open Breakdown</button>
         <button class="apply-btn" :class="{ success: applySuccess }" @click="applyLive">
           {{ applySuccess ? '✓ Applied' : 'Apply Changes' }}
         </button>
@@ -165,6 +191,7 @@ const globalBadge = computed(() => {
 .editor-root {
   width: 100vw;
   height: 100vh;
+  min-width: 980px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -206,6 +233,28 @@ const globalBadge = computed(() => {
   color: #666;
 }
 
+.save-state {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-control);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+.save-state.dirty {
+  color: #ffd166;
+  border-color: rgba(255, 209, 102, 0.28);
+  background: rgba(255, 209, 102, 0.09);
+}
+
+.save-state.success {
+  color: #9ff0c0;
+  border-color: rgba(58, 158, 95, 0.35);
+  background: rgba(58, 158, 95, 0.14);
+}
+
 .top-bar-right {
   display: flex;
   align-items: center;
@@ -222,6 +271,22 @@ const globalBadge = computed(() => {
   cursor: pointer;
   transition: background 0.2s, transform 0.1s;
   min-width: 110px;
+}
+
+.utility-btn {
+  background: var(--bg-control);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.utility-btn:hover {
+  background: var(--bg-hover);
+  border-color: rgba(155, 93, 229, 0.45);
 }
 
 .apply-btn:hover {
@@ -267,6 +332,7 @@ const globalBadge = computed(() => {
 /* Preview area */
 .preview-area {
   flex: 1;
+  min-width: 360px;
   position: relative;
   overflow: hidden;
   background: var(--bg-base);

@@ -16,7 +16,8 @@ import {
   deepClone,
 } from '@shared/index'
 import type { CombatDataEvent, ChangePrimaryPlayerEvent, PartyChangedEvent, Frame, BarFrame, Profile } from '@shared/index'
-import { formatValue } from '../lib/formatValue'
+import { formatValue } from '@shared/formatValue'
+import { buildMetricFractions, createMetricFractionContext } from '@shared/metricFractions'
 import { normalizeJob } from '@shared/jobMap'
 
 export const useLiveDataStore = defineStore('editorLiveData', () => {
@@ -52,16 +53,29 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
     }
 
     filtered = [...filtered]
-      .sort((a, b) => parseFloat(b[g.sortBy] ?? '0') - parseFloat(a[g.sortBy] ?? '0'))
+      .sort((a, b) => {
+        if (g.sortBy === 'role') {
+          const roleOrder: Record<string, number> = { tank: 0, healer: 1, melee: 2, ranged: 3, caster: 4, unknown: 5 }
+          const getJobRole = (job: string) => {
+            const JOB_ROLES: Record<string, string> = { PLD: 'tank', WAR: 'tank', DRK: 'tank', GNB: 'tank', WHM: 'healer', SCH: 'healer', AST: 'healer', SGE: 'healer', MNK: 'melee', DRG: 'melee', NIN: 'melee', SAM: 'melee', RPR: 'melee', VPR: 'melee', BRD: 'ranged', MCH: 'ranged', DNC: 'ranged', BLM: 'caster', SMN: 'caster', RDM: 'caster', PCT: 'caster', BLU: 'caster' }
+            return JOB_ROLES[normalizeJob(job)] ?? 'unknown'
+          }
+          return (roleOrder[getJobRole(b['Job'] ?? '')] ?? 5) - (roleOrder[getJobRole(a['Job'] ?? '')] ?? 5)
+        }
+        return parseFloat(b[g.sortBy] ?? '0') - parseFloat(a[g.sortBy] ?? '0')
+      })
       .slice(0, g.maxCombatants)
 
-    const maxVal = parseFloat(filtered[0]?.[g.dpsType] ?? '1') || 1
+    const effectiveDpsType = (g.dpsType as any) === 'role' ? 'encdps' : g.dpsType
+    const maxVal = parseFloat(filtered[0]?.[effectiveDpsType] ?? '1') || 1
+    const metricFractionContext = createMetricFractionContext(filtered)
 
-    const bars: BarFrame[] = filtered.map((c, i) => {
-      const rawVal = parseFloat(c[g.dpsType] ?? '0')
+    const bars: BarFrame[] = filtered.map((c) => {
+      const rawVal = parseFloat(c[effectiveDpsType] ?? '0')
       return {
         name: c.name,
         job: normalizeJob(c['Job'] ?? ''),
+        partyGroup: 'Party',
         fillFraction: rawVal / maxVal,
         displayValue: formatValue(rawVal, g.valueFormat),
         displayPct: c['damage%'] ?? '0',
@@ -70,7 +84,12 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
         directhit: c['DirectHitPct'] ?? '---',
         tohit: c.tohit ?? '---',
         enchps: formatValue(parseFloat(c.enchps ?? '0'), g.valueFormat),
+        rdps: formatValue(parseFloat(c['rdps'] ?? '0'), g.valueFormat),
+        rawValue: rawVal,
+        rawEnchps: parseFloat(c.enchps ?? '0'),
+        rawRdps: parseFloat(c['rdps'] ?? '0'),
         maxHit: (c.maxhit ?? '---').replace('-', ' '),
+        metricFractions: buildMetricFractions(metricFractionContext, c),
         alpha: 1,
       }
     })
@@ -82,6 +101,8 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
       encounterDuration: event.Encounter['duration'] ?? '',
       totalDps: formatValue(parseFloat(event.Encounter['ENCDPS'] ?? '0'), g.valueFormat),
       totalHps: formatValue(parseFloat(event.Encounter['ENCHPS'] ?? '0'), g.valueFormat),
+      totalDtps: formatValue(parseFloat(event.Encounter['DTRPS'] ?? '0'), g.valueFormat),
+      totalRdps: formatValue(parseFloat(event.Encounter['RDPS'] ?? '0'), g.valueFormat),
       isActive: event.isActive === 'true',
     })
   }

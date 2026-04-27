@@ -53,6 +53,7 @@ const TOKENS = [
   { token: '{crithit%}',   label: 'Crit %' },
   { token: '{directhit%}', label: 'Direct Hit %' },
   { token: '{enchps}',     label: 'HPS' },
+  { token: '{rdps}',       label: 'rDPS' },
   { token: '{maxHit}',     label: 'Max Hit' },
   { token: '{maxHitName}', label: 'Max Hit Name' },
   { token: '{maxHitValue}', label: 'Max Hit Value' },
@@ -111,7 +112,7 @@ function patchField(id: string, p: Partial<LabelField>) {
 
 function addField() {
   const fields = getFields()
-  if (fields.length >= 5) return
+  if (fields.length >= 7) return
   const id = `f${Date.now()}`
   patchFields([...fields, {
     id,
@@ -261,6 +262,29 @@ function insertToken(fieldId: string, token: string) {
                 </button>
               </div>
             </div>
+            <div class="row">
+              <label class="ctrl-label">Grows From</label>
+              <div class="btn-group">
+                <button v-for="a in [{ id: undefined, label: 'Auto', title: 'Match anchor direction' }, { id: 'left', label: '◀|', title: 'Left edge pinned — text grows right' }, { id: 'center', label: '◆', title: 'Center pinned — text grows both ways' }, { id: 'right', label: '|▶', title: 'Right edge pinned — text grows left' }]" :key="String(a.id)"
+                  class="anchor-btn" :class="{ active: (field.growsFrom ?? undefined) === a.id }"
+                  :title="a.title"
+                  type="button" @click="patchField(field.id, { growsFrom: a.id as LabelField['growsFrom'] })">
+                  {{ a.label }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Value Format -->
+            <div class="row">
+              <label class="ctrl-label">Value Fmt</label>
+              <select class="ctrl-select" :value="field.valueFormat ?? ''"
+                @change="e => patchField(field.id, { valueFormat: ((e.target as HTMLSelectElement).value || undefined) as LabelField['valueFormat'] })">
+                <option value="">Global</option>
+                <option value="raw">Raw (1234)</option>
+                <option value="abbreviated">Short (1.2k)</option>
+                <option value="formatted">Formatted (1,234)</option>
+              </select>
+            </div>
 
             <!-- Offsets -->
             <div class="row">
@@ -293,16 +317,16 @@ function insertToken(fieldId: string, token: string) {
             <!-- Style Override button -->
             <button class="field-style-btn" type="button" @click.stop="openStyleModal(field.id)">
               Style Override
-              <span v-if="field.font || field.fontSize || field.colorMode || field.selfMode || field.maxWidth" class="style-dot" />
+              <span v-if="field.font || field.fontSize || field.colorMode || field.selfMode || field.maxWidth || field.growsFrom" class="style-dot" />
             </button>
           </div>
         </div>
 
         <!-- Add field -->
-        <button v-if="getFields().length < 5" class="add-field-btn" type="button" @click="addField">
+        <button v-if="getFields().length < 7" class="add-field-btn" type="button" @click="addField">
           + Add Field
         </button>
-        <p v-else class="hint">Maximum 5 fields</p>
+        <p v-else class="hint">Maximum 7 fields</p>
       </div>
     </div>
 
@@ -440,12 +464,31 @@ function insertToken(fieldId: string, token: string) {
             <span class="sm-hint">Empty = inherit global font</span>
           </div>
 
-          <!-- Size -->
+          <!-- Size + Rotation -->
           <div class="sm-row">
             <label class="sm-label">Size</label>
             <DragNumber :model-value="getStyleModalField()!.fontSize ?? 0" :min="0" :max="72" unit="px" :speed="1"
               @update:model-value="v => patchModalField({ fontSize: v > 0 ? v : undefined })" />
             <span class="sm-hint-inline">0 = global</span>
+          </div>
+          <div class="sm-row">
+            <label class="sm-label" style="margin-left:12px">Rotation</label>
+            <DragNumber :model-value="getStyleModalField()!.rotation ?? 0" :min="0" :max="360" unit="°" :speed="1"
+              @update:model-value="v => patchModalField({ rotation: v > 0 ? v : undefined })" />
+            <span class="sm-hint-inline">0 = none</span>
+          </div>
+          <div class="sm-row">
+            <label class="sm-label">
+              <input type="checkbox" :checked="!!getStyleModalField()!.autoRotation"
+                @change="e => patchModalField({ autoRotation: (e.target as HTMLInputElement).checked ? true : undefined })" />
+              Match Bar Angle
+            </label>
+          </div>
+          <div v-if="getStyleModalField()!.autoRotation" class="sm-row">
+            <label class="sm-label">Width Ratio</label>
+            <DragNumber :model-value="getStyleModalField()!.autoRotationRatio ?? 0" :min="10" :max="500" :step="10" unit="" :speed="5"
+              @update:model-value="v => patchModalField({ autoRotationRatio: v > 0 ? v : undefined })" />
+            <span class="sm-hint-inline">0 = auto</span>
           </div>
 
           <!-- Color mode -->
@@ -731,7 +774,7 @@ function insertToken(fieldId: string, token: string) {
 .style-modal {
   position: fixed; z-index: 9999;
   width: 320px;
-  height: 370px;
+  height: 390px;
   background: var(--bg-panel); border: 1px solid var(--border);
   border-radius: 6px; box-shadow: 0 8px 32px rgba(0,0,0,0.6);
   display: flex; flex-direction: column; overflow: hidden;

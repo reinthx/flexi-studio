@@ -7,8 +7,19 @@
  * Uses deep merge so partial overrides only replace specified fields.
  */
 
-import type { BarFill, BarStyle, Profile, Role } from './configSchema'
+import type { BarFill, BarStyle, Profile, Role, Job, StyleOverrides } from './configSchema'
 import { getRole } from './jobMap'
+
+type StyleOverrideWithGradient = Partial<BarStyle> & { gradientColor?: string }
+
+function getRoleOverride(role: Role, overrides: StyleOverrides): StyleOverrideWithGradient | undefined {
+  return overrides.byRole[role]
+}
+
+function getJobOverride(job: string, overrides: StyleOverrides): StyleOverrideWithGradient | undefined {
+  const jobKey = job.toUpperCase() as keyof typeof overrides.byJob
+  return overrides.byJob[jobKey]
+}
 
 /**
  * Apply a color tint override to the current fill, preserving fill type and opacity.
@@ -75,21 +86,20 @@ function applyTintsToFill(fill: BarFill, overrides: Profile['overrides'], combat
 
   // Apply role tint if enabled
   if (applyRoleColor) {
-    const roleOverride = overrides.byRole[role]
+    const roleOverride = getRoleOverride(role, overrides)
     const roleEnabled = overrides.byRoleEnabled?.[role] ?? true
     if (roleOverride && roleEnabled && roleOverride.fill?.type === 'solid') {
-      const gradEnd = (roleOverride as any).gradientColor ?? '#000000'
+      const gradEnd = roleOverride.gradientColor ?? '#000000'
       fill = applyFillColor(fill, roleOverride.fill.color, gradEnd)
     }
   }
 
   // Apply job tint if enabled
   if (applyJobColor) {
-    const jobKey = combatantJob.toUpperCase() as keyof typeof overrides.byJob
-    const jobOverride = overrides.byJob[jobKey]
-    const jobEnabled = overrides.byJobEnabled?.[jobKey] ?? true
+    const jobOverride = getJobOverride(combatantJob, overrides)
+    const jobEnabled = overrides.byJobEnabled?.[combatantJob.toUpperCase() as Job] ?? true
     if (jobOverride && jobEnabled && jobOverride.fill?.type === 'solid') {
-      const gradEnd = (jobOverride as any).gradientColor ?? '#000000'
+      const gradEnd = jobOverride.gradientColor ?? '#000000'
       fill = applyFillColor(fill, jobOverride.fill.color, gradEnd)
     }
   }
@@ -118,7 +128,7 @@ export function resolveBarStyle(
 
   // Self override — color tint, preserving fill type and opacity
   if (isSelf && overrides.self?.fill?.type === 'solid') {
-    const gradEnd = (overrides.self as any).gradientColor ?? '#000000'
+    const gradEnd = overrides.self.gradientColor ?? '#000000'
     base.fill = applyFillColor(base.fill, overrides.self.fill.color, gradEnd)
   }
 

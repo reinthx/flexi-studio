@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { deepClone, deepMerge } from '@shared/index'
 import { DEFAULT_PROFILE } from '@shared/presets'
-import { loadGoogleFont, loadCustomFont, isGoogleFont, isCustomFont, loadAllConfiguredFonts } from '@shared/googleFonts'
+import { loadAllConfiguredFonts } from '@shared/googleFonts'
+import { parseProfileSafe } from '@shared/profileValidator'
 import type { Profile } from '@shared/configSchema'
 
 const STORAGE_KEY = 'act-flexi-overlay-config'
@@ -14,10 +15,13 @@ export const useOverlayConfig = defineStore('overlayConfig', () => {
   async function load(): Promise<void> {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved) {
-      try {
-        profile.value = deepMerge(deepClone(DEFAULT_PROFILE), JSON.parse(saved))
+      const parsed = parseProfileSafe(saved)
+      if (parsed) {
+        profile.value = deepMerge(deepClone(DEFAULT_PROFILE), parsed as Profile)
         loaded.value = true
-      } catch { /* corrupt data, use default */ }
+      } else {
+        console.warn('[overlayConfig] corrupt saved profile, using default')
+      }
     }
     loadAllConfiguredFonts(profile.value)
   }

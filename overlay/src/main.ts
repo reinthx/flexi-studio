@@ -2,12 +2,15 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import { loadCommonJs } from './commonJsLoader'
-import { loadGoogleFont, isGoogleFont, loadAllConfiguredFonts, getCustomFontsList, loadCustomFont } from '@shared/googleFonts'
+import { loadGoogleFont, isGoogleFont, getCustomFontsList, loadCustomFont } from '@shared/googleFonts'
+import { injectGradientAnimations } from '@shared/cssBuilder'
 import '@shared/animations.css'
 
 export { loadGoogleFont, isGoogleFont, loadCustomFont }
 
 async function init(): Promise<void> {
+  injectGradientAnimations()
+
   const customFonts = getCustomFontsList()
   for (const f of customFonts) {
     loadCustomFont(f.name)

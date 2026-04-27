@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { HeaderConfig, Frame, GlobalConfig } from '@shared/configSchema'
-import { renderTemplate } from '../../lib/templateRenderer'
+import type { HeaderConfig, GlobalConfig } from '@shared/configSchema'
+import type { Frame } from '@shared'
+import { renderTemplate } from '@shared/templateRenderer'
 import HeaderBar from '@shared/HeaderBar.vue'
 
 const props = defineProps<{
@@ -18,6 +19,8 @@ const tokens = computed(() => ({
   duration:    props.frame?.encounterDuration ?? '04:32',
   totalDPS:    props.frame?.totalDps ?? '184.2k',
   totalHPS:    props.frame?.totalHps ?? '42.1k',
+  totalDTPS:   props.frame?.totalDtps ?? '0',
+  totalRDPS:   props.frame?.totalRdps ?? '184.2k',
   pullNumber:  '1',
   pullCount:   '1',
 }))

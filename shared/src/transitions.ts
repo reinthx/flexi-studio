@@ -13,6 +13,7 @@
 export interface BarFrame {
   name: string
   job: string
+  partyGroup: string
   /** 0–1 representing fill fraction (value / max value in list) */
   fillFraction: number
   /** Raw display value (already formatted by caller) */
@@ -23,7 +24,12 @@ export interface BarFrame {
   directhit: string
   tohit: string
   enchps: string
+  rdps: string
+  rawValue: number
+  rawEnchps: number
+  rawRdps: number
   maxHit: string
+  metricFractions?: Record<string, number>
   /** 0–1 for enter/exit fade */
   alpha: number
   /** Rank in the list (1 = top) */
@@ -37,6 +43,7 @@ export interface Frame {
   totalDps: string
   totalHps: string
   totalDtps: string
+  totalRdps: string
   isActive: boolean
 }
 
@@ -48,6 +55,12 @@ function easeInOutQuad(t: number): number {
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
+}
+
+function lerpRecord(a: Record<string, number> | undefined, b: Record<string, number> | undefined, t: number): Record<string, number> | undefined {
+  if (!a && !b) return undefined
+  const keys = new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})])
+  return Object.fromEntries([...keys].map(key => [key, lerp(a?.[key] ?? 0, b?.[key] ?? 0, t)]))
 }
 
 export class TransitionEngine {
@@ -129,6 +142,7 @@ export class TransitionEngine {
         bars.push({
           name,
           job: n.job,
+          partyGroup: n.partyGroup,
           fillFraction: lerp(p.fillFraction, n.fillFraction, et),
           displayValue: n.displayValue,
           displayPct: n.displayPct,
@@ -137,15 +151,20 @@ export class TransitionEngine {
           directhit: n.directhit,
           tohit: n.tohit,
           enchps: n.enchps,
+          rdps: n.rdps,
+          rawValue: lerp(p.rawValue, n.rawValue, et),
+          rawEnchps: lerp(p.rawEnchps, n.rawEnchps, et),
+          rawRdps: lerp(p.rawRdps, n.rawRdps, et),
           maxHit: n.maxHit,
+          metricFractions: lerpRecord(p.metricFractions, n.metricFractions, et),
           alpha: lerp(p.alpha, n.alpha, et),
         })
       } else if (n) {
         // New bar — fade in
-        bars.push({ ...n, fillFraction: lerp(0, n.fillFraction, et), alpha: et })
+        bars.push({ ...n, fillFraction: lerp(0, n.fillFraction, et), metricFractions: lerpRecord(undefined, n.metricFractions, et), alpha: et })
       } else if (p) {
         // Removed bar — fade out
-        bars.push({ ...p, fillFraction: lerp(p.fillFraction, 0, et), alpha: 1 - et })
+        bars.push({ ...p, fillFraction: lerp(p.fillFraction, 0, et), metricFractions: lerpRecord(p.metricFractions, undefined, et), alpha: 1 - et })
       }
     }
 
@@ -159,6 +178,7 @@ export class TransitionEngine {
       totalDps: next.totalDps,
       totalHps: next.totalHps,
       totalDtps: next.totalDtps,
+      totalRdps: next.totalRdps,
       isActive: next.isActive,
     }
   }

@@ -5,7 +5,7 @@ import BarSlider from '../controls/BarSlider.vue'
 import DragNumber from '../controls/DragNumber.vue'
 import ColorPicker from '../controls/ColorPicker.vue'
 import TextureEditor from '../controls/TextureEditor.vue'
-import type { GradientFill, TextureFill, BarStyle } from '@shared/configSchema'
+import type { GradientFill, TextureFill } from '@shared/configSchema'
 import { RANK1_THEMES } from '@shared/presets'
 import { CROWN_CUTE_SRC as CROWN_CUTE_DEFAULT } from '@shared/crownAssets'
 import {
@@ -21,7 +21,7 @@ const open = ref({ window: true, layout: false, values: false, animation: false,
 function toggle(k: keyof typeof open.value) { open.value[k] = !open.value[k] }
 
 function applyRank1Theme(themeKey: string) {
-  const theme = RANK1_THEMES[themeKey as keyof typeof RANK1_THEMES]
+  const theme = RANK1_THEMES[themeKey as keyof typeof RANK1_THEMES] as any
   if (!theme) return
   patch({
     rankIndicator: {
@@ -41,10 +41,10 @@ function onRank1ThemeChange(e: Event) {
   if (value) applyRank1Theme(value)
 }
 
-const windowTexture = computed(() => {
+const windowTexture = computed<TextureFill>(() => {
   const wb = g.value.windowBackground
   if (wb?.type === 'texture' && wb?.texture) return wb.texture
-  return { src: '', repeat: 'repeat', opacity: 1, blendMode: 'normal' }
+  return { src: '', repeat: 'repeat' as const, opacity: 1, blendMode: 'normal' }
 })
 
 function updateTexture(t: TextureFill) {
@@ -52,15 +52,15 @@ function updateTexture(t: TextureFill) {
 }
 
 function updateRank1GradientColor1(c: string) {
-  const stops = g.value.rankIndicator?.rank1NameStyle?.gradient?.stops
-  const color2 = stops?.[1]?.color ?? '#FFA500'
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { ...g.value.rankIndicator?.rank1NameStyle, gradient: { ...g.value.rankIndicator?.rank1NameStyle?.gradient, stops: [{ color: c, position: 0 }, { color: color2, position: 1 }] } } } })
+  const grad = g.value.rankIndicator?.rank1NameStyle?.gradient
+  const color2 = grad?.stops?.[1]?.color ?? '#FFA500'
+  patchRank1NameGradient({ stops: [{ color: c, position: 0 }, { color: color2, position: 1 }] })
 }
 
 function updateRank1GradientColor2(c: string) {
-  const stops = g.value.rankIndicator?.rank1NameStyle?.gradient?.stops
-  const color1 = stops?.[0]?.color ?? '#FFD700'
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { ...g.value.rankIndicator?.rank1NameStyle, gradient: { ...g.value.rankIndicator?.rank1NameStyle?.gradient, stops: [{ color: color1, position: 0 }, { color: c, position: 1 }] } } } })
+  const grad = g.value.rankIndicator?.rank1NameStyle?.gradient
+  const color1 = grad?.stops?.[0]?.color ?? '#FFD700'
+  patchRank1NameGradient({ stops: [{ color: color1, position: 0 }, { color: c, position: 1 }] })
 }
 
 function getRank1Color(): string {
@@ -102,8 +102,14 @@ function onRank1Color2Change(c: string) {
   }
 }
 
-function patchRank1Style(style: Partial<BarStyle>) {
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1Style: { ...g.value.rankIndicator?.rank1Style, ...style } } })
+function patchRank1NameGradient(p: Partial<{ type: string; angle: number; stops: any[] }>) {
+  const ns = g.value.rankIndicator?.rank1NameStyle
+  const grad = ns?.gradient
+  patch({ rankIndicator: { ...g.value.rankIndicator, rank1NameStyle: { enabled: ns?.enabled ?? false, ...ns, gradient: { type: (p.type ?? grad?.type ?? 'linear') as 'linear' | 'radial', angle: p.angle ?? grad?.angle ?? 90, stops: p.stops ?? grad?.stops ?? [] } } } })
+}
+
+function patchRank1Style(fields: Record<string, any>) {
+  patch({ rankIndicator: { ...g.value.rankIndicator, rank1Style: { ...g.value.rankIndicator?.rank1Style, ...fields } as any } })
 }
 
 function patchCrown(fields: Record<string, any>) {
@@ -111,7 +117,7 @@ function patchCrown(fields: Record<string, any>) {
 }
 
 function patchR1Icon(fields: Record<string, any>) {
-  patch({ rankIndicator: { ...g.value.rankIndicator, rank1IconStyle: { ...g.value.rankIndicator?.rank1IconStyle, ...fields } } })
+  patch({ rankIndicator: { ...g.value.rankIndicator, rank1IconStyle: { enabled: false, ...g.value.rankIndicator?.rank1IconStyle, ...fields } } })
 }
 
 function onCrownImageUpload(e: Event) {
@@ -197,16 +203,18 @@ const windowOpacity = computed(() => g.value.windowOpacity ?? 1)
 function setWindowOpacity(v: number) { patch({ windowOpacity: v }) }
 
 function setWbType(t: string) {
-  const base = g.value.windowBackground ?? { type: 'solid' as const, color: g.value.windowBg }
+  const wb = g.value.windowBackground
+  const existingColor = (wb as any)?.color ?? g.value.windowBg ?? 'rgba(0,0,0,0.6)'
   if (t === 'solid') {
-    patch({ windowBackground: { ...base, type: 'solid' as const } })
+    patch({ windowBackground: { type: 'solid', color: existingColor } })
   } else if (t === 'gradient') {
     patch({ windowBackground: { type: 'gradient', gradient: { type: 'linear' as const, angle: 180, stops: [
       { position: 0, color: '#0d0d1a' },
       { position: 1, color: '#1a1a2e' },
     ]} } })
   } else if (t === 'texture') {
-    patch({ windowBackground: { ...base, type: 'texture' as const } })
+    const existingTex = (wb?.type === 'texture' ? wb.texture : undefined) ?? { src: '', repeat: 'stretch' as const, opacity: 1, blendMode: 'normal' }
+    patch({ windowBackground: { type: 'texture', texture: existingTex } })
   }
 }
 
@@ -474,7 +482,7 @@ function onBrowseChange(e: Event) {
 
       <!-- Texture -->
       <div v-if="wbType === 'texture'" class="texture-section">
-        <TextureEditor :model-value="windowTexture" @update:model-value="updateTexture" />
+        <TextureEditor :model-value="windowTexture" :orientation="g.orientation" @update:model-value="updateTexture" />
       </div>
 
       <div class="sub-label">Border</div>
@@ -578,24 +586,11 @@ function onBrowseChange(e: Event) {
         <div class="btn-group">
           <button :class="['tog', { active: g.orientation === 'vertical' }]"
             @click="patch({ orientation: 'vertical' })">Vertical</button>
+          <button :class="['tog', { active: g.orientation === 'horizontal' }]"
+            @click="patch({ orientation: 'horizontal' })">Horizontal</button>
         </div>
       </div>
-      <div class="row">
-        <label class="ctrl-label">Window pos</label>
-        <div style="display:flex;gap:4px;">
-          <button class="tog" :class="{ active: g.windowX===20 && g.windowY===80 }" @click="patch({ windowX:20, windowY:80 })">TL</button>
-          <button class="tog" :class="{ active: g.windowX===300 && g.windowY===80 }" @click="patch({ windowX:300, windowY:80 })">TR</button>
-          <button class="tog" :class="{ active: g.windowX===20 && g.windowY===300 }" @click="patch({ windowX:20, windowY:300 })">BL</button>
-          <button class="tog" :class="{ active: g.windowX===300 && g.windowY===300 }" @click="patch({ windowX:300, windowY:300 })">BR</button>
-        </div>
-      </div>
-      <div class="row">
-        <label class="ctrl-label">Auto scale</label>
-        <label style="display: flex; align-items: center; gap: 6px; flex: 1;">
-          <input type="checkbox" :checked="g.autoScale" @change="e => patch({ autoScale: (e.target as HTMLInputElement).checked })" />
-          <span style="font-size: 11px; color: var(--text);">Resize bars with window</span>
-        </label>
-      </div>
+      
     </div>
 
     <!-- Values -->
@@ -606,12 +601,19 @@ function onBrowseChange(e: Event) {
     <div v-if="open.values" class="section-body">
       <div class="row">
         <label class="ctrl-label">Sort by</label>
-        <select class="ctrl-select" :value="g.dpsType" @change="e => patch({ dpsType: (e.target as HTMLSelectElement).value as any, sortBy: (e.target as HTMLSelectElement).value })">
+        <select class="ctrl-select" :value="g.sortBy === 'role' ? 'role' : g.dpsType" @change="e => {
+          const v = (e.target as HTMLSelectElement).value
+          if (v === 'role') {
+            patch({ sortBy: 'role' })
+          } else {
+            patch({ dpsType: v as any, sortBy: v })
+          }
+        }">
           <option value="encdps">DPS</option>
           <option value="enchps">HPS</option>
           <option value="dtps">DTPS</option>
-          <option value="damage%">DMG%</option>
-          <option value="crithit%">Crit%</option>
+          <option value="rdps">rDPS</option>
+          <option value="role">Role</option>
         </select>
       </div>
       <div class="row">
@@ -750,7 +752,7 @@ function onBrowseChange(e: Event) {
           <div class="row" v-if="!g.rankIndicator?.rank1Crown?.imageUrl">
             <label class="ctrl-label">Emoji</label>
             <input class="ctrl-input" style="width:60px" :value="g.rankIndicator?.rank1Crown?.icon ?? '👑'"
-              @input="e => patchCrown({ icon: ($event.target as HTMLInputElement).value })" />
+              @input="e => patchCrown({ icon: (e.target as HTMLInputElement).value })" />
           </div>
           <div class="row">
             <label class="ctrl-label">Size</label>
@@ -777,7 +779,7 @@ function onBrowseChange(e: Event) {
           <div class="row">
             <label class="ctrl-label">H Anchor</label>
             <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1Crown?.hAnchor ?? 'left'"
-              @change="e => patchCrown({ hAnchor: ($event.target as HTMLSelectElement).value as any })">
+              @change="e => patchCrown({ hAnchor: (e.target as HTMLSelectElement).value as any })">
               <option value="left">Left</option>
               <option value="center">Center</option>
               <option value="right">Right</option>
@@ -786,7 +788,7 @@ function onBrowseChange(e: Event) {
           <div class="row">
             <label class="ctrl-label">V Anchor</label>
             <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1Crown?.vAnchor ?? 'middle'"
-              @change="e => patchCrown({ vAnchor: ($event.target as HTMLSelectElement).value as any })">
+              @change="e => patchCrown({ vAnchor: (e.target as HTMLSelectElement).value as any })">
               <option value="top">Top</option>
               <option value="middle">Middle</option>
               <option value="bottom">Bottom</option>
@@ -834,7 +836,7 @@ function onBrowseChange(e: Event) {
           <div class="row">
             <label class="ctrl-label">Type</label>
             <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1NameStyle?.gradient?.type ?? 'linear'"
-              @change="e => patch({ rankIndicator: { ...g.rankIndicator, rank1NameStyle: { ...g.rankIndicator?.rank1NameStyle, gradient: { ...g.rankIndicator?.rank1NameStyle?.gradient, type: ($event.target as HTMLSelectElement).value } } } })">
+              @change="e => patchRank1NameGradient({ type: (e.target as HTMLSelectElement).value })">
               <option value="linear">Linear</option>
               <option value="radial">Radial</option>
             </select>
@@ -842,7 +844,7 @@ function onBrowseChange(e: Event) {
           <div class="row">
             <label class="ctrl-label">Angle</label>
             <BarSlider :model-value="g.rankIndicator?.rank1NameStyle?.gradient?.angle ?? 90" :min="0" :max="360" :step="5" unit="°"
-              @update:model-value="v => patch({ rankIndicator: { ...g.rankIndicator, rank1NameStyle: { ...g.rankIndicator?.rank1NameStyle, gradient: { ...g.rankIndicator?.rank1NameStyle?.gradient, angle: v } } } })" />
+              @update:model-value="v => patchRank1NameGradient({ angle: v })" />
           </div>
           <div class="row">
             <label class="ctrl-label">Color 1</label>
@@ -917,7 +919,7 @@ function onBrowseChange(e: Event) {
             <div class="row">
               <label class="ctrl-label">Shape</label>
               <select class="ctrl-select" style="flex:1" :value="g.rankIndicator?.rank1IconStyle?.bgShape?.shape ?? 'circle'"
-                @change="e => patchR1Icon({ bgShape: { ...g.rankIndicator?.rank1IconStyle?.bgShape, shape: ($event.target as HTMLSelectElement).value as any } })">
+                @change="e => patchR1Icon({ bgShape: { ...g.rankIndicator?.rank1IconStyle?.bgShape, shape: (e.target as HTMLSelectElement).value as any } })">
                 <option value="circle">Circle</option>
                 <option value="square">Square</option>
                 <option value="rounded">Rounded</option>

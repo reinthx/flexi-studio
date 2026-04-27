@@ -1,30 +1,15 @@
-/**
- * formatValue.ts
- *
- * Formats numeric values with appropriate units (k/d/m for thousands/millions/billions)
- */
+import type { ValueFormat } from './configSchema'
 
-export type FormatType = 'raw' | 'abbreviated' | 'formatted'
-
-export function formatValue(value: number, format: FormatType = 'abbreviated'): string {
-  if (!value && value !== 0) return '---'
-
-  if (format === 'raw') {
-    return String(Math.round(value))
-  }
-
-  if (format === 'formatted') {
-    return String(Math.round(value)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-  }
-
-  // Abbreviated format with k/m/b
-  if (value >= 1e9) {
-    return (value / 1e9).toFixed(1) + 'b'
-  } else if (value >= 1e6) {
-    return (value / 1e6).toFixed(1) + 'm'
-  } else if (value >= 1e3) {
-    return (value / 1e3).toFixed(1) + 'k'
-  } else {
-    return String(Math.round(value))
+export function formatValue(value: number, format: ValueFormat): string {
+  if (isNaN(value)) return '---'
+  switch (format) {
+    case 'raw':
+      return String(Math.round(value))
+    case 'abbreviated':
+      if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
+      if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
+      return String(Math.round(value))
+    case 'formatted':
+      return Math.round(value).toLocaleString()
   }
 }

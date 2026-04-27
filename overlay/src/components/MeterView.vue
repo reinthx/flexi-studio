@@ -1,23 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useLiveDataStore } from '../stores/liveData'
 import MeterBar from './MeterBar.vue'
 import MeterHeader from './MeterHeader.vue'
-import type { BarStyle, TabConfig } from '@shared/configSchema'
+import type { BarStyle } from '@shared/configSchema'
 import { resolveBarStyle } from '@shared/styleResolver'
 import { buildFillCss } from '@shared/cssBuilder'
 import { loadCustomFont } from '@shared/googleFonts'
-import { ref, nextTick } from 'vue'
 import ScrollableBarsWrapper from '@shared/components/ScrollableBarsWrapper.vue'
 
 const store = useLiveDataStore()
 const g = computed(() => store.profile.global)
 const frame = computed(() => store.frame)
-
-const activeTabLabelConfig = computed(() => {
-  if (!g.value.tabsEnabled) return undefined
-  return g.value.tabs?.find((t: TabConfig) => t.id === g.value.activeTab)?.labelConfig
-})
 
 const openEditor = () => {
   const url = new URL(window.location.href)
@@ -36,6 +30,8 @@ interface ResolvedBar {
   directhit: string
   tohit: string
   enchps: string
+  rdps: string
+  maxHit: string
   alpha: number
   rank: number
   barIndex: number
@@ -46,7 +42,7 @@ interface ResolvedBar {
 
 const bars = computed<ResolvedBar[]>(() => {
   if (!frame.value) return []
-  return frame.value.bars.map((b, i) => ({
+  return frame.value.bars.map((b, i): ResolvedBar => ({
     ...b,
     rank: i + 1,
     barIndex: i,
@@ -58,10 +54,10 @@ const bars = computed<ResolvedBar[]>(() => {
 
 const isHorizontal = computed(() => g.value.orientation === 'horizontal')
 const containerStyle = computed(() => ({
-  flexDirection: isHorizontal.value ? 'row' : 'column',
+  flexDirection: (isHorizontal.value ? 'row' : 'column') as 'row' | 'column',
 }))
 
-function setCombatantFilter(filter: 'all' | 'party' | 'self') {
+function setCombatantFilter(filter: 'all' | 'alliance' | 'party' | 'self') {
   store.setCombatantFilter(filter)
 }
 
@@ -77,6 +73,31 @@ function togglePin() {
 function toggleMergePets() {
   const newVal = !g.value.mergePets
   store.setMergePets(newVal)
+}
+
+const selectedCombatant = ref<string | null>(null)
+
+function openPullDashboard() {
+  localStorage.removeItem('flexi-breakdown-view')
+  localStorage.removeItem('flexi-breakdown-init')
+  const url = new URL(window.location.href)
+  url.hash = '/breakdown'
+  store.broadcastForCombatant(store.selfName ?? bars.value[0]?.name ?? '')
+  window.open(url.toString(), 'flexi-breakdown', 'width=1300,height=840,resizable=yes')
+  postBreakdownView('overview')
+}
+
+function openAbilityBreakdown(name?: string) {
+  localStorage.removeItem('flexi-breakdown-view')
+  const initialName = name ?? store.selfName ?? bars.value[0]?.name ?? ''
+  if (initialName) localStorage.setItem('flexi-breakdown-init', initialName)
+  else localStorage.removeItem('flexi-breakdown-init')
+  const url = new URL(window.location.href)
+  url.hash = '/breakdown'
+  // Send encounter-aware data (respects viewingPull) with combatant pre-selected
+  if (initialName) store.broadcastForCombatant(initialName)
+  window.open(url.toString(), 'flexi-breakdown', 'width=1300,height=840,resizable=yes')
+  selectedCombatant.value = null
 }
 
 const bgStyle = computed(() => {
@@ -125,21 +146,44 @@ const contentStyle = computed(() => {
 // Bars container max-height driven by viewport (shared wrapper will handle scrolling)
 const barsMaxHeight = ref<string>('unset')
 let resizeObserver: ResizeObserver | null = null
+let breakdownViewChannel: BroadcastChannel | null = null
+let breakdownViewTimer: ReturnType<typeof setTimeout> | null = null
+const isDevMode = (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV === true
+
+function postBreakdownView(view: 'overview' | 'pulls') {
+  if (typeof BroadcastChannel === 'undefined') return
+
+  breakdownViewChannel?.close()
+  if (breakdownViewTimer) {
+    clearTimeout(breakdownViewTimer)
+    breakdownViewTimer = null
+  }
+
+  breakdownViewChannel = new BroadcastChannel('flexi-breakdown')
+  breakdownViewTimer = setTimeout(() => {
+    breakdownViewTimer = null
+    breakdownViewChannel?.postMessage({ type: 'setView', view })
+    breakdownViewChannel?.close()
+    breakdownViewChannel = null
+  }, 100)
+}
 
 onMounted(() => {
   store.start()
   loadCustomFont('redacted-script-bold')
-  ;(window as any).actFlexiDebug = () => {
-    const root = document.querySelector('.meter-root') as HTMLElement
-    const app = document.getElementById('app')
-    const barsCont = document.querySelector('.bars-container') as HTMLElement
-    return {
-      appRect: app?.getBoundingClientRect(),
-      meterRootRect: root?.getBoundingClientRect(),
-      barsContainerRect: barsCont?.getBoundingClientRect(),
-      documentOpacity: document.documentElement.style.opacity,
-      frameBars: store.frame?.bars.length ?? 0,
-      profileGlobal: store.profile.global,
+  if (isDevMode) {
+    ;(window as any).actFlexiDebug = () => {
+      const root = document.querySelector('.meter-root') as HTMLElement
+      const app = document.getElementById('app')
+      const barsCont = document.querySelector('.bars-container') as HTMLElement
+      return {
+        appRect: app?.getBoundingClientRect(),
+        meterRootRect: root?.getBoundingClientRect(),
+        barsContainerRect: barsCont?.getBoundingClientRect(),
+        documentOpacity: document.documentElement.style.opacity,
+        frameBars: store.frame?.bars.length ?? 0,
+        profileGlobal: store.profile.global,
+      }
     }
   }
   // Compute available height for the bars area (header height taken into account)
@@ -161,13 +205,22 @@ onMounted(() => {
 
 onUnmounted(() => {
   store.stop()
+  if (isDevMode) delete (window as any).actFlexiDebug
+  if (breakdownViewTimer) {
+    clearTimeout(breakdownViewTimer)
+    breakdownViewTimer = null
+  }
+  breakdownViewChannel?.close()
+  breakdownViewChannel = null
   resizeObserver?.disconnect()
   resizeObserver = null
 })
+
+const showResizeCorner = computed(() => g.value.header?.pinned === true)
 </script>
 
 <template>
-  <div class="meter-root">
+  <div class="meter-root" :class="{ 'is-horizontal': isHorizontal }">
     <div class="meter-border" :style="rootStyle" />
 
     <MeterHeader
@@ -179,11 +232,13 @@ onUnmounted(() => {
       :total-d-p-s="frame?.totalDps ?? ''"
       :total-h-p-s="frame?.totalHps ?? ''"
       :total-d-t-p-s="frame?.totalDtps ?? ''"
+      :total-r-d-p-s="frame?.totalRdps ?? ''"
       :pull-number="store.sessionPulls.length"
       :pull-count="store.sessionPulls.length"
       :global="g"
       :show-settings="true"
       :on-settings="openEditor"
+      :on-breakdown="openPullDashboard"
       :on-set-combatant-filter="setCombatantFilter"
       :on-toggle-blur-names="toggleBlurNames"
       :on-toggle-pin="togglePin"
@@ -192,11 +247,11 @@ onUnmounted(() => {
 
     <div class="meter-content" :style="contentStyle">
       <div class="meter-bg" :style="bgStyle" />
-      <div v-if="g.header?.pinned" class="resize-corner" />
+      <div v-if="showResizeCorner" class="resize-corner" />
 
     <div class="bars-container" :style="containerStyle">
-      <div v-if="bars.length === 0" class="empty-state">Waiting for combat data...</div>
-      <ScrollableBarsWrapper :maxHeight="barsMaxHeight">
+      <div v-if="bars.length === 0" class="empty-state">Waiting for combat data…</div>
+      <ScrollableBarsWrapper :maxHeight="barsMaxHeight" :orientation="g.orientation">
         <MeterBar
           v-for="bar in bars"
           :key="bar.name"
@@ -208,6 +263,8 @@ onUnmounted(() => {
           :value-format="g.valueFormat"
           :bar-index="bar.barIndex"
           :rank1-config="bar.isRank1 && g.rankIndicator?.rank1Enabled ? g.rankIndicator : undefined"
+          :color-overrides="store.profile.overrides"
+          @click="openAbilityBreakdown(bar.name)"
         />
       </ScrollableBarsWrapper>
     </div>
@@ -220,6 +277,7 @@ onUnmounted(() => {
         :total-d-p-s="frame?.totalDps ?? ''"
         :total-h-p-s="frame?.totalHps ?? ''"
         :total-d-t-p-s="frame?.totalDtps ?? ''"
+        :total-r-d-p-s="frame?.totalRdps ?? ''"
         :pull-number="store.sessionPulls.length"
         :pull-count="store.sessionPulls.length"
         :global="g"
@@ -232,15 +290,21 @@ onUnmounted(() => {
 
 <style scoped>
 .meter-root {
-  width: 100%;
+  width: 100vw;
   height: 100vh;
+  min-width: 150px;
+  min-height: 80px;
   display: flex;
   flex-direction: column;
   overflow: auto;
   position: relative;
+  resize: both;
+}
+.meter-root.is-horizontal {
+  min-height: 1px;
 }
 .meter-border {
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 100;
@@ -297,12 +361,13 @@ onUnmounted(() => {
 }
 .resize-corner {
   position: absolute;
-  bottom: 15px;
-  right: 15px;
+  bottom: 0;
+  right: 0;
   width: 16px;
   height: 16px;
   cursor: nwse-resize;
   pointer-events: auto;
+  z-index: 150;
 }
 .resize-corner::after {
   content: '';

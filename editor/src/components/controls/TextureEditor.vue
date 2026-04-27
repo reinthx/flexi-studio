@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { TextureFill, TexturePagination, GradientFill } from '@shared/configSchema'
+import type { TextureFill, TexturePagination, Orientation } from '@shared/configSchema'
 import { BAR_TEXTURE_PRESETS } from '@shared/texturePresets'
 import { processImageFile } from '../../lib/imageProcessor'
 import BarSlider from './BarSlider.vue'
 
-const props = defineProps<{ modelValue: TextureFill }>()
+const props = defineProps<{ modelValue: TextureFill; orientation?: Orientation }>()
 const emit  = defineEmits<{ 'update:modelValue': [v: TextureFill] }>()
 
 const loading = ref(false)
@@ -93,18 +93,6 @@ function setTintMode(mode: 'none' | 'solid' | 'gradient') {
   }
 }
 
-const tintGradient = computed<GradientFill>(() =>
-  props.modelValue.tintGradient ?? { type: 'linear', angle: 90, stops: [{ position: 0, color: '#ffffff' }, { position: 1, color: '#000000' }] }
-)
-
-function patchTintGradient(p: Partial<GradientFill>) {
-  patch({ tintGradient: { ...tintGradient.value, ...p } })
-}
-
-function setTintGradientColor(stopIndex: number, color: string) {
-  const stops = tintGradient.value.stops.map((s, i) => i === stopIndex ? { ...s, color } : s)
-  patchTintGradient({ stops })
-}
 </script>
 
 <template>

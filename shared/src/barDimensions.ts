@@ -4,9 +4,9 @@ export function resolveBarDimensions(style: BarStyle, orientation: Orientation, 
   const isHorizontal = orientation === 'horizontal'
 
   if (isHorizontal) {
-    // Horizontal mode: bar thickness controls horizontal size; bars should not shrink vertically.
+    // Horizontal mode: bar height is explicit so window resizing does not set bar length.
     return {
-      height: '100%',
+      height: `${style.horizontalHeight ?? 72}px`,
       width: `${style.height}px`,
       flex: '0 0 auto',
       marginBottom: '0',

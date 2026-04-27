@@ -1,11 +1,11 @@
-import type { BarFill, BorderRadius, BarOutline, BarShape, CornerCuts, EdgeType, GradientFill, GradientAnimation, TextureFill, TexturePagination } from '@shared/configSchema'
+import type { BarFill, BorderRadius, BarOutline, BarShape, CornerCuts, EdgeType, GradientFill, TextureFill, Orientation } from '@shared/configSchema'
 
 const ANIMATION_SPEED_MAP: Record<number, string> = {
   1: '10s', 2: '8s', 3: '6s', 4: '5s', 5: '4s',
   6: '3s', 7: '2.5s', 8: '2s', 9: '1.5s', 10: '1s'
 }
 
-export const GRADIENT_ANIMATION_KEYFRAMES = `
+const GRADIENT_ANIMATION_KEYFRAMES = `
 @keyframes gradientAngleSpin {
   from { --gradient-angle: 0deg; }
   to { --gradient-angle: 360deg; }
@@ -29,6 +29,25 @@ export const GRADIENT_ANIMATION_KEYFRAMES = `
 }
 `
 
+let keyframesInjected = false
+
+export function injectGradientAnimations(): void {
+  if (keyframesInjected) return
+  keyframesInjected = true
+  
+  const fullCss = `
+    ${GRADIENT_ANIMATION_KEYFRAMES}
+    .animated-fill {
+      animation-fill-mode: backwards;
+      animation-timing-function: linear;
+    }
+  `
+  const style = document.createElement('style')
+  style.id = 'gradient-animations'
+  style.textContent = fullCss
+  document.head.appendChild(style)
+}
+
 /**
  * Builds a CSS filter string for drop-shadow with optional thickness emulation.
  * CSS filter drop-shadow() has no spread/thickness parameter, so we approximate it by
@@ -43,7 +62,7 @@ export function buildDropShadowFilter(offsetX: number, offsetY: number, blur: nu
   return `drop-shadow(${offsetX}px ${offsetY}px ${effectiveBlur}px ${color})`
 }
 
-export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithGap: number = 30): Record<string, string> {
+export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithGap: number = 30, _orientation: Orientation = 'vertical'): Record<string, any> {
   switch (fill.type) {
     case 'solid':
       return fill.opacity !== undefined && fill.opacity < 1
@@ -57,17 +76,40 @@ export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithG
         .join(', ')
       const anim = gradient.animation
       const hasAnimation = anim?.enabled === true
-      const result: Record<string, string> = gradient.type === 'linear'
-        ? { background: hasAnimation 
-            ? `linear-gradient(var(--gradient-angle, ${gradient.angle}deg), ${stops})` 
-            : `linear-gradient(${gradient.angle}deg, ${stops})` }
-        : { background: `radial-gradient(circle, ${stops})` }
+      const angle = gradient.angle ?? 90
+      
+      // For angle rotation: use CSS custom property so keyframes can animate it
+      // For scroll/shimmer: use fixed angle
+      const needsAngleAnim = hasAnimation && anim.angleRotation !== 'none'
+      const angleValue = needsAngleAnim ? 'var(--gradient-angle, ' + angle + 'deg)' : angle + 'deg'
+      
+      const gradientCss = gradient.type === 'linear'
+        ? `linear-gradient(${angleValue}, ${stops})`
+        : `radial-gradient(circle, ${stops})`
+      
+      const result: Record<string, string> = {
+        backgroundImage: gradientCss,
+      }
+      
       if (fill.opacity !== undefined && fill.opacity < 1) {
         result.opacity = String(fill.opacity)
       }
       if (hasAnimation) {
         const animCss = buildGradientAnimationCss(gradient)
-        result['--gradient-angle'] = `${gradient.angle}deg`
+        
+        // Set CSS var for keyframes to animate
+        if (anim.angleRotation !== 'none') {
+          result['--gradient-angle'] = angle + 'deg'
+        }
+        // Scroll: make background larger and animate position to shift gradient
+        if (anim.scrollDirection !== 'none') {
+          result.backgroundSize = '400% 100%'
+          result.backgroundRepeat = 'no-repeat'
+        }
+        if (anim.shimmerEnabled) {
+          result.backgroundSize = '400% 100%'
+        }
+        
         Object.assign(result, animCss)
       }
       return result
@@ -75,8 +117,8 @@ export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithG
 
     case 'texture': {
       const { texture } = fill
-      const isStretch = texture.repeat === 'stretch'
       const isPaginate = texture.repeat === 'paginate'
+      const isStretch = texture.repeat === 'stretch'
       // For paginate, use original size. For stretch, stretch to fill. For others, auto.
       const size = isPaginate ? 'auto' : (isStretch ? '100% 100%' : 'auto')
       const repeat = (texture.repeat === 'no-repeat' || isPaginate) ? 'no-repeat' : 'repeat'
@@ -117,14 +159,12 @@ export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithG
   }
 }
 
-export function buildGradientAnimationCss(gradient: GradientFill): Record<string, string> {
+export function buildGradientAnimationCss(gradient: GradientFill): Record<string, any> {
   const anim = gradient.animation!
   if (!anim || anim.enabled === false) return {}
 
   const animations: string[] = []
   const customProps: Record<string, string> = {}
-
-  const stops = gradient.stops.map(s => `${s.color} ${(s.position * 100).toFixed(1)}%`).join(', ')
 
   if (anim.angleRotation !== 'none') {
     const duration = ANIMATION_SPEED_MAP[anim.angleRotationSpeed] ?? '4s'
@@ -156,7 +196,7 @@ export function buildGradientAnimationCss(gradient: GradientFill): Record<string
   return result
 }
 
-export function buildTexturePaginationCss(texture: TextureFill, barIndex: number = 0, barHeightWithGap: number = 30): Record<string, string> {
+export function buildTexturePaginationCss(texture: TextureFill, barIndex: number = 0, barHeightWithGap: number = 30): Record<string, any> {
   const pag = texture.pagination
   if (!pag?.enabled) return {}
 
@@ -196,7 +236,7 @@ export function buildEdgeClipPath(leftEdge: EdgeType, rightEdge: EdgeType, leftD
   const leftD = leftEdge === 'flat' ? 0 : Math.max(0, leftDepth)
   const rightD = rightEdge === 'flat' ? 0 : Math.max(0, rightDepth)
 
-  // Clamp each side proportionally so edges can't cross when combined depth > bar width.
+  // Clamp each side proportionally so edges can't cross or consume the whole bar.
   // With independent 50% caps, a 19px/39px split becomes 50%/50% — losing the angle ratio.
   // Proportional: 19/(19+39)=32.8% and 39/(19+39)=67.2% — preserves the configured steepness.
   const total = leftD + rightD
@@ -281,7 +321,7 @@ export function buildCornerCutCss(cuts: CornerCuts, chamferMode: 'none'|'left'|'
  * IMPORTANT: apply clip-path only to the bg+fill inner div.
  * The label layer should be a sibling (no clip-path) so text is never cut off.
  */
-export function buildShapeCss(shape: BarShape): Record<string, string> {
+export function buildShapeCss(shape: BarShape): Record<string, any> {
   const result: Record<string, string> = {}
 
   const chamferMode = shape.chamferMode ?? 'none'
@@ -316,7 +356,7 @@ export function buildShapeCss(shape: BarShape): Record<string, string> {
   return result
 }
 
-export function buildOutlineCss(outline: BarOutline): Record<string, string> {
+export function buildOutlineCss(outline: BarOutline): Record<string, any> {
   const { color, thickness: t } = outline
   const shadows: string[] = []
   if (t.top    > 0) shadows.push(`inset 0 ${t.top}px 0 ${color}`)

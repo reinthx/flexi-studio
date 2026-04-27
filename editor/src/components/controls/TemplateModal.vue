@@ -36,6 +36,7 @@ const TOKENS = [
   { token: '{crithit%}', label: 'Crit Hit %' },
   { token: '{directhit%}', label: 'Direct Hit %' },
   { token: '{enchps}',   label: 'HPS' },
+  { token: '{rdps}',     label: 'rDPS' },
   { token: '{maxHit}',   label: 'Max Hit' },
 ]
 

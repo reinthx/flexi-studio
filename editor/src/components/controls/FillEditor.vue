@@ -4,14 +4,14 @@
  * v-model: BarFill
  */
 import { computed, inject } from 'vue'
-import type { BarFill, GradientFill, TextureFill } from '@shared/configSchema'
+import type { BarFill, GradientFill, TextureFill, Orientation } from '@shared/configSchema'
 import GradientEditor from './GradientEditor.vue'
 import TextureEditor from './TextureEditor.vue'
 import ColorPicker from './ColorPicker.vue'
 import BarSlider from './BarSlider.vue'
 import DragNumber from './DragNumber.vue'
 
-const props = defineProps<{ modelValue: BarFill; label?: string }>()
+const props = defineProps<{ modelValue: BarFill; label?: string; orientation?: Orientation }>()
 const emit  = defineEmits<{ 'update:modelValue': [v: BarFill] }>()
 
 const openColorsPanel = inject<(() => void) | null>('openColorsPanel', null)
@@ -86,31 +86,38 @@ const tintMode = computed<'none' | 'solid' | 'gradient'>(() => {
 
 function setTintMode(mode: 'none' | 'solid' | 'gradient') {
   if (props.modelValue.type !== 'texture') return
+  const tex = props.modelValue.texture
   if (mode === 'none') {
-    onTexture({ ...props.modelValue.texture, tintColor: undefined, tintGradient: undefined })
+    onTexture({ ...tex, tintColor: undefined, tintGradient: undefined })
   } else if (mode === 'solid') {
-    onTexture({ ...props.modelValue.texture, tintColor: props.modelValue.texture.tintColor ?? '#ffffff', tintGradient: undefined })
+    onTexture({ ...tex, tintColor: tex.tintColor ?? '#ffffff', tintGradient: undefined })
   } else {
-    const existing = props.modelValue.texture.tintGradient
+    const existing = tex.tintGradient
     onTexture({
-      ...props.modelValue.texture,
+      ...tex,
       tintColor: undefined,
       tintGradient: existing ?? { type: 'linear', angle: 90, stops: [{ position: 0, color: '#ffffff' }, { position: 1, color: '#000000' }] },
     })
   }
 }
 
+const textureFill = computed<TextureFill | undefined>(() =>
+  props.modelValue.type === 'texture' ? props.modelValue.texture : undefined
+)
+
 const tintGradient = computed<GradientFill>(() =>
-  props.modelValue.texture?.tintGradient ?? { type: 'linear', angle: 90, stops: [{ position: 0, color: '#ffffff' }, { position: 1, color: '#000000' }] }
+  textureFill.value?.tintGradient ?? { type: 'linear', angle: 90, stops: [{ position: 0, color: '#ffffff' }, { position: 1, color: '#000000' }] }
 )
 
 function patchTintGradient(p: Partial<GradientFill>) {
-  if (!props.modelValue.texture) return
-  onTexture({ ...props.modelValue.texture, tintGradient: { ...tintGradient.value, ...p } })
+  const tex = textureFill.value
+  if (!tex) return
+  onTexture({ ...tex, tintGradient: { ...tintGradient.value, ...p } })
 }
 
 function setTintGradientColor(stopIndex: number, color: string) {
-  if (!props.modelValue.texture) return
+  const tex = textureFill.value
+  if (!tex) return
   const stops = tintGradient.value.stops.map((s, i) => i === stopIndex ? { ...s, color } : s)
   patchTintGradient({ stops })
 }
@@ -179,7 +186,7 @@ function setTintGradientColor(stopIndex: number, color: string) {
         <template v-if="tintMode === 'solid'">
           <div class="row">
             <label class="ctrl-label">Color</label>
-            <ColorPicker :model-value="props.modelValue.texture?.tintColor ?? '#ffffff'" @update:model-value="c => onTexture({ ...props.modelValue.texture!, tintColor: c })" />
+            <ColorPicker :model-value="textureFill?.tintColor ?? '#ffffff'" @update:model-value="c => textureFill && onTexture({ ...textureFill, tintColor: c })" />
           </div>
         </template>
 
@@ -225,6 +232,7 @@ function setTintGradientColor(stopIndex: number, color: string) {
       <template v-if="activeTab === 'texture'">
         <TextureEditor
           :model-value="(modelValue as Extract<BarFill, {type:'texture'}>).texture"
+          :orientation="orientation"
           @update:model-value="onTexture"
         />
       </template>

@@ -9,10 +9,11 @@ export function useHeaderStyles(
 ) {
   const style = computed(() => {
     const conf = config()
-    const glob = global() ?? {}
+    const glob = global()
     const isFooterVal = isFooter()
     const isTop = !isFooterVal
-    
+    const isHorizontal = glob?.orientation === 'horizontal'
+
     const borderRadius = conf.borderRadius ?? 0
     const windowBorder = glob?.windowBorder
     
@@ -37,8 +38,8 @@ export function useHeaderStyles(
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      padding: '0 6px',
-      height: `${conf.size + 16}px`,
+      padding: isHorizontal ? '0 4px' : '0 6px',
+      height: `${conf.size + (isHorizontal ? 10 : 16)}px`,
       fontFamily: conf.font,
       fontSize: `${conf.size}px`,
       color: conf.color,

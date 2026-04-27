@@ -70,6 +70,12 @@ export interface BarOutline {
   target?: 'bg' | 'fill' | 'both'  // default 'both'
 }
 
+export interface BarBackgroundStroke {
+  enabled: boolean
+  color: string
+  width: number
+}
+
 export interface BarShadow {
   enabled: boolean
   color: string
@@ -126,6 +132,7 @@ export interface BarShape {
   borderRadius: BorderRadius  // used only when both edges are flat (no chamfer)
   cornerCuts: CornerCuts      // chamfer — when any corner has both x+y > 0, overrides polygon
   outline: BarOutline
+  bgStroke?: BarBackgroundStroke
   shadow?: BarShadow          // background bar shadow
   fillShadow?: BarShadow      // fill bar shadow (polish effect)
   fillInsetTop?: number       // px — push fill down from top (name-above-bar layout)
@@ -163,6 +170,7 @@ export interface IconShadow {
   blur: number
   offsetX: number
   offsetY: number
+  thickness?: number
 }
 
 export interface IconConfig {
@@ -202,6 +210,8 @@ export interface LabelField {
   template: string                        // e.g. "{icon} {name}", "{value} ({pct})"
   hAnchor: 'left' | 'center' | 'right'   // horizontal anchor point
   vAnchor: 'top' | 'middle' | 'bottom'   // vertical anchor point
+  growsFrom?: 'left' | 'center' | 'right' // which edge of the text element sits at the anchor point (left=grows right, right=grows left, center=grows both)
+  valueFormat?: ValueFormat               // per-field override for numeric token formatting (undefined = inherit global)
   offsetX: number                         // px offset from anchor (positive = right/left)
   offsetY: number                         // px offset from anchor (positive = down/up)
   enabled: boolean
@@ -215,6 +225,9 @@ export interface LabelField {
   selfMode?: boolean                      // when true, override color with Self override color when bar.isSelf === true (combinable with colorMode)
   selfGradient?: { type: 'linear' | 'radial'; angle?: number; stops: Array<{ color: string; position: number }> }  // self gradient: stops[1].color = Color 2; Color 1 from StyleOverrides.self dynamically
   maxWidth?: number                       // px — cap field width (0 = auto, uses 100% - padding*2)
+  autoRotation?: boolean                  // when true, auto-rotate field to keep it on top of the bar (only for horizontal bars with vertical offset, and when rotation is not manually set)
+  autoRotationRatio?: number           // width ratio for auto-rotation calc (default 100)
+  rotation?: number                    // degrees (0 = no rotation, 0-360)
 }
 
 export interface BarLabel {
@@ -253,12 +266,34 @@ export interface TabConfig {
 
 // ─── Bar Style ────────────────────────────────────────────────────────────────
 
+export type MetricStripSource = 'current' | DpsType | 'threat'
+
+export interface MetricStripConfig {
+  enabled: boolean
+  source: MetricStripSource
+  height: number
+  width?: number
+  offsetX?: number
+  fill: BarFill
+  fillSource?: 'custom' | 'bar' | 'background'
+  bg?: BarFill
+  bgSource?: 'custom' | 'bar' | 'background' | 'none'
+  inheritShape?: boolean
+  inheritShadow?: boolean
+  opacity: number
+  anchor: 'top' | 'bottom'
+  placement?: 'inside' | 'outside'
+  gap?: number
+}
+
 export interface BarStyle {
   fill: BarFill    // foreground (the value portion)
   bg: BarFill      // background (the empty portion)
   shape: BarShape
   label: BarLabel
+  metricStrip?: MetricStripConfig
   height: number   // px — bar height in vertical mode, bar width in horizontal mode
+  horizontalHeight?: number  // px — bar height/length in horizontal mode
   gap: number      // px — spacing between bars
 }
 
@@ -383,18 +418,17 @@ export interface PetConfig {
 
 // ─── Global Config ────────────────────────────────────────────────────────────
 
-export type DpsType = 'encdps' | 'enchps' | 'dtps' | 'damage%' | 'healed%' | 'crithit%'
+export type DpsType = 'encdps' | 'enchps' | 'dtps' | 'rdps' | 'damage%' | 'healed%' | 'crithit%'
 export type ValueFormat = 'raw' | 'abbreviated' | 'formatted'
 export type Orientation = 'vertical' | 'horizontal'
 export type OutOfCombatBehavior = 'show' | 'dim' | 'hide'
-export type CombatantFilter = 'all' | 'party' | 'self'
+export type CombatantFilter = 'all' | 'alliance' | 'party' | 'self'
 
 export interface GlobalConfig {
   dpsType: DpsType
   sortBy: string           // any CombatData combatant field key
   maxCombatants: number
   showHeader: boolean      // header visibility shortcut (also in header.show)
-  autoScale: boolean
   transitionDuration: number  // ms
   holdDuration: number        // ms before clearing after isActive → false
   orientation: Orientation
@@ -422,8 +456,6 @@ export interface GlobalConfig {
     offsetX: number
     offsetY: number
   }
-  windowX: number             // window position X (px)
-  windowY: number             // window position Y (px)
   mergePets: boolean          // merge pet damage into owner
   tabsEnabled: boolean        // master toggle to enable tab system
   tabs: TabConfig[]          // all available tab configurations
@@ -469,6 +501,107 @@ export interface EncounterSnapshot {
   [key: string]: string
 }
 
+// Per-ability aggregated stats for one combatant, built from LogLine events (types 21/22).
+// Keyed by abilityId within a CombatantAbilityData map.
+export interface AbilityStats {
+  abilityId: string
+  abilityName: string
+  totalDamage: number
+  overheal?: number
+  hits: number
+  maxHit: number
+  minHit: number
+  critHits?: number
+  critMinHit?: number
+  critMaxHit?: number
+  directHits?: number
+  directMinHit?: number
+  directMaxHit?: number
+  critDirectHits?: number
+  critDirectMinHit?: number
+  critDirectMaxHit?: number
+  targets?: Record<string, { total: number; hits: number; overheal?: number }>
+  targetInstances?: Record<string, { name: string; id: string; total: number; hits: number; overheal?: number }>
+  sources?: Record<string, { total: number; hits: number; overheal?: number }>
+}
+
+// [combatantName][abilityId] → AbilityStats
+export type CombatantAbilityData = Record<string, AbilityStats>
+
+// DPS timeline: combatantName → damage totals per 3-second bucket (index = bucket #)
+// DPS for bucket i = timeline[name][i] / TIMELINE_BUCKET_SEC
+export type DpsTimeline = Record<string, number[]>
+export const TIMELINE_BUCKET_SEC = 3
+
+export interface HpSample {
+  t: number        // ms since pull start
+  currentHp: number
+  maxHp: number
+  hp: number       // 0–1 fraction
+}
+
+export interface HitRecord {
+  t: number           // ms since pull start
+  type: 'dmg' | 'heal'
+  abilityName: string
+  sourceName: string
+  amount: number
+  currentHp?: number
+  maxHp?: number
+  hp?: number
+}
+
+export interface DeathEvent {
+  t: number
+  type: 'dmg' | 'heal' | 'death'
+  abilityName: string
+  sourceName: string
+  amount: number
+  hpBefore: number
+  hpAfter: number
+  hpBeforeRaw: number
+  hpAfterRaw: number
+  maxHp: number
+  isDeathBlow: boolean
+  isEstimated?: boolean
+}
+
+export interface CastEvent {
+  t: number         // ms since pull start
+  abilityName: string
+  abilityId: string
+  source: string
+  target: string
+  targetId?: string
+  type: 'instant' | 'cast' | 'tick'
+  durationMs?: number
+  endT?: number
+  buffDurationMs?: number
+  cooldownMs?: number
+  effectName?: string
+}
+
+export interface ResourceSample {
+  t: number         // ms since pull start
+  currentHp: number
+  maxHp: number
+  hp: number        // 0-1
+  currentMp?: number
+  maxMp?: number
+  mp?: number       // 0-1
+}
+
+export interface DeathRecord {
+  targetName: string
+  targetId: string
+  timestamp: number  // ms since pull start
+  hpSamples: HpSample[]
+  lastHits?: HitRecord[]  // damage/heals on this target in the 30s before death
+  events?: DeathEvent[]
+  resurrectTime?: number  // ms since pull start, when raised (if applicable)
+  resurrectSourceName?: string
+}
+
 export interface PullRecord {
   id: string
   timestamp: number
@@ -477,6 +610,23 @@ export interface PullRecord {
   duration: string
   combatants: CombatantSnapshot[]
   encounter: EncounterSnapshot
+  // Populated from LogLine parsing. Optional: absent on records loaded from older sessions.
+  abilityData?: Record<string, CombatantAbilityData>
+  dpsTimeline?: DpsTimeline    // damage dealt per combatant over time
+  hpsTimeline?: DpsTimeline    // heals dealt per combatant over time
+  dtakenTimeline?: DpsTimeline // damage received per combatant over time
+  damageTakenData?: Record<string, CombatantAbilityData>  // target name → per-ability received damage
+  healingReceivedData?: Record<string, CombatantAbilityData> // target name → per-ability received healing
+  hitData?: Record<string, HitRecord[]> // target name → rolling damage/heal events
+  rdpsGiven?: Record<string, number> // combatant name -> DPS credited from that actor's raid buffs
+  rdpsTaken?: Record<string, number> // combatant name -> DPS removed from damage gained via others' buffs
+  deaths?: DeathRecord[]
+  enemyDeaths?: Record<string, number> // enemy name -> ms since pull start
+  combatantIds?: Record<string, string>  // combatant name → FFXIV object ID
+  combatantJobs?: Record<string, string> // combatant name → normalized job abbreviation
+  castData?: Record<string, CastEvent[]>  // combatant name → cast events
+  resourceData?: Record<string, ResourceSample[]> // combatant name → HP/MP samples over time
+  partyData?: PartyMember[]  // party state at time of pull (for historical grouping)
 }
 
 // ─── Raw OverlayPlugin event shapes ───────────────────────────────────────────
@@ -486,6 +636,16 @@ export interface CombatDataEvent {
   isActive: 'true' | 'false'
   Encounter: Record<string, string>
   Combatant: Record<string, Record<string, string>>
+}
+
+// Fired by OverlayPlugin (modern mode only) for every network log line from FFXIV.
+// rawLine is the full pipe-delimited string; line is the pre-split array.
+// Relevant types for ability tracking: 21 (Ability), 22 (AOEAbility), 24 (DoT/HoT),
+// 25 (Death), 26 (GainsEffect), 30 (LosesEffect).
+export interface LogLineEvent {
+  type: 'LogLine'
+  rawLine: string
+  line: string[]
 }
 
 export interface ChangePrimaryPlayerEvent {
@@ -506,6 +666,7 @@ export interface PartyMember {
   worldId: number
   job: string
   inParty: boolean
+  partyType?: string  // "Party", "AllianceA", "AllianceB", "AllianceC", etc
 }
 
 export interface PartyChangedEvent {
