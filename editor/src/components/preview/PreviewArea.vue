@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, useTemplateRef, watch } from 'vue'
-import { useDraggable, useElementSize } from '@vueuse/core'
+import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
+import { useElementSize } from '@vueuse/core'
 import { useLiveDataStore } from '../../stores/liveData'
 import PreviewBar from './PreviewBar.vue'
 import ScrollableBarsWrapper from '@shared/components/ScrollableBarsWrapper.vue'
@@ -41,35 +41,89 @@ const activeTabLabelConfig = computed(() => activeTabConfig.value?.labelConfig)
 
 // Draggable wrapper refs
 const wrapperRef = useTemplateRef<HTMLElement>('wrapperEl')
-const titlebarRef = useTemplateRef<HTMLElement>('titlebarEl')
+const previewAreaRef = useTemplateRef<HTMLElement>('previewAreaEl')
 const meterRef = useTemplateRef<HTMLElement>('meterEl')
 
-// Start centered in the viewport
-const initX = ref(Math.max(0, (typeof window !== 'undefined' ? window.innerWidth : 1280) / 2 - 175))
-const initY = ref(Math.max(0, (typeof window !== 'undefined' ? window.innerHeight : 800) / 2 - 275))
+const PREVIEW_MARGIN = 16
 
-const { x, y } = useDraggable(wrapperRef, {
-  handle: titlebarRef,
-  initialValue: { x: initX.value, y: initY.value },
-})
+// Start inside the preview pane; it is centered once the pane size is known.
+const x = ref(PREVIEW_MARGIN)
+const y = ref(PREVIEW_MARGIN)
+const dragOffset = ref<{ x: number; y: number } | null>(null)
 
 const { height: winH } = useElementSize(meterRef)
+const { width: areaW, height: areaH } = useElementSize(previewAreaRef)
+const { width: wrapperW, height: wrapperH } = useElementSize(wrapperRef)
 
 const savedHeight = typeof sessionStorage !== 'undefined'
   ? parseInt(sessionStorage.getItem(STORAGE_KEY) || '', 10)
   : 0
 
+function clampPreviewPosition(nextX: number, nextY: number) {
+  const maxX = Math.max(PREVIEW_MARGIN, areaW.value - wrapperW.value - PREVIEW_MARGIN)
+  const maxY = Math.max(PREVIEW_MARGIN, areaH.value - wrapperH.value - PREVIEW_MARGIN)
+  return {
+    x: Math.min(Math.max(PREVIEW_MARGIN, nextX), maxX),
+    y: Math.min(Math.max(PREVIEW_MARGIN, nextY), maxY),
+  }
+}
+
+function centerPreviewOnce() {
+  if (areaW.value > 0) {
+    x.value = Math.max(PREVIEW_MARGIN, Math.round((areaW.value - wrapperW.value) / 2))
+    y.value = Math.max(PREVIEW_MARGIN, Math.round((areaH.value - wrapperH.value) / 2))
+  }
+}
+
+function stopDrag() {
+  dragOffset.value = null
+  window.removeEventListener('pointermove', movePreview)
+  window.removeEventListener('pointerup', stopDrag)
+}
+
+function movePreview(event: PointerEvent) {
+  if (!dragOffset.value || !previewAreaRef.value) return
+  const areaRect = previewAreaRef.value.getBoundingClientRect()
+  const next = clampPreviewPosition(
+    event.clientX - areaRect.left - dragOffset.value.x,
+    event.clientY - areaRect.top - dragOffset.value.y,
+  )
+  x.value = next.x
+  y.value = next.y
+}
+
+function startDrag(event: PointerEvent) {
+  if (event.button !== 0 || !previewAreaRef.value) return
+  event.preventDefault()
+  const areaRect = previewAreaRef.value.getBoundingClientRect()
+  dragOffset.value = {
+    x: event.clientX - areaRect.left - x.value,
+    y: event.clientY - areaRect.top - y.value,
+  }
+  window.addEventListener('pointermove', movePreview)
+  window.addEventListener('pointerup', stopDrag)
+}
+
 onMounted(() => {
+  centerPreviewOnce()
   if (meterRef.value && savedHeight > 0) {
     meterRef.value.style.height = `${savedHeight}px`
   }
 })
+
+onUnmounted(stopDrag)
 
 watch(winH, (height) => {
   if (height > 50) {
     sessionStorage.setItem(STORAGE_KEY, String(Math.round(height)))
   }
 })
+
+watch([areaW, areaH, wrapperW, wrapperH, isHorizontal], () => {
+  const next = clampPreviewPosition(x.value, y.value)
+  x.value = next.x
+  y.value = next.y
+}, { flush: 'post' })
 
 // Window background — from global config (falls back to default)
 const windowBg = computed(() => g.value.windowBg ?? 'rgba(0,0,0,0.6)')
@@ -90,7 +144,7 @@ const windowBgLayer = computed(() => {
 const wrapperStyle = computed(() => ({
   left: `${x.value}px`,
   top:  `${y.value}px`,
-  width: isHorizontal.value ? '720px' : '350px',
+  width: isHorizontal.value ? 'min(720px, calc(100% - 32px))' : 'min(350px, calc(100% - 32px))',
 }))
 
 const meterStyle = computed(() => ({}))
@@ -101,7 +155,7 @@ function toggleHeaderPin() {
 </script>
 
 <template>
-  <div class="preview-area">
+  <div ref="previewAreaEl" class="preview-area">
     <div class="preview-condition-grid" aria-hidden="true">
       <div class="condition-tile condition-tile--stone" />
       <div class="condition-tile condition-tile--grass" />
@@ -112,7 +166,7 @@ function toggleHeaderPin() {
     <!-- Outer wrapper: positioned + draggable -->
     <div ref="wrapperEl" class="preview-wrapper" :style="wrapperStyle">
       <!-- Drag handle — sits ABOVE the meter window -->
-      <div ref="titlebarEl" class="preview-titlebar">
+      <div class="preview-titlebar" @pointerdown="startDrag">
         <span class="titlebar-text">Layout Preview</span>
       </div>
 
@@ -207,11 +261,12 @@ function toggleHeaderPin() {
 
 /* Outer draggable wrapper — holds titlebar + meter */
 .preview-wrapper {
-  position: fixed;
+  position: absolute;
   width: 350px;
   z-index: 200;
   display: flex;
   flex-direction: column;
+  max-width: calc(100% - 32px);
 }
 
 /* Drag handle — outside the meter window */
