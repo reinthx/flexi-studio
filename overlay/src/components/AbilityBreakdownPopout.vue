@@ -346,7 +346,8 @@ const selectedActorOverviewCards = computed(() => ([
   { label: 'Deaths', value: String(selectedActorDeaths.value.length), detail: selectedActorDeaths.value.length > 0 ? `Last @ ${fmtTime(selectedActorDeaths.value.at(-1)?.timestamp ?? 0)}` : 'No deaths', tone: 'deaths', view: 'deaths' as BreakdownView },
   { label: 'Casts', value: f(selectedActorCastEvents.value.length), detail: `${castPlayerData.value?.abilities.length ?? 0} tracked abilities`, tone: 'casts', view: 'casts' as BreakdownView },
 ]))
-
+const doneDimensionOptions = [['ability', 'Ability'], ['targets', 'Targets'], ['sources', 'Sources']] as const, deathInspectorTabs = [['recap', 'Recap'], ['context', 'Context'], ['related', 'Related Damage']] as const
+const eventActorScopes = [['selected', 'Selected Actor'], ['all', 'All Actors']] as const, eventFilterOptions: EventFilter[] = ['damage', 'healing', 'casts', 'deaths', 'raises']
 function eventSelectorBadgeFor(name: string): string {
   return `${eventRowCountFor(name)} rows`
 }
@@ -806,6 +807,33 @@ const selectedCastAbility = computed(() =>
     ?? castPlayerData.value?.abilities[0]
     ?? null
 )
+const selectedDoneInspectorRows = computed(() => {
+  const ability = selectedDoneAbility.value
+  return ability ? [['Ability', ability.abilityName], ['Total', f(ability.totalDamage)], ['DPS', encounterDurationSec.value > 0 ? f(ability.dps) : '—'], ['Rate', `${ability.pct}%`], ['Range', `${f(ability.minHit)} - ${f(ability.maxHit)}`], ['Crit %', ability.critPct], ['Crit Range', formatHitRange(ability.critMinHit, ability.critMaxHit, f)], ['Direct Hit %', pctOf(ability.directHits, ability.hits)], ['Direct Hit Range', formatHitRange(ability.directMinHit, ability.directMaxHit, f)], ['Crit Direct Hit %', pctOf(ability.critDirectHits, ability.hits)], ['Crit Direct Hit Range', formatHitRange(ability.critDirectMinHit, ability.critDirectMaxHit, f)]] : []
+})
+
+const selectedTakenInspectorRows = computed(() => {
+  const ability = selectedTakenAbility.value
+  if (!ability) return []
+  const rows = [['Ability', ability.abilityName], [takenMode.value === 'healing' ? 'Effective' : 'Total', f(ability.totalDamage)], ['Share', `${ability.pct}%`], [takenMode.value === 'healing' ? 'Heals' : 'Hits', String(ability.hits)], ['Average', f(takenMode.value === 'healing' ? rawHealingAverage(ability) : ability.avg)], ['Near Deaths', (takenMode.value === 'healing' ? selectedActorDeathHealingAbilitySet.value : selectedActorNearDeathCounts.value).get(ability.abilityName) ?? 'None tracked']]
+  if (takenMode.value === 'healing') rows.splice(2, 0, ['Overheal', `${f(ability.overheal ?? 0)} · ${overhealPct(ability)}%`])
+  return rows
+})
+
+const selectedCastInspectorRows = computed(() => {
+  const ability = selectedCastAbility.value
+  return ability ? [['Ability', ability.name], ['Casts', String(ability.casts)], ['Avg Interval', `${ability.avgInterval}s`], ['Target(s)', String(ability.targets.length)]] : []
+})
+
+const selectedCastEventRows = computed(() => {
+  const event = selectedCastEvent.value
+  return event ? [['Time', fmtTime(event.t)], ['Target', event.target || '—'], ['Duration', `${((event.buffDurationMs ?? event.durationMs ?? 0) / 1000).toFixed(1)}s`]] : []
+})
+
+const mitigationInspectorRows = computed(() => {
+  const mitigation = castMitigationEffectiveness.value
+  return mitigation ? [['Scope', mitigation.scope], ['Expected Reduction', mitigation.expected], ['Hits in Duration', mitigation.hits], ['Solo / Stacked Hits', `${mitigation.soloHits} / ${mitigation.stackedHits}`], ['Reduced Damage Taken By', mitigation.mitigated], ['Damage Without This Mit', mitigation.withoutThisMit]] : []
+})
 
 const selectedDeathRelatedDamage = computed(() => {
   const totals = new Map<string, number>()
@@ -828,6 +856,8 @@ const selectedDeathWindow = computed(() => {
     end: Math.max(death.timestamp, ...events.map(event => event.t)),
   }
 })
+
+const selectedDeathWindowCasts = computed(() => selectedDeathWindow.value ? selectedActorCastEvents.value.filter(event => event.t >= selectedDeathWindow.value!.start && event.t <= selectedDeathWindow.value!.end) : [])
 
 const overviewNotableEvents = computed(() => {
   const items = sortedDeaths.value
@@ -1816,9 +1846,7 @@ onUnmounted(() => {
           <div class="bp-panel-toolbar">
             <div class="bp-panel-title">Outgoing Breakdown</div>
             <div class="bp-toolbar-group">
-              <button class="bp-mode-btn" :class="{ active: doneDimension === 'ability' }" @click="doneDimension = 'ability'">Ability</button>
-              <button class="bp-mode-btn" :class="{ active: doneDimension === 'targets' }" @click="doneDimension = 'targets'">Targets</button>
-              <button class="bp-mode-btn" :class="{ active: doneDimension === 'sources' }" @click="doneDimension = 'sources'">Sources</button>
+              <button v-for="[value, label] in doneDimensionOptions" :key="value" class="bp-mode-btn" :class="{ active: doneDimension === value }" @click="doneDimension = value">{{ label }}</button>
             </div>
           </div>
           <div v-if="doneDimension === 'targets' && doneTargetRows.length === 0" class="bp-waiting">No target rows for this pull yet.</div>
@@ -1921,17 +1949,7 @@ onUnmounted(() => {
           <div v-if="!selectedDoneAbility" class="bp-empty-panel">Select an ability to inspect it.</div>
           <template v-else>
             <div class="bp-inspector-block">
-              <div class="bp-kv"><span>Ability</span><strong>{{ selectedDoneAbility.abilityName }}</strong></div>
-              <div class="bp-kv"><span>Total</span><strong>{{ f(selectedDoneAbility.totalDamage) }}</strong></div>
-              <div class="bp-kv"><span>DPS</span><strong>{{ encounterDurationSec > 0 ? f(selectedDoneAbility.dps) : '—' }}</strong></div>
-              <div class="bp-kv"><span>Rate</span><strong>{{ selectedDoneAbility.pct }}%</strong></div>
-              <div class="bp-kv"><span>Range</span><strong>{{ f(selectedDoneAbility.minHit) }} - {{ f(selectedDoneAbility.maxHit) }}</strong></div>
-              <div class="bp-kv"><span>Crit %</span><strong>{{ selectedDoneAbility.critPct }}</strong></div>
-              <div class="bp-kv"><span>Crit Range</span><strong>{{ formatHitRange(selectedDoneAbility.critMinHit, selectedDoneAbility.critMaxHit, f) }}</strong></div>
-              <div class="bp-kv"><span>Direct Hit %</span><strong>{{ pctOf(selectedDoneAbility.directHits, selectedDoneAbility.hits) }}</strong></div>
-              <div class="bp-kv"><span>Direct Hit Range</span><strong>{{ formatHitRange(selectedDoneAbility.directMinHit, selectedDoneAbility.directMaxHit, f) }}</strong></div>
-              <div class="bp-kv"><span>Crit Direct Hit %</span><strong>{{ pctOf(selectedDoneAbility.critDirectHits, selectedDoneAbility.hits) }}</strong></div>
-              <div class="bp-kv"><span>Crit Direct Hit Range</span><strong>{{ formatHitRange(selectedDoneAbility.critDirectMinHit, selectedDoneAbility.critDirectMaxHit, f) }}</strong></div>
+              <div v-for="[label, value] in selectedDoneInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
             </div>
           </template>
         </aside>
@@ -1991,13 +2009,7 @@ onUnmounted(() => {
           <div v-if="!selectedTakenAbility" class="bp-empty-panel">Select an incoming ability to inspect it.</div>
           <template v-else>
             <div class="bp-inspector-block">
-              <div class="bp-kv"><span>Ability</span><strong>{{ selectedTakenAbility.abilityName }}</strong></div>
-              <div class="bp-kv"><span>{{ takenMode === 'healing' ? 'Effective' : 'Total' }}</span><strong>{{ f(selectedTakenAbility.totalDamage) }}</strong></div>
-              <div v-if="takenMode === 'healing'" class="bp-kv"><span>Overheal</span><strong>{{ f(selectedTakenAbility.overheal ?? 0) }} · {{ overhealPct(selectedTakenAbility) }}%</strong></div>
-              <div class="bp-kv"><span>Share</span><strong>{{ selectedTakenAbility.pct }}%</strong></div>
-              <div class="bp-kv"><span>{{ takenMode === 'healing' ? 'Heals' : 'Hits' }}</span><strong>{{ selectedTakenAbility.hits }}</strong></div>
-              <div class="bp-kv"><span>Average</span><strong>{{ f(takenMode === 'healing' ? rawHealingAverage(selectedTakenAbility) : selectedTakenAbility.avg) }}</strong></div>
-              <div class="bp-kv"><span>Near Deaths</span><strong>{{ (takenMode === 'healing' ? selectedActorDeathHealingAbilitySet : selectedActorNearDeathCounts).get(selectedTakenAbility.abilityName) ?? 'None tracked' }}</strong></div>
+              <div v-for="[label, value] in selectedTakenInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
             </div>
           </template>
         </aside>
@@ -2295,9 +2307,7 @@ onUnmounted(() => {
         <aside class="bp-inspector">
           <div class="bp-inspector-title">Death Inspector</div>
           <div class="bp-toolbar-group bp-toolbar-group--full">
-            <button class="bp-mode-btn" :class="{ active: deathInspectorTab === 'recap' }" @click="deathInspectorTab = 'recap'">Recap</button>
-            <button class="bp-mode-btn" :class="{ active: deathInspectorTab === 'context' }" @click="deathInspectorTab = 'context'">Context</button>
-            <button class="bp-mode-btn" :class="{ active: deathInspectorTab === 'related' }" @click="deathInspectorTab = 'related'">Related Damage</button>
+            <button v-for="[value, label] in deathInspectorTabs" :key="value" class="bp-mode-btn" :class="{ active: deathInspectorTab === value }" @click="deathInspectorTab = value">{{ label }}</button>
           </div>
           <div v-if="!selectedDeath" class="bp-empty-panel">Pick a death to inspect it.</div>
           <template v-else-if="deathInspectorTab === 'recap'">
@@ -2312,9 +2322,9 @@ onUnmounted(() => {
           <template v-else-if="deathInspectorTab === 'context'">
             <div class="bp-inspector-block">
               <div class="bp-section-heading">Nearby casts</div>
-              <div v-if="selectedActorCastEvents.filter(event => selectedDeathWindow && event.t >= selectedDeathWindow.start && event.t <= selectedDeathWindow.end).length === 0" class="bp-empty-panel">No casts for this player inside the selected death window.</div>
+              <div v-if="selectedDeathWindowCasts.length === 0" class="bp-empty-panel">No casts for this player inside the selected death window.</div>
               <div
-                v-for="cast in selectedActorCastEvents.filter(event => selectedDeathWindow && event.t >= selectedDeathWindow.start && event.t <= selectedDeathWindow.end).slice(0, 8)"
+                v-for="cast in selectedDeathWindowCasts.slice(0, 8)"
                 :key="`death-cast-${cast.t}-${cast.abilityName}`"
                 class="bp-inspector-list-item"
               >
@@ -2501,16 +2511,11 @@ onUnmounted(() => {
           <div v-if="!selectedCastAbility" class="bp-empty-panel">Select an ability to inspect its cadence and targets.</div>
           <template v-else>
             <div class="bp-inspector-block">
-              <div class="bp-kv"><span>Ability</span><strong>{{ selectedCastAbility.name }}</strong></div>
-              <div class="bp-kv"><span>Casts</span><strong>{{ selectedCastAbility.casts }}</strong></div>
-              <div class="bp-kv"><span>Avg Interval</span><strong>{{ selectedCastAbility.avgInterval }}s</strong></div>
-              <div class="bp-kv"><span>Target(s)</span><strong>{{ selectedCastAbility.targets.length }}</strong></div>
+              <div v-for="[label, value] in selectedCastInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
             </div>
             <div v-if="selectedCastEvent" class="bp-inspector-block">
               <div class="bp-section-heading">Selected Cast</div>
-              <div class="bp-kv"><span>Time</span><strong>{{ fmtTime(selectedCastEvent.t) }}</strong></div>
-              <div class="bp-kv"><span>Target</span><strong>{{ selectedCastEvent.target || '—' }}</strong></div>
-              <div class="bp-kv"><span>Duration</span><strong>{{ ((selectedCastEvent.buffDurationMs ?? selectedCastEvent.durationMs ?? 0) / 1000).toFixed(1) }}s</strong></div>
+              <div v-for="[label, value] in selectedCastEventRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
             </div>
             <div class="bp-inspector-block">
               <div class="bp-section-heading">Target(s)</div>
@@ -2530,12 +2535,7 @@ onUnmounted(() => {
             </div>
             <div v-if="castMitigationEffectiveness" class="bp-inspector-block">
               <div class="bp-section-heading">Mitigation Efficiency</div>
-              <div class="bp-kv"><span>Scope</span><strong>{{ castMitigationEffectiveness.scope }}</strong></div>
-              <div class="bp-kv"><span>Expected Reduction</span><strong>{{ castMitigationEffectiveness.expected }}</strong></div>
-              <div class="bp-kv"><span>Hits in Duration</span><strong>{{ castMitigationEffectiveness.hits }}</strong></div>
-              <div class="bp-kv"><span>Solo / Stacked Hits</span><strong>{{ castMitigationEffectiveness.soloHits }} / {{ castMitigationEffectiveness.stackedHits }}</strong></div>
-              <div class="bp-kv"><span>Reduced Damage Taken By</span><strong>{{ castMitigationEffectiveness.mitigated }}</strong></div>
-              <div class="bp-kv"><span>Damage Without This Mit</span><strong>{{ castMitigationEffectiveness.withoutThisMit }}</strong></div>
+              <div v-for="[label, value] in mitigationInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
               <div class="bp-section-heading">Stacked With</div>
               <div v-if="castMitigationEffectiveness.stackedWith.length === 0" class="bp-empty-panel">No overlapping mitigation captured.</div>
               <div v-else class="cast-target-list">
@@ -2568,9 +2568,8 @@ onUnmounted(() => {
           <div class="bp-panel-toolbar">
             <div class="bp-panel-title">Unified Events</div>
             <div class="bp-toolbar-group">
-              <button class="bp-mode-btn" :class="{ active: eventActorScope === 'selected' }" @click="eventActorScope = 'selected'">Selected Actor</button>
-              <button class="bp-mode-btn" :class="{ active: eventActorScope === 'all' }" @click="eventActorScope = 'all'">All Actors</button>
-              <button v-for="filter in ['damage', 'healing', 'casts', 'deaths', 'raises']" :key="filter" class="bp-mode-btn" :class="{ active: eventFilters.has(filter as EventFilter) }" @click="toggleEventFilter(filter as EventFilter)">{{ filter }}</button>
+              <button v-for="[value, label] in eventActorScopes" :key="value" class="bp-mode-btn" :class="{ active: eventActorScope === value }" @click="eventActorScope = value">{{ label }}</button>
+              <button v-for="filter in eventFilterOptions" :key="filter" class="bp-mode-btn" :class="{ active: eventFilters.has(filter) }" @click="toggleEventFilter(filter)">{{ filter }}</button>
             </div>
           </div>
           <div v-if="eventRows.length === 0" class="bp-waiting">No event rows match the current filters. This v1 view combines casts and death-recap events until the full shared event stream lands.</div>
@@ -2703,41 +2702,9 @@ onUnmounted(() => {
 .bp-view-tab.active { color: var(--flexi-accent); border-bottom-color: var(--flexi-accent); }
 
 /* ── Combatant tabs ── */
-.bp-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0; }
-.bp-group-header {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 6px;
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.15);
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 11px;
-  color: rgba(255,255,255,0.6);
-}
-.bp-group-header:hover {
-  background: rgba(255,255,255,0.12);
-}
-.bp-group-toggle {
-  font-size: 8px;
-  color: rgba(255,255,255,0.4);
-}
-.bp-group-label {
-  font-weight: 600;
-}
 .bp-tab { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.5); padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 11px; font-family: inherit; transition: all 0.15s; }
 .bp-tab:hover { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.8); }
 .bp-tab.active { background: var(--flexi-accent-soft); border-color: var(--flexi-accent-border); color: #d9bcff; }
-
-.cast-group-label {
-  font-size: 9px;
-  color: rgba(255,255,255,0.3);
-  text-transform: uppercase;
-  padding: 3px 6px 3px 8px;
-  border-right: 1px solid rgba(255,255,255,0.1);
-  margin-right: 4px;
-}
 
 /* ── Metric tabs ── */
 .bp-metric-tabs { display: flex; gap: 0; padding: 4px 10px; border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0; }
@@ -2790,45 +2757,7 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ability-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  max-width: 100%;
-  vertical-align: middle;
-}
-.aname.ability-cell { display: inline-flex; }
-.breakdown-ability-icon {
-  width: 22px;
-  height: 22px;
-  flex: 0 0 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  border-radius: 4px;
-  border: 1px solid rgba(255,255,255,0.16);
-  background: linear-gradient(135deg, rgba(255,255,255,0.13), rgba(255,255,255,0.035));
-  color: rgba(255,255,255,0.74);
-  font-size: 8px;
-  font-weight: 800;
-  line-height: 1;
-}
-.breakdown-ability-icon--small {
-  width: 18px;
-  height: 18px;
-  flex-basis: 18px;
-  font-size: 7px;
-}
-.breakdown-ability-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
 .col-pct { color: rgba(255,210,80,0.9); }
-.col-dim { color: rgba(255,255,255,0.3); }
 .target-ability-stack {
   display: flex;
   flex-direction: column;
@@ -2910,19 +2839,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .bp-legend-name { font-size: 11px; color: rgba(255,255,255,0.65); white-space: nowrap; }
 .bp-legend-name--focused { color: #ffd250; font-weight: 700; }
 
-/* ── Show Enemies toggle ── */
-.bp-toggle-btn {
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.12);
-  color: rgba(255,255,255,0.35);
-  font-size: 10px; font-family: inherit;
-  padding: 2px 8px; border-radius: 3px; cursor: pointer;
-  white-space: nowrap; letter-spacing: 0.04em;
-  transition: all 0.15s;
-}
-.bp-toggle-btn:hover { color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.09); }
-.bp-toggle-btn.active { background: rgba(255,160,60,0.15); border-color: rgba(255,160,60,0.4); color: #ffb347; }
-
 /* ── Deaths tab badge ── */
 .bp-death-badge {
   display: inline-block;
@@ -2933,13 +2849,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   margin-left: 4px; vertical-align: middle;
 }
 
-/* ── Summary mode bar ── */
-.bp-summary-mode-bar {
-  display: flex; align-items: center; gap: 4px;
-  padding: 4px 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
-  flex-shrink: 0;
-}
 .bp-mode-btn {
   background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.1);
@@ -2952,141 +2861,9 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .bp-mode-btn.active { background: rgba(100,180,255,0.15); border-color: rgba(100,180,255,0.4); color: #64b4ff; }
 .bp-mode-total { margin-left: auto; font-size: 11px; color: rgba(255,255,255,0.3); font-variant-numeric: tabular-nums; }
 
-/* ── Encounter tab ── */
-.enc-header {
-  display: flex; align-items: baseline; gap: 8px;
-  padding: 5px 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
-  flex-shrink: 0;
-}
-.enc-name { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.75); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.enc-dur  { font-size: 10px; color: rgba(255,255,255,0.35); font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; }
-
-.enc-main {
-  flex: 1; min-height: 0;
-  display: flex; overflow: hidden;
-}
-
-.enc-left {
-  width: 195px; flex-shrink: 0;
-  display: flex; flex-direction: column; overflow: hidden;
-  border-right: 1px solid rgba(255,255,255,0.07);
-}
-
-.enc-right {
-  flex: 1; min-width: 0;
-  display: flex; flex-direction: column; overflow: hidden;
-}
-
-.enc-section-label {
-  padding: 3px 8px;
-  font-size: 9px; font-weight: 600;
-  color: rgba(255,255,255,0.25);
-  text-transform: uppercase; letter-spacing: 0.08em;
-  background: rgba(255,255,255,0.025);
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  flex-shrink: 0;
-  display: flex; align-items: center; gap: 5px;
-}
-.enc-section-label--adds {
-  color: rgba(255,160,60,0.45);
-  background: rgba(255,160,60,0.03);
-  border-top: 1px solid rgba(255,255,255,0.05);
-}
-.enc-section-label--death {
-  border-top: none;
-}
-
-.enc-player-list { flex: 1; overflow-y: auto; }
-
-.enc-player-row {
-  position: relative;
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 8px;
-  cursor: pointer;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-  min-height: 26px;
-  transition: background 0.1s;
-}
-.enc-player-row:hover   { background: rgba(255,255,255,0.04); }
-.enc-player-row.active  { background: rgba(255,210,80,0.07); }
-
-.enc-fill {
-  position: absolute; inset: 0; right: auto;
-  background: rgba(220,70,70,0.14);
-  pointer-events: none;
-  min-width: 2px;
-  transition: width 0.25s ease;
-}
-.enc-fill--enemy { background: rgba(255,160,60,0.10); }
-
-.enc-player-name {
-  position: relative; z-index: 1;
-  font-size: 11px; color: rgba(255,255,255,0.8);
-  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.enc-player-val {
-  position: relative; z-index: 1;
-  font-size: 10px; color: rgba(255,255,255,0.4);
-  font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0;
-}
-.enc-player-row.active .enc-player-name { color: #ffd250; }
-.enc-player-row.active .enc-player-val  { color: rgba(255,210,80,0.55); }
-
-.enc-select-prompt {
-  flex: 1; display: flex; align-items: center; justify-content: center;
-  color: rgba(255,255,255,0.2); font-size: 12px; text-align: center; padding: 16px;
-}
-
-.enc-ability-header {
-  display: flex; align-items: center; gap: 8px;
-  padding: 5px 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
-  flex-shrink: 0;
-}
-.enc-ability-player {
-  font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.8);
-  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.enc-ability-total {
-  font-size: 10px; color: rgba(255,255,255,0.35);
-  font-variant-numeric: tabular-nums; white-space: nowrap;
-}
-
-.enc-ability-scroll { flex: 1; overflow-y: auto; }
-
-/* Ability fill in the right panel — red-tinted instead of white */
 .enc-row-fill { background: rgba(220,70,70,0.10); }
 
-.enc-empty-small {
-  padding: 14px 8px; font-size: 10px;
-  color: rgba(255,255,255,0.2); text-align: center;
-}
-
-/* Death section pinned at bottom of encounter tab */
-.enc-death-section {
-  flex-shrink: 0;
-  max-height: 33%;
-  display: flex; flex-direction: column; overflow: hidden;
-  border-top: 1px solid rgba(255,255,255,0.07);
-}
-.enc-death-empty {
-  padding: 8px 10px; font-size: 10px; color: rgba(255,255,255,0.2);
-}
-.enc-death-list { overflow-y: auto; flex: 1; }
-
 /* ── Deaths tab (dedicated) ── */
-.dl-root {
-  flex: 1; min-height: 0;
-  display: flex; overflow: hidden;
-}
-
-/* Left: death list */
-.dl-list {
-  width: 210px; flex-shrink: 0;
-  overflow-y: auto;
-  border-right: 1px solid rgba(255,255,255,0.07);
-}
 .dl-death-row {
   display: flex; flex-direction: column; gap: 4px;
   padding: 7px 10px;
@@ -3165,56 +2942,10 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .dl-hpbar-change.dl-hpbar-heal { position: absolute; top: 0; height: 100%; background: #00e676; opacity: 0.6; border-radius: 2px; }
 .dl-hpbar-change.dl-hpbar-dmg { position: absolute; top: 0; height: 100%; background: #ff1744; opacity: 0.6; border-radius: 2px; }
 
-/* Legacy death row (used in encounter tab's death section if restored) */
-.bp-death-row {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 7px 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-}
-.bp-death-row:hover { background: rgba(255,255,255,0.03); }
-.bp-death-left { display: flex; flex-direction: column; gap: 2px; }
-.bp-death-name { font-size: 12px; color: rgba(255,255,255,0.8); }
-.bp-death-time { font-size: 10px; color: rgba(255,100,100,0.7); font-variant-numeric: tabular-nums; }
-.bp-death-spark { display: flex; align-items: center; }
 .bp-spark-svg { display: block; }
 .bp-spark-none { font-size: 10px; color: rgba(255,255,255,0.2); }
 
 /* ── Casts tab ── */
-.cast-list-header {
-  padding: 6px 10px;
-  font-size: 10px;
-  color: rgba(255,255,255,0.35);
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.cast-scroll {
-  flex: 1;
-  overflow-y: auto;
-}
-.cast-row {
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-}
-.cast-row-main {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.cast-row-summary {
-  flex: 1;
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  color: rgba(255,255,255,0.45);
-  font-size: 10px;
-  min-width: 0;
-}
 .cast-xiv-tick {
   position: absolute;
   top: 5px;
@@ -3535,119 +3266,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 }
 .cast-analysis-death-line { background: rgba(255,23,68,0.65); }
 .cast-analysis-raise-line { background: rgba(255,255,255,0.72); }
-.cast-row-main:hover {
-  background: rgba(255,255,255,0.03);
-}
-.cast-row.expanded {
-  background: rgba(116,185,255,0.08);
-}
-.cast-ability-info {
-  width: 140px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.cast-ability-name {
-  flex: 1;
-  font-size: 11px;
-  color: rgba(255,255,255,0.85);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cast-ability-casts {
-  font-size: 10px;
-  color: rgba(255,255,255,0.5);
-  font-variant-numeric: tabular-nums;
-}
-.cast-row-timeline {
-  flex: 1;
-  height: 18px;
-  position: relative;
-  display: flex;
-}
-.cast-mini-bucket {
-  flex: 1;
-  position: relative;
-  border-left: 1px solid rgba(255,255,255,0.03);
-}
-.cast-mini-segment {
-  position: absolute;
-  top: 4px;
-  bottom: 4px;
-  width: 2px;
-  background: #74b9ff;
-  border-radius: 1px;
-}
-.cast-mini-segment.cast-bar-tick {
-  background: #a29bfe;
-}
-.cast-timeline-ticks {
-  position: absolute;
-  bottom: -14px;
-  left: 0;
-  right: 0;
-  height: 12px;
-  pointer-events: none;
-}
-.cast-tick-mark {
-  position: absolute;
-  font-size: 8px;
-  color: rgba(255,255,255,0.25);
-  transform: translateX(-50%);
-  font-variant-numeric: tabular-nums;
-}
-
-.cast-death-range {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  background: rgba(255, 0, 0, 0.15);
-  pointer-events: none;
-}
-
-.cast-death-overlay {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  pointer-events: none;
-}
-.cast-death-line {
-  width: 2px;
-  height: 100%;
-  background: #ff0000;
-  opacity: 0.7;
-}
-.cast-death-label {
-  position: absolute;
-  top: -14px;
-  left: -16px;
-  font-size: 7px;
-  color: #ff0000;
-  font-weight: 700;
-}
-
-.cast-ress-overlay {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  pointer-events: none;
-}
-.cast-ress-line {
-  width: 2px;
-  height: 100%;
-  background: #00ff00;
-  opacity: 0.7;
-}
-.cast-ress-label {
-  position: absolute;
-  top: -14px;
-  left: -20px;
-  font-size: 7px;
-  color: #00ff00;
-  font-weight: 700;
-}
 
 .cast-hover-tooltip {
   position: fixed;
@@ -3672,42 +3290,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   color: rgba(255,255,255,0.6);
 }
 
-.cast-row-details {
-  padding: 8px 10px 10px 150px;
-  background: rgba(0,0,0,0.15);
-}
-.cast-detail-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-.cast-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.cast-stat-label {
-  font-size: 9px;
-  color: rgba(255,255,255,0.35);
-  text-transform: uppercase;
-}
-.cast-stat-value {
-  font-size: 11px;
-  color: rgba(255,255,255,0.7);
-  font-variant-numeric: tabular-nums;
-}
-.cast-target-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.cast-target-chip {
-  font-size: 10px;
-  padding: 2px 6px;
-  background: rgba(255,255,255,0.08);
-  border-radius: 3px;
-  color: rgba(255,255,255,0.6);
-}
 .cast-target-list {
   display: grid;
   gap: 5px;
@@ -4006,36 +3588,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   color: rgba(255,255,255,0.35);
   border-bottom: 1px solid rgba(255,255,255,0.06);
 }
-.bp-rail-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 10px;
-  border: none;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  text-align: left;
-}
-.bp-rail-item:hover { background: rgba(255,255,255,0.04); }
-.bp-rail-item.active { background: rgba(255,210,80,0.08); }
-.bp-rail-fill {
-  position: absolute;
-  inset: 0;
-  right: auto;
-  min-width: 2px;
-  background: rgba(116,185,255,0.12);
-  pointer-events: none;
-}
-.bp-rail-fill--taken { background: rgba(220,70,70,0.14); }
-.bp-rail-fill--timeline { background: rgba(255,210,80,0.12); }
-.bp-rail-fill--casts { background: rgba(162,155,254,0.14); }
-.bp-rail-fill--events { background: rgba(0,230,118,0.12); }
-.bp-rail-name,
-.bp-rail-meta,
 .bp-job-icon {
   position: relative;
   z-index: 1;
@@ -4046,19 +3598,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   flex: 0 0 18px;
   object-fit: contain;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,0.65));
-}
-.bp-rail-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: rgba(255,255,255,0.82);
-}
-.bp-rail-meta {
-  font-size: 10px;
-  color: rgba(255,255,255,0.42);
-  white-space: nowrap;
 }
 .bp-card-grid {
   display: grid;
@@ -4091,7 +3630,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .bp-card--done { box-shadow: inset 0 0 0 1px rgba(155,93,229,0.12); }
 .bp-card--taken { box-shadow: inset 0 0 0 1px rgba(220,70,70,0.08); }
 .bp-card--deaths { box-shadow: inset 0 0 0 1px rgba(255,80,80,0.08); }
-.bp-card--casts { box-shadow: inset 0 0 0 1px rgba(162,155,254,0.08); }
 .bp-card--progress { grid-column: span 2; }
 .bp-card-label {
   font-size: 10px;
@@ -4220,10 +3758,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .bp-mini-chart-bar:hover {
   filter: brightness(1.18);
   transform: scaleY(1.03);
-}
-.bp-mini-chart-label {
-  color: rgba(255,255,255,0.5);
-  line-height: 1.4;
 }
 .bp-mini-chart-values {
   display: flex;
