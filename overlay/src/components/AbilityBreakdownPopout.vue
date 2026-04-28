@@ -113,8 +113,6 @@ if (initialView === 'pulls') {
   localStorage.removeItem('flexi-breakdown-view')
 }
 
-// Cast timeline hover state
-const castHoverData = ref<{ time: number; ability: string; target: string; x: number; y: number } | null>(null)
 const abilityIconSrcs = ref<Record<string, string>>({})
 const abilityCooldownMs = ref<Record<string, number>>({})
 const abilityIconRequested = new Set<string>()
@@ -346,7 +344,7 @@ const selectedActorOverviewCards = computed(() => ([
   { label: 'Deaths', value: String(selectedActorDeaths.value.length), detail: selectedActorDeaths.value.length > 0 ? `Last @ ${fmtTime(selectedActorDeaths.value.at(-1)?.timestamp ?? 0)}` : 'No deaths', tone: 'deaths', view: 'deaths' as BreakdownView },
   { label: 'Casts', value: f(selectedActorCastEvents.value.length), detail: `${castPlayerData.value?.abilities.length ?? 0} tracked abilities`, tone: 'casts', view: 'casts' as BreakdownView },
 ]))
-const doneDimensionOptions = [['ability', 'Ability'], ['targets', 'Targets'], ['sources', 'Sources']] as const, deathInspectorTabs = [['recap', 'Recap'], ['context', 'Context'], ['related', 'Related Damage']] as const
+const doneDimensionOptions = [['ability', 'Ability'], ['targets', 'Targets'], ['sources', 'Sources']] as const, takenModeOptions = [['damage', 'Damage Taken'], ['healing', 'Healing Received']] as const, chartMetricOptions = [['dps', 'DPS'], ['rdps', 'rDPS'], ['hps', 'HPS'], ['dtps', 'DTPS']] as const, deathInspectorTabs = [['recap', 'Recap'], ['context', 'Context'], ['related', 'Related Damage']] as const
 const eventActorScopes = [['selected', 'Selected Actor'], ['all', 'All Actors']] as const, eventFilterOptions: EventFilter[] = ['damage', 'healing', 'casts', 'deaths', 'raises']
 function eventSelectorBadgeFor(name: string): string {
   return `${eventRowCountFor(name)} rows`
@@ -355,7 +353,6 @@ function eventSelectorBadgeFor(name: string): string {
 function selectActor(name: string): void {
   selected.value = name
   castSelectedPlayer.value = name
-  encounterSelectedPlayer.value = name
   const nextHidden = new Set(hiddenSeries.value)
   nextHidden.delete(name)
   hiddenSeries.value = nextHidden
@@ -377,7 +374,6 @@ watch(activePull, () => {
   castSelectedPlayer.value = ''
   castSelectedAbility.value = null
   castSelectedEventKey.value = null
-  encounterSelectedPlayer.value = ''
   selectedAbility.value = ''
   eventWindowOnly.value = false
   deathInspectorTab.value = 'recap'
@@ -387,7 +383,6 @@ watch(resolvedSelected, (name) => {
   selectedAbility.value = ''
   if (!name) return
   castSelectedPlayer.value = name
-  encounterSelectedPlayer.value = name
 })
 
 const castGroups = computed(() => {
@@ -748,9 +743,6 @@ function queueVisibleAbilityIcons(): void {
   }
 }
 
-// ── Encounter tab ─────────────────────────────────────────────────────────────
-const encounterSelectedPlayer = ref('')
-
 const selectedDeathIndex = ref<number | null>(null)
 
 function deathSelectionKey(death: DeathRecord | null | undefined): string {
@@ -834,6 +826,7 @@ const mitigationInspectorRows = computed(() => {
   const mitigation = castMitigationEffectiveness.value
   return mitigation ? [['Scope', mitigation.scope], ['Expected Reduction', mitigation.expected], ['Hits in Duration', mitigation.hits], ['Solo / Stacked Hits', `${mitigation.soloHits} / ${mitigation.stackedHits}`], ['Reduced Damage Taken By', mitigation.mitigated], ['Damage Without This Mit', mitigation.withoutThisMit]] : []
 })
+const overviewInspectorRows = computed(() => [['rDPS', f(rdpsFor(resolvedSelected.value))], ['DPS Given', f(rdpsGivenFor(resolvedSelected.value))], ['DPS Taken', f(rdpsTakenFor(resolvedSelected.value))], ['Biggest Hit', selectedDoneHighestHitAbility.value ? `${selectedDoneHighestHitAbility.value.abilityName} · ${f(selectedDoneHighestHitAbility.value.maxHit)}` : '—'], ['Biggest Taken', selectedTakenAbility.value?.abilityName ?? '—'], ['Deaths', String(selectedActorDeaths.value.length)], ['Casts', String(selectedActorCastEvents.value.length)]])
 
 const selectedDeathRelatedDamage = computed(() => {
   const totals = new Map<string, number>()
@@ -858,6 +851,7 @@ const selectedDeathWindow = computed(() => {
 })
 
 const selectedDeathWindowCasts = computed(() => selectedDeathWindow.value ? selectedActorCastEvents.value.filter(event => event.t >= selectedDeathWindow.value!.start && event.t <= selectedDeathWindow.value!.end) : [])
+const selectedDeathRecapRows = computed(() => selectedDeath.value ? [['Time', fmtTime(selectedDeath.value.timestamp)], ['Raised', selectedDeath.value.resurrectTime ? fmtTime(selectedDeath.value.resurrectTime) : 'No'], ['Window Length', selectedDeathWindow.value ? fmtTime(selectedDeathWindow.value.end - selectedDeathWindow.value.start) : '—'], ['Estimated', deathHitLog.value.some(hit => hit.isEstimated) ? 'Yes' : 'No']] : [])
 
 const overviewNotableEvents = computed(() => {
   const items = sortedDeaths.value
@@ -1126,6 +1120,12 @@ const hoverTooltip = computed(() => {
   return { timeLabel, entries, groupVal, activeBuffs, deaths, raises }
 })
 
+const timelineInspectorRows = computed(() => {
+  const rows = [['Metric', metricLabel.value], ['Hover Window', hoverTooltip.value?.timeLabel ?? '—'], ['Deaths', String(timelineInspectorDeaths.value.length)], ['Casts', String(timelineInspectorCasts.value.length)]]
+  if (chartMetric.value === 'rdps') rows.splice(1, 0, ['DPS Given', f(rdpsGivenFor(resolvedSelected.value))], ['DPS Taken', f(rdpsTakenFor(resolvedSelected.value))])
+  return rows
+})
+
 const timelineRaidBuffWindows = computed(() => {
   const windows: Array<{ key: string; start: number; end: number; source: string; target: string; name: string }> = []
   for (const [source, events] of Object.entries(castData.value)) {
@@ -1311,6 +1311,7 @@ const activeFilterChips = computed(() => {
   if (eventWindowOnly.value && selectedDeathWindow.value) chips.push(`Window=Death #${(selectedDeathIndex.value ?? 0) + 1}`)
   return chips
 })
+const eventInspectorRows = computed(() => [['Rows', String(eventRows.value.length)], ['Actor Scope', eventActorScope.value === 'all' ? 'All actors' : 'Selected actor'], ['Selected Ability', selectedAbility.value || 'None'], ['Window', eventWindowOnly.value && selectedDeathWindow.value ? 'Selected death' : 'Whole pull']])
 
 // ── BroadcastChannel ──────────────────────────────────────────────────────────
 let channel: BroadcastChannel | null = null
@@ -1653,13 +1654,7 @@ onUnmounted(() => {
           <div class="bp-inspector-title">Overview Inspector</div>
             <div class="bp-inspector-block">
               <div class="bp-kv"><span>Player</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected || 'None' }}</strong></div>
-              <div class="bp-kv"><span>rDPS</span><strong :title="rdpsDeltaLabel(resolvedSelected)">{{ f(rdpsFor(resolvedSelected)) }}</strong></div>
-              <div class="bp-kv"><span>DPS Given</span><strong>{{ f(rdpsGivenFor(resolvedSelected)) }}</strong></div>
-              <div class="bp-kv"><span>DPS Taken</span><strong>{{ f(rdpsTakenFor(resolvedSelected)) }}</strong></div>
-              <div class="bp-kv"><span>Biggest Hit</span><strong>{{ selectedDoneHighestHitAbility ? `${selectedDoneHighestHitAbility.abilityName} · ${f(selectedDoneHighestHitAbility.maxHit)}` : '—' }}</strong></div>
-            <div class="bp-kv"><span>Biggest Taken</span><strong>{{ selectedTakenAbility?.abilityName ?? '—' }}</strong></div>
-            <div class="bp-kv"><span>Deaths</span><strong>{{ selectedActorDeaths.length }}</strong></div>
-            <div class="bp-kv"><span>Casts</span><strong>{{ selectedActorCastEvents.length }}</strong></div>
+              <div v-for="[label, value] in overviewInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong :title="label === 'rDPS' ? rdpsDeltaLabel(resolvedSelected) : undefined">{{ value }}</strong></div>
           </div>
           <div class="bp-inspector-block">
             <div class="bp-section-heading">Quick Actions</div>
@@ -1971,8 +1966,7 @@ onUnmounted(() => {
             <div class="bp-panel-title">Incoming Breakdown</div>
             <div class="bp-toolbar-group">
               <span v-if="takenMode === 'healing'" class="bp-mode-total">{{ f(healingTotal) }} effective · {{ f(healingOverhealTotal) }} overheal</span>
-              <button class="bp-mode-btn" :class="{ active: takenMode === 'damage' }" @click="takenMode = 'damage'">Damage Taken</button>
-              <button class="bp-mode-btn" :class="{ active: takenMode === 'healing' }" @click="takenMode = 'healing'">Healing Received</button>
+              <button v-for="[value, label] in takenModeOptions" :key="value" class="bp-mode-btn" :class="{ active: takenMode === value }" @click="takenMode = value">{{ label }}</button>
             </div>
           </div>
           <div v-if="incomingAbilities.length === 0" class="bp-waiting">No incoming {{ takenMode === 'healing' ? 'healing' : 'damage' }} data for this pull.</div>
@@ -2027,10 +2021,7 @@ onUnmounted(() => {
         >
           <template #before-groups>
             <div class="bp-metric-tabs">
-              <button class="bp-metric-tab" :class="{ active: chartMetric === 'dps' }"  @click="chartMetric = 'dps'">DPS</button>
-              <button class="bp-metric-tab" :class="{ active: chartMetric === 'rdps' }" @click="chartMetric = 'rdps'">rDPS</button>
-              <button class="bp-metric-tab" :class="{ active: chartMetric === 'hps' }"  @click="chartMetric = 'hps'">HPS</button>
-              <button class="bp-metric-tab" :class="{ active: chartMetric === 'dtps' }" @click="chartMetric = 'dtps'">DTPS</button>
+              <button v-for="[value, label] in chartMetricOptions" :key="value" class="bp-metric-tab" :class="{ active: chartMetric === value }" @click="chartMetric = value">{{ label }}</button>
             </div>
           </template>
         </ActorRail>
@@ -2190,13 +2181,8 @@ onUnmounted(() => {
         <aside class="bp-inspector">
           <div class="bp-inspector-title">Timeline Inspector</div>
             <div class="bp-inspector-block">
-              <div class="bp-kv"><span>Metric</span><strong>{{ metricLabel }}</strong></div>
               <div class="bp-kv"><span>Selected Actor</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected }}</strong></div>
-              <div v-if="chartMetric === 'rdps'" class="bp-kv"><span>DPS Given</span><strong>{{ f(rdpsGivenFor(resolvedSelected)) }}</strong></div>
-              <div v-if="chartMetric === 'rdps'" class="bp-kv"><span>DPS Taken</span><strong>{{ f(rdpsTakenFor(resolvedSelected)) }}</strong></div>
-              <div class="bp-kv"><span>Hover Window</span><strong>{{ hoverTooltip?.timeLabel ?? '—' }}</strong></div>
-            <div class="bp-kv"><span>Deaths</span><strong>{{ timelineInspectorDeaths.length }}</strong></div>
-            <div class="bp-kv"><span>Casts</span><strong>{{ timelineInspectorCasts.length }}</strong></div>
+              <div v-for="[label, value] in timelineInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
           </div>
           <div class="bp-inspector-block">
             <div class="bp-section-heading">Window Events</div>
@@ -2313,10 +2299,7 @@ onUnmounted(() => {
           <template v-else-if="deathInspectorTab === 'recap'">
             <div class="bp-inspector-block">
               <div class="bp-kv"><span>Target</span><strong :style="nameStyle(selectedDeath.targetName)">{{ selectedDeath.targetName }}</strong></div>
-              <div class="bp-kv"><span>Time</span><strong>{{ fmtTime(selectedDeath.timestamp) }}</strong></div>
-              <div class="bp-kv"><span>Raised</span><strong>{{ selectedDeath.resurrectTime ? fmtTime(selectedDeath.resurrectTime) : 'No' }}</strong></div>
-              <div class="bp-kv"><span>Window Length</span><strong>{{ selectedDeathWindow ? fmtTime(selectedDeathWindow.end - selectedDeathWindow.start) : '—' }}</strong></div>
-              <div class="bp-kv"><span>Estimated</span><strong>{{ deathHitLog.some(hit => hit.isEstimated) ? 'Yes' : 'No' }}</strong></div>
+              <div v-for="[label, value] in selectedDeathRecapRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
             </div>
           </template>
           <template v-else-if="deathInspectorTab === 'context'">
@@ -2360,12 +2343,6 @@ onUnmounted(() => {
         <main class="bp-main">
           <div v-if="!castPlayerData" class="bp-waiting">Select a party member to view casts.</div>
           <template v-else>
-            <div v-if="castHoverData" class="cast-hover-tooltip" :style="{ left: castHoverData.x + 'px', top: castHoverData.y + 'px' }">
-              <div class="cast-tooltip-time">{{ fmtTime(castHoverData.time * 1000) }}</div>
-              <div class="cast-tooltip-ability">{{ castHoverData.ability }}</div>
-              <div class="cast-tooltip-target" v-if="castHoverData.target">→ {{ castHoverData.target }}</div>
-            </div>
-
             <div class="cast-list-header">
               <span>{{ castPlayerData.abilities.length }} abilities · {{ castPlayerData.events.length }} total casts</span>
               <div class="bp-toolbar-group">
@@ -2608,10 +2585,7 @@ onUnmounted(() => {
         <aside class="bp-inspector">
           <div class="bp-inspector-title">Event Inspector</div>
           <div class="bp-inspector-block">
-            <div class="bp-kv"><span>Rows</span><strong>{{ eventRows.length }}</strong></div>
-            <div class="bp-kv"><span>Actor Scope</span><strong>{{ eventActorScope === 'all' ? 'All actors' : 'Selected actor' }}</strong></div>
-            <div class="bp-kv"><span>Selected Ability</span><strong>{{ selectedAbility || 'None' }}</strong></div>
-            <div class="bp-kv"><span>Window</span><strong>{{ eventWindowOnly && selectedDeathWindow ? 'Selected death' : 'Whole pull' }}</strong></div>
+            <div v-for="[label, value] in eventInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
           </div>
           <div class="bp-inspector-block">
             <div class="bp-section-heading">Scope</div>
@@ -3266,29 +3240,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 }
 .cast-analysis-death-line { background: rgba(255,23,68,0.65); }
 .cast-analysis-raise-line { background: rgba(255,255,255,0.72); }
-
-.cast-hover-tooltip {
-  position: fixed;
-  z-index: 100;
-  background: rgba(0,0,0,0.9);
-  border: 1px solid rgba(255,255,255,0.2);
-  border-radius: 4px;
-  padding: 6px 8px;
-  pointer-events: none;
-}
-.cast-tooltip-time {
-  font-size: 10px;
-  color: rgba(255,255,255,0.5);
-  font-variant-numeric: tabular-nums;
-}
-.cast-tooltip-ability {
-  font-size: 11px;
-  color: #74b9ff;
-}
-.cast-tooltip-target {
-  font-size: 10px;
-  color: rgba(255,255,255,0.6);
-}
 
 .cast-target-list {
   display: grid;

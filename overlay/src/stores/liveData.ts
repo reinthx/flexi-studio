@@ -198,6 +198,16 @@ export const useLiveDataStore = defineStore('liveData', () => {
       .reduce((sum, [, value]) => sum + value, 0)
   }
 
+  function partyGroupFor(name: string, members: PartyMember[]): string {
+    const member = members.find(p => p.name === name)
+    const partyType = member?.partyType
+    if ((!partyType || partyType === 'Solo' || partyType === 'Party') && members.length > 8) {
+      const partyIdx = members.findIndex(p => p.name === name)
+      return partyIdx >= 0 ? (['Alliance A', 'Alliance B', 'Alliance C'][Math.floor(partyIdx / 8)] ?? 'Party') : 'Party'
+    }
+    return partyType ? partyType.replace(/^Alliance/, 'Alliance ') : 'Party'
+  }
+
   function buildPullList() {
     const liveDuration = parseDurationToSec(frame.value?.encounterDuration ?? '')
     const list: PullListEntry[] = [
@@ -655,10 +665,6 @@ export const useLiveDataStore = defineStore('liveData', () => {
       return dur > 0 ? dt / dur : 0
     }
 
-    // Determine party groups for alliance raids
-    const isAlliance = partyData.value.length > 8
-    const nameToPartyIdx = new Map(partyData.value.map((p, i) => [p.name, i]))
-
     const bars: BarFrame[] = filtered.map((c, i) => {
       let rawVal: number
       if (effectiveDpsType === 'dtps') {
@@ -666,27 +672,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
       } else {
         rawVal = parseFloat(c[effectiveDpsType] ?? '0')
       }
-
-      // Calculate party group from partyType if available, fallback to position-based
-      let partyGroup = 'Party'
-      const partyMember = partyData.value.find(p => p.name === c.name)
-      const pt = partyMember?.partyType
-
-      // If ACT says Solo/Party but we have >8 members, use position-based for alliance
-      if ((!pt || pt === 'Solo' || pt === 'Party') && isAlliance) {
-        const partyIdx = nameToPartyIdx.get(c.name)
-        if (partyIdx !== undefined) {
-          const allianceParty = Math.floor(partyIdx / 8)
-          partyGroup = ['Alliance A', 'Alliance B', 'Alliance C'][allianceParty] ?? 'Party'
-        }
-      } else if (pt) {
-        partyGroup = pt.replace(/^Alliance/, 'Alliance ')
-      }
-
       return {
         name: c.name,
         job: normalizeJob(c['Job'] ?? ''),
-        partyGroup,
+        partyGroup: partyGroupFor(c.name, partyData.value),
         fillFraction: rawVal / maxVal,
         displayValue: formatValue(rawVal, g.valueFormat),
         displayPct: c['damage%'] ?? '0',
@@ -842,12 +831,23 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return `${sourceId || ''}|${targetId || ''}`
   }
 
+  function setActiveEffects(map: Map<string, ActiveTickEffect[]>, key: string, effects: ActiveTickEffect[]): void {
+    if (effects.length > 0) map.set(key, effects)
+    else map.delete(key)
+  }
+
+  function activeEffectsFor(map: Map<string, ActiveTickEffect[]>, key: string): ActiveTickEffect[] {
+    const active = (map.get(key) ?? []).filter(effect => effect.expiresAt > currentPullOffsetMs())
+    setActiveEffects(map, key, active)
+    return active
+  }
+
   function recordActiveTickEffect(sourceId: string, targetId: string, effectId: string, effectName: string, durationSec: number): void {
     const name = effectName?.trim()
     if (!sourceId || !targetId || !name || !Number.isFinite(durationSec) || durationSec <= 0) return
     const key = tickEffectKey(sourceId, targetId)
     const nowMs = currentPullOffsetMs()
-    const effects = (activeTickEffects.get(key) ?? []).filter(effect => effect.expiresAt > nowMs)
+    const effects = activeEffectsFor(activeTickEffects, key)
     effects.push({
       effectId: normalizeEffectId(effectId),
       effectName: name,
@@ -858,14 +858,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   function activeTickEffectName(sourceId: string, targetId: string): string | undefined {
     const key = tickEffectKey(sourceId, targetId)
-    const effects = activeTickEffects.get(key)
-    if (!effects || effects.length === 0) return undefined
-    const nowMs = currentPullOffsetMs()
-    const active = effects.filter(effect => effect.expiresAt > nowMs)
-    if (active.length !== effects.length) {
-      if (active.length > 0) activeTickEffects.set(key, active)
-      else activeTickEffects.delete(key)
-    }
+    const active = activeEffectsFor(activeTickEffects, key)
+    if (active.length === 0) return undefined
     const names = [...new Set(active.map(effect => effect.effectName))]
     return names.length === 1 ? names[0] : undefined
   }
@@ -884,8 +878,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const next = effects.filter(effect =>
       effect.effectId !== normalizedId || effect.effectName !== effectName,
     )
-    if (next.length > 0) activeTickEffects.set(key, next)
-    else activeTickEffects.delete(key)
+    setActiveEffects(activeTickEffects, key, next)
   }
 
   function tickAbilityName(kind: 'DoT' | 'HoT', effectId: string, sourceId: string, sourceName: string, targetId: string): string {
@@ -896,6 +889,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
       ?? `${kind} (${effectId || 'unknown'})`
   }
 
+  function ensureAbilityStats(combatant: CombatantAbilityData, abilityId: string, abilityName: string): AbilityStats {
+    return combatant[abilityId] ??= { abilityId, abilityName, totalDamage: 0, hits: 0, maxHit: 0, minHit: Infinity }
+  }
 
   function recordAbilityHit(
     effectiveName: string,
@@ -910,20 +906,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       currentAbilityData.value[effectiveName] = {}
     }
     const combatant = currentAbilityData.value[effectiveName]
-    if (!combatant[abilityId]) {
-      combatant[abilityId] = {
-        abilityId,
-        abilityName,
-        totalDamage: 0,
-        hits: 0,
-        maxHit: 0,
-        minHit: Infinity,
-        critHits: 0,
-        directHits: 0,
-        critDirectHits: 0,
-      }
-    }
-    const stats: AbilityStats = combatant[abilityId]
+    const stats = ensureAbilityStats(combatant, abilityId, abilityName)
     stats.totalDamage += damage
     stats.hits += 1
     if (damage > stats.maxHit) stats.maxHit = damage
@@ -979,7 +962,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (name.toLowerCase() !== 'bloodwhetting') return
 
     const nowMs = currentPullOffsetMs()
-    const effects = (activeSelfHealingEffects.get(targetId) ?? []).filter(effect => effect.expiresAt > nowMs)
+    const effects = activeEffectsFor(activeSelfHealingEffects, targetId)
     effects.push({
       effectId: normalizeEffectId(effectId),
       effectName: name,
@@ -998,17 +981,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
       if (key && effect.effectId) return effect.effectId !== key
       return effect.effectName !== name
     })
-    if (effects.length > 0) activeSelfHealingEffects.set(targetId, effects)
-    else activeSelfHealingEffects.delete(targetId)
+    setActiveEffects(activeSelfHealingEffects, targetId, effects)
   }
 
   function activeSelfHealingEffect(targetId: string): ActiveTickEffect | undefined {
     if (!targetId) return undefined
-    const nowMs = currentPullOffsetMs()
-    const effects = (activeSelfHealingEffects.get(targetId) ?? []).filter(effect => effect.expiresAt > nowMs)
-    if (effects.length > 0) activeSelfHealingEffects.set(targetId, effects)
-    else activeSelfHealingEffects.delete(targetId)
-    return effects.at(-1)
+    return activeEffectsFor(activeSelfHealingEffects, targetId).at(-1)
   }
 
   // Check if combatant is the player's own chocobo (should exclude from casts)
@@ -1258,17 +1236,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       currentDtakenData.value[targetName] = {}
     }
     const combatant = currentDtakenData.value[targetName]
-    if (!combatant[abilityId]) {
-      combatant[abilityId] = {
-        abilityId,
-        abilityName,
-        totalDamage: 0,
-        hits: 0,
-        maxHit: 0,
-        minHit: Infinity,
-      }
-    }
-    const stats: AbilityStats = combatant[abilityId]
+    const stats = ensureAbilityStats(combatant, abilityId, abilityName)
     stats.totalDamage += damage
     stats.hits++
     if (damage > stats.maxHit) stats.maxHit = damage
@@ -1289,17 +1257,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       currentHealingReceivedData.value[targetName] = {}
     }
     const combatant = currentHealingReceivedData.value[targetName]
-    if (!combatant[abilityId]) {
-      combatant[abilityId] = {
-        abilityId,
-        abilityName,
-        totalDamage: 0,
-        hits: 0,
-        maxHit: 0,
-        minHit: Infinity,
-      }
-    }
-    const stats: AbilityStats = combatant[abilityId]
+    const stats = ensureAbilityStats(combatant, abilityId, abilityName)
     stats.totalDamage += healing
     stats.overheal = (stats.overheal ?? 0) + overheal
     stats.hits++
@@ -1929,36 +1887,17 @@ export const useLiveDataStore = defineStore('liveData', () => {
       ? Math.max(...pull.combatants.map(c => getDtpsValue(c)))
       : Math.max(...pull.combatants.map(c => parseFloat(c[profile.value.global.dpsType] ?? '0')))
 
-    // Use historical partyData for party grouping
     const historicalParty = pull.partyData ?? []
-    const historicalIsAlliance = historicalParty.length > 8
-    const historicalNameToIdx = new Map(historicalParty.map((p, i) => [p.name, i]))
     const metricFractionContext = createMetricFractionContext(pull.combatants)
 
     const bars: BarFrame[] = pull.combatants.map((c, i) => {
       const rawVal = profile.value.global.dpsType === 'dtps'
         ? getDtpsValue(c)
         : parseFloat(c[profile.value.global.dpsType] ?? '0')
-
-      // Determine party group from historical partyData
-      let partyGroup = 'Party'
-      const partyMember = historicalParty.find(p => p.name === c.name)
-      const pt = partyMember?.partyType
-
-      if ((!pt || pt === 'Solo' || pt === 'Party') && historicalIsAlliance) {
-        const partyIdx = historicalNameToIdx.get(c.name)
-        if (partyIdx !== undefined) {
-          const allianceParty = Math.floor(partyIdx / 8)
-          partyGroup = ['Alliance A', 'Alliance B', 'Alliance C'][allianceParty] ?? 'Party'
-        }
-      } else if (pt) {
-        partyGroup = pt.replace(/^Alliance/, 'Alliance ')
-      }
-
       return {
         name: c.name,
         job: normalizeJob(c['Job'] ?? ''),
-        partyGroup,
+        partyGroup: partyGroupFor(c.name, historicalParty),
         fillFraction: rawVal / (maxVal || 1),
         displayValue: formatValue(rawVal, profile.value.global.valueFormat),
         displayPct: c['damage%'] ?? '0',
