@@ -1,81 +1,85 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { formatValue } from '@shared/formatValue'
-import type { CombatantAbilityData, DpsTimeline, DeathRecord, DeathEvent, CastEvent, ResourceSample, HitRecord } from '@shared/configSchema'
+import type { DpsTimeline, DeathRecord, DeathEvent, CastEvent } from '@shared/configSchema'
 import { TIMELINE_BUCKET_SEC } from '@shared/configSchema'
 import { RAID_BUFFS } from '@shared/raidBuffs'
 import { getJobIconSrc, normalizeJob } from '@shared/jobMap'
 import { abilityInitials, resolveAbilityInfo } from '@shared/abilityIcons'
 import ActorRail from './AbilityBreakdown/ActorRail.vue'
 import AbilityCell from './AbilityBreakdown/AbilityCell.vue'
-import type { BreakdownView, CastFilter, CombatantGroup, EventFilter, PartyMemberData, PullEntry, ResourceTrackKey, TimelineOverlay } from './AbilityBreakdown/types'
+import type { BreakdownView, CastFilter, EventFilter, PullEntry, ResourceTrackKey, TimelineOverlay } from './AbilityBreakdown/types'
+import { buildDoneTargetRows, buildHealingAbilityRows, buildSortedAbilityRows, totalAbilityDamage, totalAbilityOverheal, totalEncounterDamage } from './AbilityBreakdown/abilityRows'
+import { useActorMetrics } from './AbilityBreakdown/actorMetrics'
+import {
+  buildCastPlayerData,
+  buildCastResourceTracks,
+  buildCastTimelineGroups,
+  buildCastTimelineRows,
+  castCastWindowWidth as castWindowWidth,
+  castCooldownWidth as cooldownWindowWidth,
+  castEventLeft as eventLeft,
+  castEventWidth as eventWidth,
+  castTimelinePct,
+  CAST_FILTER_LABELS,
+  CAST_FILTER_ORDER,
+  isMitigationAbility,
+  resourceAreaPath as areaPath,
+  resourcePolyline as polyline,
+} from './AbilityBreakdown/castTimeline'
+import { groupCombatants, isEnemyId, isNpcId } from './AbilityBreakdown/combatants'
+import { BREAKDOWN_REQUEST_INTERVAL_MS, BREAKDOWN_SNAPSHOT_KEY, BREAKDOWN_SNAPSHOT_MAX_AGE_MS, useBreakdownDataState } from './AbilityBreakdown/dataState'
+import type { BreakdownPayload } from './AbilityBreakdown/dataState'
 import { deathEventsFor, deathHpBars as buildDeathHpBars, formatHpBefore as formatDeathHpBefore, sortPlayerDeaths } from './AbilityBreakdown/deathTransforms'
 import { useEventRows } from './AbilityBreakdown/eventRows'
-import { entryPullLabel, fmtSeconds, fmtTime, formatEntryDelta, formatPartyLabel, hitRange as formatHitRange, overhealPct, parseEntryDuration, pctOf, pullOutcomeClass, rawHealingAverage } from './AbilityBreakdown/formatters'
+import { entryPullLabel, fmtSeconds, fmtTime, formatEntryDelta, hitRange as formatHitRange, overhealPct, parseEntryDuration, pctOf, pullOutcomeClass, rawHealingAverage } from './AbilityBreakdown/formatters'
+import {
+  bestProgressPullEntry as pickBestProgressPullEntry,
+  bestPullEntry as pickBestPullEntry,
+  buildPullDamageRows,
+  enemyProgressDetail as formatEnemyProgressDetail,
+  enemyProgressHeadline as formatEnemyProgressHeadline,
+  enemyProgressMeta as formatEnemyProgressMeta,
+  previousPullEntry as pickPreviousPullEntry,
+  pullDashboardNotes as buildPullDashboardNotes,
+} from './AbilityBreakdown/pullInsights'
+import { buildOverviewTimelineBars, buildPullGroupDpsBars, deathClusters, topTimelineSpikes } from './AbilityBreakdown/timelineSummary'
 import { useBreakdownViewState } from './AbilityBreakdown/viewState'
 
 // ── State from main window ────────────────────────────────────────────────────
-const allData             = ref<Record<string, CombatantAbilityData>>({})
-const dpsTimeline         = ref<DpsTimeline>({})
-const hpsTimeline         = ref<DpsTimeline>({})
-const dtakenTimeline      = ref<DpsTimeline>({})
-const dpsByCombatant      = ref<Record<string, number>>({})
-const damageByCombatant   = ref<Record<string, number>>({})
-const rdpsByCombatant     = ref<Record<string, number>>({})
-const rdpsGiven           = ref<Record<string, number>>({})
-const rdpsTaken           = ref<Record<string, number>>({})
-const selfName            = ref('')
-const blurNames           = ref(false)
-const partyNames          = ref<string[]>([])
-const selected            = ref('')
-const pullList            = ref<PullEntry[]>([])
-const activePull          = ref<number | null>(null)
-const encounterDurationSec = ref(0)
-const hiddenSeries        = ref<Set<string>>(new Set())
-const damageTakenData     = ref<Record<string, CombatantAbilityData>>({})
-const healingReceivedData = ref<Record<string, CombatantAbilityData>>({})
-const hitData             = ref<Record<string, HitRecord[]>>({})
-const deaths              = ref<DeathRecord[]>([])
-const combatantIds        = ref<Record<string, string>>({})
-const combatantJobs       = ref<Record<string, string>>({})
-const showEnemies         = ref(false)
-const lastBroadcastTime   = ref(0)
-const castData            = ref<Record<string, CastEvent[]>>({})
-const resourceData        = ref<Record<string, ResourceSample[]>>({})
+const {
+  allData,
+  dpsTimeline,
+  hpsTimeline,
+  dtakenTimeline,
+  dpsByCombatant,
+  damageByCombatant,
+  rdpsByCombatant,
+  rdpsGiven,
+  rdpsTaken,
+  selfName,
+  blurNames,
+  partyNames,
+  selected,
+  pullList,
+  activePull,
+  encounterDurationSec,
+  hiddenSeries,
+  damageTakenData,
+  healingReceivedData,
+  hitData,
+  deaths,
+  combatantIds,
+  combatantJobs,
+  showEnemies,
+  lastBroadcastTime,
+  castData,
+  resourceData,
+  partyData,
+  clearBreakdownData,
+} = useBreakdownDataState()
 
-type BreakdownPayload = {
-  type?: string
-  timestamp?: number
-  abilityData?: Record<string, CombatantAbilityData>
-  dpsTimeline?: DpsTimeline
-  hpsTimeline?: DpsTimeline
-  dtakenTimeline?: DpsTimeline
-  dpsByCombatant?: Record<string, number>
-  damageByCombatant?: Record<string, number>
-  rdpsByCombatant?: Record<string, number>
-  rdpsGiven?: Record<string, number>
-  rdpsTaken?: Record<string, number>
-  damageTakenData?: Record<string, CombatantAbilityData>
-  healingReceivedData?: Record<string, CombatantAbilityData>
-  hitData?: Record<string, HitRecord[]>
-  deaths?: DeathRecord[]
-  combatantIds?: Record<string, string>
-  combatantJobs?: Record<string, string>
-  castData?: Record<string, CastEvent[]>
-  resourceData?: Record<string, ResourceSample[]>
-  selfName?: string
-  blurNames?: boolean
-  partyNames?: string[]
-  partyData?: PartyMemberData[]
-  encounterDurationSec?: number
-  pullIndex?: number | null
-  selectedCombatant?: string
-  pullList?: PullEntry[]
-}
-
-const BREAKDOWN_SNAPSHOT_KEY = 'flexi-breakdown-snapshot'
-const BREAKDOWN_SNAPSHOT_MAX_AGE_MS = 30_000
-const BREAKDOWN_REQUEST_INTERVAL_MS = 5_000
+const f = (n: number) => formatValue(n, 'abbreviated')
 
 const {
   activeView,
@@ -115,8 +119,6 @@ const abilityIconSrcs = ref<Record<string, string>>({})
 const abilityCooldownMs = ref<Record<string, number>>({})
 const abilityIconRequested = new Set<string>()
 const collapsedCastGroups = ref<Set<CastFilter>>(new Set())
-
-const partyData = ref<PartyMemberData[]>([])
 
 const pullHasRaidBuffCredit = computed(() =>
   Object.values(rdpsGiven.value).some(value => value > 0)
@@ -179,73 +181,18 @@ localStorage.removeItem('flexi-breakdown-init')
 const combatants = computed(() => Object.keys(allData.value))
 
 function isEnemy(name: string): boolean {
-  const id = combatantIds.value[name]
-  return !!id && id.startsWith('40')
+  return isEnemyId(combatantIds.value[name])
 }
 
 function isNPC(name: string): boolean {
-  const id = combatantIds.value[name]
-  if (!id) return false
-  // NPC IDs typically start with 00 or E (friendly NPCs, minions, companions)
-  // Player IDs start with 10, Enemy IDs start with 40
-  return !id.startsWith('10') && !id.startsWith('40') && !id.startsWith('00')
+  return isNpcId(combatantIds.value[name])
 }
 
 const visibleCombatants = computed(() =>
   combatants.value.filter(n => (showEnemies.value || !isEnemy(n)) && (showFriendlyNPCs.value || !isNPC(n)))
 )
 
-const combatantGroups = computed<CombatantGroup[]>(() => {
-  const all = visibleCombatants.value
-  if (all.length === 0) return []
-
-  const nameToPartyType = new Map<string, { pt: string | undefined; idx: number }>()
-  for (let i = 0; i < partyData.value.length; i++) {
-    const p = partyData.value[i]
-    nameToPartyType.set(p.name, { pt: p.partyType, idx: i })
-  }
-
-  const selfPartyInfo = nameToPartyType.get(selfName.value)
-  const selfPartyType = selfPartyInfo?.pt
-  const selfIdx = selfPartyInfo?.idx ?? 0
-  const isAlliance = partyData.value.length > 8
-
-  const partyMap = new Map<string, string[]>()
-
-  for (const name of all) {
-    const info = nameToPartyType.get(name)
-    const isSelf = name === selfName.value
-    const label = formatPartyLabel(info?.pt, isSelf, info?.idx, partyData.value.length)
-
-    if (!partyMap.has(label)) partyMap.set(label, [])
-    partyMap.get(label)!.push(name)
-  }
-
-  const groups: CombatantGroup[] = []
-
-  if (isAlliance && (selfPartyType || selfIdx >= 8)) {
-    const selfLabel = formatPartyLabel(selfPartyType, true, selfIdx, partyData.value.length)
-    const selfParty = partyMap.get(selfLabel)
-    if (selfParty) {
-      groups.push({ label: selfLabel, names: selfParty, collapsed: false })
-    }
-
-    for (const [label, names] of partyMap) {
-      if (label !== selfLabel) {
-        groups.push({ label, names, collapsed: true })
-      }
-    }
-  } else {
-    const selfLabel = formatPartyLabel(selfPartyType, true, selfIdx, partyData.value.length)
-    for (const [label, names] of partyMap) {
-      groups.push({ label, names, collapsed: label !== selfLabel })
-    }
-  }
-
-  if (groups.length === 0) groups.push({ label: 'All', names: all, collapsed: false })
-
-  return groups
-})
+const combatantGroups = computed(() => groupCombatants(visibleCombatants.value, partyData.value, selfName.value))
 
 // Track collapsed state for groups
 const groupCollapsed = ref<Set<string>>(new Set())
@@ -265,10 +212,6 @@ const resolvedSelected = computed(() => {
   if (selfName.value && allData.value[selfName.value]) return selfName.value
   return visible[0] ?? ''
 })
-
-function tabLabel(name: string): string {
-  return name
-}
 
 function actorJob(name: string): string {
   const direct = combatantJobs.value[name]
@@ -297,151 +240,17 @@ function nameStyle(name: string) {
 // ── Summary ───────────────────────────────────────────────────────────────────
 const rawData = computed(() => allData.value[resolvedSelected.value] ?? {})
 
-const playerTotal = computed(() =>
-  Object.values(rawData.value).reduce((s, a) => s + a.totalDamage, 0)
+const playerTotal = computed(() => totalAbilityDamage(rawData.value))
+
+const encounterTotal = computed(() => totalEncounterDamage(allData.value))
+
+const abilities = computed(() =>
+  buildSortedAbilityRows(rawData.value, playerTotal.value, encounterDurationSec.value, doneSortColumn.value, doneSortDesc.value)
 )
 
-const encounterTotal = computed(() =>
-  Object.values(allData.value).reduce((sum, c) =>
-    sum + Object.values(c).reduce((s, a) => s + a.totalDamage, 0), 0)
+const doneTargetRows = computed(() =>
+  buildDoneTargetRows(selectedActorCastEvents.value, rawData.value, healingReceivedData.value, resolvedSelected.value)
 )
-
-const abilities = computed(() => {
-  const rows = Object.values(rawData.value).map(a => ({
-    ...a,
-    pct:    playerTotal.value > 0 ? ((a.totalDamage / playerTotal.value) * 100).toFixed(1) : '0.0',
-    avg:    a.hits > 0 ? Math.round(a.totalDamage / a.hits) : 0,
-    dps:    encounterDurationSec.value > 0 ? Math.round(a.totalDamage / encounterDurationSec.value) : 0,
-    minHit: a.minHit === Infinity ? 0 : a.minHit,
-    critPct: pctOf(a.critHits, a.hits),
-    abilityName: a.abilityName,
-  }))
-  const col = doneSortColumn.value
-  const desc = doneSortDesc.value
-  if (col === 'abilityName') {
-    rows.sort((a, b) => {
-      const cmp = (a.abilityName ?? '').localeCompare(b.abilityName ?? '')
-      return desc ? -cmp : cmp
-    })
-  } else {
-    rows.sort((a, b) => {
-      const av = (a[col] as number) ?? 0
-      const bv = (b[col] as number) ?? 0
-      return desc ? bv - av : av - bv
-    })
-  }
-  return rows
-})
-
-type AbilityRow = (typeof abilities.value)[number]
-
-type DoneTargetAbilityRow = {
-  abilityId: string
-  abilityName: string
-  casts: number
-  damage: number
-  healing: number
-  overheal: number
-  hits: number
-}
-
-const doneTargetRows = computed(() => {
-  const counts = new Map<string, {
-    target: string
-    casts: number
-    damage: number
-    damageHits: number
-    healing: number
-    overheal: number
-    healingHits: number
-    abilities: Map<string, DoneTargetAbilityRow>
-  }>()
-  const ensure = (target: string) => {
-    const key = target || 'Unknown'
-    const row = counts.get(key) ?? {
-      target: key,
-      casts: 0,
-      damage: 0,
-      damageHits: 0,
-      healing: 0,
-      overheal: 0,
-      healingHits: 0,
-      abilities: new Map<string, DoneTargetAbilityRow>(),
-    }
-    counts.set(key, row)
-    return row
-  }
-  const ensureAbility = (row: { abilities: Map<string, DoneTargetAbilityRow> }, abilityId: string, abilityName: string) => {
-    const key = abilityId || abilityName || 'unknown'
-    const ability = row.abilities.get(key) ?? {
-      abilityId,
-      abilityName: abilityName || 'Unknown',
-      casts: 0,
-      damage: 0,
-      healing: 0,
-      overheal: 0,
-      hits: 0,
-    }
-    if (!ability.abilityId && abilityId) ability.abilityId = abilityId
-    if (ability.abilityName === 'Unknown' && abilityName) ability.abilityName = abilityName
-    row.abilities.set(key, ability)
-    return ability
-  }
-
-  for (const event of selectedActorCastEvents.value) {
-    const row = ensure(event.target || 'Unknown')
-    row.casts += 1
-    if (event.abilityName) {
-      ensureAbility(row, event.abilityId, event.abilityName).casts += 1
-    }
-  }
-  for (const ability of Object.values(rawData.value)) {
-    for (const [target, stats] of Object.entries(ability.targets ?? {})) {
-      const row = ensure(target)
-      row.damage += stats.total
-      row.damageHits += stats.hits
-      const abilityRow = ensureAbility(row, ability.abilityId, ability.abilityName)
-      abilityRow.damage += stats.total
-      abilityRow.hits += stats.hits
-    }
-  }
-  for (const [target, abilities] of Object.entries(healingReceivedData.value)) {
-    for (const ability of Object.values(abilities)) {
-      const sourceStats = ability.sources?.[resolvedSelected.value]
-      if (!sourceStats) continue
-      const row = ensure(target)
-      row.healing += sourceStats.total
-      row.overheal += sourceStats.overheal ?? 0
-      row.healingHits += sourceStats.hits
-      const abilityRow = ensureAbility(row, ability.abilityId, ability.abilityName)
-      abilityRow.healing += sourceStats.total
-      abilityRow.overheal += sourceStats.overheal ?? 0
-      abilityRow.hits += sourceStats.hits
-    }
-  }
-  const total = Array.from(counts.values()).reduce((sum, row) => sum + row.damage + row.healing + row.overheal + row.casts, 0)
-  return Array.from(counts.values())
-    .map(row => {
-      const abilityRows = Array.from(row.abilities.values())
-        .sort((a, b) =>
-          (b.damage + b.healing + b.overheal + b.casts) - (a.damage + a.healing + a.overheal + a.casts) ||
-          a.abilityName.localeCompare(b.abilityName),
-        )
-      return {
-        target: row.target,
-        casts: row.casts,
-        damage: row.damage,
-        damageHits: row.damageHits,
-        healing: row.healing,
-        overheal: row.overheal,
-        healingHits: row.healingHits,
-        abilityCount: abilityRows.length,
-        abilities: abilityRows,
-        pct: total > 0 ? (((row.damage + row.healing + row.overheal + row.casts) / total) * 100).toFixed(1) : '0.0',
-      }
-    })
-    .sort((a, b) => (b.damage + b.healing + b.overheal + b.casts) - (a.damage + a.healing + a.overheal + a.casts) || a.target.localeCompare(b.target))
-})
 
 const doneSourceRows = computed(() => {
   const rows = visibleCombatants.value
@@ -449,11 +258,10 @@ const doneSourceRows = computed(() => {
     .map(name => {
       const abilityRows = Object.values(allData.value[name] ?? {})
       const total = abilityRows.reduce((sum, ability) => sum + ability.totalDamage, 0)
-      const hits = abilityRows.reduce((sum, ability) => sum + ability.hits, 0)
       return {
         name,
         total,
-        hits,
+        hits: abilityRows.reduce((sum, ability) => sum + ability.hits, 0),
         abilityCount: abilityRows.length,
         dps: encounterDurationSec.value > 0 ? Math.round(total / encounterDurationSec.value) : 0,
       }
@@ -461,82 +269,27 @@ const doneSourceRows = computed(() => {
     .filter(row => row.total > 0)
   const total = rows.reduce((sum, row) => sum + row.total, 0)
   return rows
-    .map(row => ({
-      ...row,
-      pct: total > 0 ? ((row.total / total) * 100).toFixed(1) : '0.0',
-    }))
+    .map(row => ({ ...row, pct: total > 0 ? ((row.total / total) * 100).toFixed(1) : '0.0' }))
     .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
 })
-
-function hitRange(minHit: number | undefined, maxHit: number | undefined): string {
-  return formatHitRange(minHit, maxHit, f)
-}
-
-function critPct(row: AbilityRow): string {
-  return pctOf(row.critHits, row.hits)
-}
-
-function directPct(row: AbilityRow): string {
-  return pctOf(row.directHits, row.hits)
-}
-
-function critDirectPct(row: AbilityRow): string {
-  return pctOf(row.critDirectHits, row.hits)
-}
 
 // ── Damage Taken (Summary "Taken" mode) ──────────────────────────────────────
 const takenRawData = computed(() => damageTakenData.value[resolvedSelected.value] ?? {})
 
-const takenTotal = computed(() =>
-  Object.values(takenRawData.value).reduce((s, a) => s + a.totalDamage, 0)
-)
+const takenTotal = computed(() => totalAbilityDamage(takenRawData.value))
 
-const takenAbilities = computed(() => {
-  const rows = Object.values(takenRawData.value).map(a => ({
-    ...a,
-    pct:    takenTotal.value > 0 ? ((a.totalDamage / takenTotal.value) * 100).toFixed(1) : '0.0',
-    avg:    a.hits > 0 ? Math.round(a.totalDamage / a.hits) : 0,
-    dps:    encounterDurationSec.value > 0 ? Math.round(a.totalDamage / encounterDurationSec.value) : 0,
-    minHit: a.minHit === Infinity ? 0 : a.minHit,
-    abilityName: a.abilityName,
-  }))
-  const col = takenSortColumn.value
-  const desc = takenSortDesc.value
-  if (col === 'abilityName') {
-    rows.sort((a, b) => {
-      const cmp = (a.abilityName ?? '').localeCompare(b.abilityName ?? '')
-      return desc ? -cmp : cmp
-    })
-  } else {
-    rows.sort((a, b) => {
-      const av = (a[col] as number) ?? 0
-      const bv = (b[col] as number) ?? 0
-      return desc ? bv - av : av - bv
-    })
-  }
-  return rows
-})
+const takenAbilities = computed(() =>
+  buildSortedAbilityRows(takenRawData.value, takenTotal.value, encounterDurationSec.value, takenSortColumn.value, takenSortDesc.value)
+)
 
 const healingRawData = computed(() => healingReceivedData.value[resolvedSelected.value] ?? {})
 
-const healingTotal = computed(() =>
-  Object.values(healingRawData.value).reduce((s, a) => s + a.totalDamage, 0)
-)
+const healingTotal = computed(() => totalAbilityDamage(healingRawData.value))
 
-const healingOverhealTotal = computed(() =>
-  Object.values(healingRawData.value).reduce((s, a) => s + (a.overheal ?? 0), 0)
-)
+const healingOverhealTotal = computed(() => totalAbilityOverheal(healingRawData.value))
 
 const healingAbilities = computed(() =>
-  Object.values(healingRawData.value)
-    .sort((a, b) => (b.totalDamage + (b.overheal ?? 0)) - (a.totalDamage + (a.overheal ?? 0)))
-    .map(a => ({
-      ...a,
-      pct:    healingTotal.value > 0 ? ((a.totalDamage / healingTotal.value) * 100).toFixed(1) : '0.0',
-      avg:    a.hits > 0 ? Math.round(a.totalDamage / a.hits) : 0,
-      dps:    encounterDurationSec.value > 0 ? Math.round(a.totalDamage / encounterDurationSec.value) : 0,
-      minHit: a.minHit === Infinity ? 0 : a.minHit,
-    }))
+  buildHealingAbilityRows(healingRawData.value, healingTotal.value, encounterDurationSec.value)
 )
 
 const incomingAbilities = computed(() => takenMode.value === 'healing' ? healingAbilities.value : takenAbilities.value)
@@ -562,195 +315,40 @@ const selectedActorDeaths = computed(() =>
   sortedDeaths.value.filter(death => death.targetName === resolvedSelected.value)
 )
 
-const selectedActorNearDeathCounts = computed(() => {
+function countSelectedDeathAbilities(include: (event: DeathEvent, events: DeathEvent[]) => boolean) {
   const counts = new Map<string, number>()
   for (const death of selectedActorDeaths.value) {
     const events = deathEventsFor(death)
     for (const event of events) {
-      if (event.type === 'dmg' && event.hpAfter < 0.1) {
-        const windowStart = Math.max(0, event.t - 15000)
-        const hasHealInWindow = events.some(e => e.type === 'heal' && e.t >= windowStart && e.t <= event.t + 5000)
-        if (!hasHealInWindow && event.abilityName) {
-          counts.set(event.abilityName, (counts.get(event.abilityName) ?? 0) + 1)
-        }
-      }
+      if (event.abilityName && include(event, events)) counts.set(event.abilityName, (counts.get(event.abilityName) ?? 0) + 1)
     }
   }
   return counts
-})
+}
 
-const selectedActorDeathHealingAbilitySet = computed(() => {
-  const map = new Map<string, number>()
-  for (const death of selectedActorDeaths.value) {
-    for (const event of deathEventsFor(death)) {
-      if (event.type === 'heal' && event.abilityName) {
-        map.set(event.abilityName, (map.get(event.abilityName) ?? 0) + 1)
-      }
-    }
-  }
-  return map
-})
+const selectedActorNearDeathCounts = computed(() => countSelectedDeathAbilities((event, events) => {
+  if (event.type !== 'dmg' || event.hpAfter >= 0.1) return false
+  const windowStart = Math.max(0, event.t - 15000)
+  return !events.some(e => e.type === 'heal' && e.t >= windowStart && e.t <= event.t + 5000)
+}))
+
+const selectedActorDeathHealingAbilitySet = computed(() =>
+  countSelectedDeathAbilities(event => event.type === 'heal')
+)
 
 const selectedActorCastEvents = computed(() =>
   castData.value[resolvedSelected.value] ?? []
 )
 
-const selectedActorCastCount = computed(() => selectedActorCastEvents.value.length)
-
 const selectedActorOverviewCards = computed(() => ([
-  {
-    label: 'Done',
-    value: f(playerTotal.value),
-    detail: `${abilities.value.length} abilities`,
-    tone: 'done',
-    view: 'done' as BreakdownView,
-  },
-  {
-    label: 'Taken',
-    value: f(takenTotal.value),
-    detail: `${takenAbilities.value.length} sources`,
-    tone: 'taken',
-    view: 'taken' as BreakdownView,
-  },
-  {
-    label: 'Deaths',
-    value: String(selectedActorDeaths.value.length),
-    detail: selectedActorDeaths.value.length > 0 ? `Last @ ${fmtTime(selectedActorDeaths.value.at(-1)?.timestamp ?? 0)}` : 'No deaths',
-    tone: 'deaths',
-    view: 'deaths' as BreakdownView,
-  },
-  {
-    label: 'Casts',
-    value: f(selectedActorCastCount.value),
-    detail: `${castPlayerData.value?.abilities.length ?? 0} tracked abilities`,
-    tone: 'casts',
-    view: 'casts' as BreakdownView,
-  },
+  { label: 'Done', value: f(playerTotal.value), detail: `${abilities.value.length} abilities`, tone: 'done', view: 'done' as BreakdownView },
+  { label: 'Taken', value: f(takenTotal.value), detail: `${takenAbilities.value.length} sources`, tone: 'taken', view: 'taken' as BreakdownView },
+  { label: 'Deaths', value: String(selectedActorDeaths.value.length), detail: selectedActorDeaths.value.length > 0 ? `Last @ ${fmtTime(selectedActorDeaths.value.at(-1)?.timestamp ?? 0)}` : 'No deaths', tone: 'deaths', view: 'deaths' as BreakdownView },
+  { label: 'Casts', value: f(selectedActorCastEvents.value.length), detail: `${castPlayerData.value?.abilities.length ?? 0} tracked abilities`, tone: 'casts', view: 'casts' as BreakdownView },
 ]))
-
-function totalOutgoingFor(name: string): number {
-  return Object.values(allData.value[name] ?? {}).reduce((sum, ability) => sum + ability.totalDamage, 0)
-}
-
-function actorAliases(name: string): string[] {
-  const aliases = [name]
-  if (name === 'YOU' && selfName.value) aliases.push(selfName.value)
-  if (selfName.value && name === selfName.value) aliases.push('YOU')
-  return [...new Set(aliases.filter(Boolean))]
-}
-
-function metricFor(record: Record<string, number>, name: string): number | undefined {
-  for (const alias of actorAliases(name)) {
-    const value = record[alias]
-    if (value !== undefined) return value
-  }
-  return undefined
-}
-
-function displayActorName(name: string): string {
-  return name === 'YOU' && selfName.value ? selfName.value : name
-}
-
-function rowActorNames(): string[] {
-  const names = new Set<string>()
-  for (const name of visibleCombatants.value) {
-    if (!isEnemy(name)) names.add(displayActorName(name))
-  }
-  for (const source of [damageByCombatant.value, dpsByCombatant.value, rdpsByCombatant.value]) {
-    for (const name of Object.keys(source)) {
-      const displayName = displayActorName(name)
-      if (!isEnemy(displayName)) names.add(displayName)
-    }
-  }
-  return Array.from(names)
-}
-
-function attributionDamageFor(name: string): number {
-  return metricFor(damageByCombatant.value, name) ?? totalOutgoingFor(name)
-}
-
-function dpsFor(name: string): number {
-  return metricFor(dpsByCombatant.value, name) ?? (totalOutgoingFor(name) / Math.max(encounterDurationSec.value, 1))
-}
-
-function rdpsFor(name: string): number {
-  return metricFor(rdpsByCombatant.value, name) ?? (totalOutgoingFor(name) / Math.max(encounterDurationSec.value, 1))
-}
-
-function rdpsGivenFor(name: string): number {
-  return metricFor(rdpsGiven.value, name) ?? 0
-}
-
-function rdpsTakenFor(name: string): number {
-  return metricFor(rdpsTaken.value, name) ?? 0
-}
-
-function rdpsDeltaLabel(name: string): string {
-  const given = rdpsGivenFor(name)
-  const taken = rdpsTakenFor(name)
-  if (given === 0 && taken === 0) return 'no buff adj.'
-  return `+${f(given)} given / -${f(taken)} taken`
-}
-
-function totalTakenFor(name: string): number {
-  return Object.values(damageTakenData.value[name] ?? {}).reduce((sum, ability) => sum + ability.totalDamage, 0)
-}
-
-function totalHealingReceivedFor(name: string): number {
-  return Object.values(healingReceivedData.value[name] ?? {}).reduce((sum, ability) => sum + ability.totalDamage, 0)
-}
-
-function totalIncomingFor(name: string): number {
-  return takenMode.value === 'healing' ? totalHealingReceivedFor(name) : totalTakenFor(name)
-}
-
-function deathCountFor(name: string): number {
-  return sortedDeaths.value.filter(death => death.targetName === name).length
-}
-
-function castCountFor(name: string): number {
-  return (castData.value[name] ?? []).length
-}
-
-function selectorValueFor(name: string): number {
-  if (activeView.value === 'taken') return totalIncomingFor(name)
-  if (activeView.value === 'deaths') return deathCountFor(name)
-  if (activeView.value === 'casts') return castCountFor(name)
-  if (activeView.value === 'timeline') {
-    if (chartMetric.value === 'rdps') return rdpsFor(name)
-    const buckets = activeTimeline.value[name] ?? []
-    return buckets.reduce((sum, value) => sum + value, 0)
-  }
-  return totalOutgoingFor(name)
-}
-
-function selectorBadgeFor(name: string): string {
-  if (activeView.value === 'deaths') return `${deathCountFor(name)} deaths`
-  if (activeView.value === 'casts') return `${castCountFor(name)} casts`
-  if (activeView.value === 'timeline' && chartMetric.value === 'rdps') return `${f(rdpsFor(name))} rDPS`
-  if (activeView.value === 'timeline') return `${metricLabel.value}`
-  if (activeView.value === 'taken') return `${f(totalIncomingFor(name))} in`
-  return `${f(totalOutgoingFor(name))} out`
-}
-
-function takenSelectorBadgeFor(name: string): string {
-  return f(totalIncomingFor(name))
-}
-
-function castSelectorBadgeFor(name: string): string {
-  return `${castCountFor(name)} casts`
-}
 
 function eventSelectorBadgeFor(name: string): string {
   return `${eventRowCountFor(name)} rows`
-}
-
-const selectorMax = computed(() =>
-  Math.max(1, ...visibleCombatants.value.map(name => selectorValueFor(name)))
-)
-
-function selectorFillWidth(name: string): string {
-  return `${((selectorValueFor(name) / selectorMax.value) * 100).toFixed(1)}%`
 }
 
 function selectActor(name: string): void {
@@ -774,71 +372,30 @@ const castSelectedPlayer = ref('')
 const castSelectedAbility = ref<string | null>(null)
 const castSelectedEventKey = ref<string | null>(null)
 
-watch(activePull, () => { castSelectedPlayer.value = ''; castSelectedAbility.value = null; castSelectedEventKey.value = null })
+watch(activePull, () => {
+  castSelectedPlayer.value = ''
+  castSelectedAbility.value = null
+  castSelectedEventKey.value = null
+  encounterSelectedPlayer.value = ''
+  selectedAbility.value = ''
+  eventWindowOnly.value = false
+  deathInspectorTab.value = 'recap'
+  selectedDeathIndex.value = null
+})
 watch(resolvedSelected, (name) => {
+  selectedAbility.value = ''
   if (!name) return
   castSelectedPlayer.value = name
   encounterSelectedPlayer.value = name
 })
-watch(resolvedSelected, () => {
-  selectedAbility.value = ''
-})
 
-interface CastGroup {
-  label: string
-  names: string[]
-}
-
-const castGroups = computed<CastGroup[]>(() => {
+const castGroups = computed(() => {
   const allCastNames = Object.keys(castData.value)
   if (allCastNames.length === 0) return []
-
-  const nameToPartyType = new Map<string, { pt: string | undefined; idx: number }>()
-  for (let i = 0; i < partyData.value.length; i++) {
-    const p = partyData.value[i]
-    nameToPartyType.set(p.name, { pt: p.partyType, idx: i })
-  }
-
-  const selfPartyInfo = nameToPartyType.get(selfName.value)
-  const selfPartyType = selfPartyInfo?.pt
-  const selfIdx = selfPartyInfo?.idx ?? 0
-  const isAlliance = partyData.value.length > 8
-
-  const partyMap = new Map<string, string[]>()
-
-  for (const name of allCastNames) {
-    if (isEnemy(name) && !showEnemies.value) continue
-    if (isNPC(name) && !showFriendlyNPCs.value) continue
-
-    const info = nameToPartyType.get(name)
-    const isSelf = name === selfName.value || name === 'YOU'
-    const label = formatPartyLabel(info?.pt, isSelf, info?.idx, partyData.value.length)
-
-    if (!partyMap.has(label)) partyMap.set(label, [])
-    partyMap.get(label)!.push(name)
-  }
-
-  const groups: CastGroup[] = []
-
-  if (isAlliance && (selfPartyType || selfIdx >= 8)) {
-    const selfLabel = formatPartyLabel(selfPartyType, true, selfIdx, partyData.value.length)
-    const selfParty = partyMap.get(selfLabel)
-    if (selfParty) {
-      groups.push({ label: selfLabel, names: selfParty })
-    }
-
-    for (const [label, names] of partyMap) {
-      if (label !== selfLabel) {
-        groups.push({ label, names })
-      }
-    }
-  } else {
-    for (const [label, names] of partyMap) {
-      groups.push({ label, names })
-    }
-  }
-
-  return groups
+  const visibleCastNames = allCastNames.filter(name =>
+    (showEnemies.value || !isEnemy(name)) && (showFriendlyNPCs.value || !isNPC(name))
+  )
+  return groupCombatants(visibleCastNames, partyData.value, selfName.value)
 })
 
 // Get death time for selected player (if they died)
@@ -857,132 +414,7 @@ const castPlayerResTime = computed(() => {
 
 const castPlayerData = computed(() => {
   if (!castSelectedPlayer.value) return null
-  const events = castData.value[castSelectedPlayer.value] ?? []
-  if (events.length === 0) return null
-
-  const abilityMap = new Map<string, CastEvent[]>()
-  for (const ev of events) {
-    const arr = abilityMap.get(ev.abilityName) ?? []
-    arr.push(ev)
-    abilityMap.set(ev.abilityName, arr)
-  }
-
-  const abilities = Array.from(abilityMap.entries()).map(([name, evts]) => {
-    const targetRows = new Map<string, {
-      name: string
-      id: string
-      label: string
-      casts: number
-      hits: number
-      damage: number
-      healing: number
-      overheal: number
-    }>()
-    const ensureTarget = (target: string, targetId = '') => {
-      const name = target || 'Unknown'
-      const key = targetId ? `${name}|${targetId}` : name
-      const row = targetRows.get(key) ?? {
-        name,
-        id: targetId,
-        label: name,
-        casts: 0,
-        hits: 0,
-        damage: 0,
-        healing: 0,
-        overheal: 0,
-      }
-      targetRows.set(key, row)
-      return row
-    }
-    const idBackedTargetForName = (target: string) =>
-      Array.from(targetRows.values()).find(row => row.id && row.name === target)
-
-    const ensureBestKnownTarget = (target: string) => idBackedTargetForName(target) ?? ensureTarget(target)
-
-    const addCasts = () => {
-      for (const ev of evts) {
-        if (!ev.target) continue
-        const row = targetRows.size > 0
-          ? idBackedTargetForName(ev.target) ?? (ev.targetId ? targetRows.get(`${ev.target}|${ev.targetId}`) : undefined) ?? ensureTarget(ev.target)
-          : ensureTarget(ev.target, ev.targetId ?? '')
-        row.casts += 1
-      }
-    }
-
-    for (const ability of Object.values(rawData.value)) {
-      if (ability.abilityName !== name) continue
-      if (ability.targetInstances) {
-        for (const instance of Object.values(ability.targetInstances)) {
-          const row = ensureTarget(instance.name, instance.id)
-          row.hits += instance.hits
-          row.damage += instance.total
-        }
-        continue
-      }
-      for (const [target, stats] of Object.entries(ability.targets ?? {})) {
-        const row = ensureBestKnownTarget(target)
-        row.hits += stats.hits
-        row.damage += stats.total
-      }
-    }
-
-    for (const [target, abilities] of Object.entries(healingReceivedData.value)) {
-      for (const ability of Object.values(abilities)) {
-        if (ability.abilityName !== name) continue
-        const sourceStats = ability.sources?.[castSelectedPlayer.value]
-        if (!sourceStats) continue
-        const row = ensureBestKnownTarget(target)
-        row.hits += sourceStats.hits
-        row.healing += sourceStats.total
-        row.overheal += sourceStats.overheal ?? 0
-      }
-    }
-
-    addCasts()
-
-    const targets = Array.from(targetRows.values())
-      .sort((a, b) =>
-        (b.damage + b.healing + b.overheal + b.hits + b.casts) - (a.damage + a.healing + a.overheal + a.hits + a.casts) ||
-        a.name.localeCompare(b.name),
-      )
-    const seenTargetNames = new Map<string, number>()
-    const duplicateTargetNames = new Set(
-      targets
-        .map(target => target.name)
-        .filter((target, index, names) => names.indexOf(target) !== index),
-    )
-    for (const target of targets) {
-      if (!duplicateTargetNames.has(target.name)) continue
-      const nextIndex = (seenTargetNames.get(target.name) ?? 0) + 1
-      seenTargetNames.set(target.name, nextIndex)
-      target.label = `${target.name} #${nextIndex}`
-    }
-    const topTargets = targets
-      .map(target => [target.label, target.casts || target.hits] as [string, number])
-      .slice(0, 3)
-
-    const intervals: number[] = []
-    const sorted = [...evts].sort((a, b) => a.t - b.t)
-    for (let i = 1; i < sorted.length; i++) {
-      intervals.push(sorted[i].t - sorted[i-1].t)
-    }
-    const avgInterval = intervals.length > 0
-      ? intervals.reduce((a, b) => a + b, 0) / intervals.length / 1000
-      : 0
-
-    return {
-      name,
-      casts: evts.length,
-      avgInterval: avgInterval.toFixed(1),
-      topTargets,
-      targets,
-      events: evts,
-    }
-  }).sort((a, b) => b.casts - a.casts)
-
-  const maxDuration = events.length > 0 ? Math.max(...events.map(e => e.t)) : 0
-
-  return { abilities, maxDuration, events }
+  return buildCastPlayerData(castData.value[castSelectedPlayer.value] ?? [], rawData.value, healingReceivedData.value, castSelectedPlayer.value)
 })
 
 function castMitigationWindow(event: CastEvent): { start: number; end: number } {
@@ -1075,7 +507,7 @@ const castMitigationEffectiveness = computed(() => {
   const castAbility = selectedCastAbility?.value
   if (!castAbility) return null
   const abilityName = castAbility.name
-  const isMitigation = MITIGATION_PATTERNS.some(pattern => pattern.test(abilityName.toLowerCase()))
+  const isMitigation = isMitigationAbility(abilityName)
   if (!isMitigation) return null
 
   const reductionPct = mitigationReductionPercent(abilityName)
@@ -1093,7 +525,7 @@ const castMitigationEffectiveness = computed(() => {
   const otherMitigationWindows = Object.values(castData.value)
     .flatMap(events => events)
     .filter(event => {
-      if (!MITIGATION_PATTERNS.some(pattern => pattern.test(event.abilityName.toLowerCase()))) return false
+      if (!isMitigationAbility(event.abilityName)) return false
       if (!mitigationCouldAffectSelectedPlayer(event)) return false
       return !selectedEventKeys.has(castEventKey(event))
     })
@@ -1151,6 +583,8 @@ const castTimelineDuration = computed(() => {
   return Math.ceil((castPlayerData.value.maxDuration / 1000) / 10) * 10
 })
 
+const castFilterOrder = CAST_FILTER_ORDER
+
 const castTimeTicks = computed(() => {
   const dur = castTimelineDuration.value
   if (dur <= 0) return []
@@ -1159,71 +593,8 @@ const castTimeTicks = computed(() => {
   return ticks
 })
 
-const MITIGATION_PATTERNS = [
-  /reprisal/, /rampart/, /arms length/, /arm's length/, /feint/, /addle/, /bloodbath/, /second wind/,
-  /sentinel/, /guardian/, /hallowed ground/, /bulwark/, /sheltron/, /holy sheltron/, /intervention/, /divine veil/, /passage of arms/, /cover/,
-  /vengeance/, /damnation/, /bloodwhetting/, /raw intuition/, /nascent flash/, /shake it off/, /thrill of battle/, /holmgang/, /equilibrium/,
-  /shadow wall/, /the blackest night/, /oblation/, /dark mind/, /dark missionary/, /living dead/, /living shadow/,
-  /nebula/, /camouflage/, /heart of stone/, /heart of corundum/, /heart of light/, /superbolide/, /great nebula/, /aurora/,
-  /temperance/, /aquaveil/, /liturgy of the bell/, /divine benison/, /divine caress/, /asylum/, /plenary indulgence/, /benediction/, /tetragrammaton/,
-  /sacred soil/, /expedient/, /seraphism/, /seraph/, /protraction/, /recitation/, /deployment tactics/, /emergency tactics/, /dissipation/, /fey illumination/, /excogitation/,
-  /collective unconscious/, /exaltation/, /celestial intersection/, /neutral sect/, /macrocosmos/, /horoscope/, /synastry/,
-  /kerachole/, /taurochole/, /haima/, /panhaima/, /holos/, /krasis/, /zoe/, /soteria/, /physis/, /rhizomata/, /pepsis/, /philosophia/, /eukrasian diagnosis/, /eukrasian prognosis/,
-  /mantra/, /riddle of earth/, /shade shift/, /arcane crest/, /crest of time borrowed/, /third eye/, /perfect defense/,
-  /troubadour/, /tactician/, /dismantle/, /shield samba/, /improvisation/, /improvised finish/, /curing waltz/,
-  /manaward/, /magick barrier/, /radiant aegis/, /everlasting flight/,
-  /barrier/, /mitig/,
-]
-
-const COOLDOWN_PATTERNS = [
-  /sprint/, /swiftcast/, /lucid dreaming/, /surecast/, /true north/, /leg sweep/, /interject/, /low blow/, /provoke/, /shirk/,
-  /fight or flight/, /requiescat/, /imperator/, /expiacion/, /circle of scorn/, /intervene/, /atonement/, /confiteor/,
-  /berserk/, /inner release/, /infuriate/, /primal rend/, /primal wrath/, /onslaught/, /upheaval/, /orogeny/,
-  /delirium/, /blood weapon/, /salted earth/, /salt and darkness/, /carve and spit/, /abyssal drain/, /shadowbringer/, /edge of shadow/, /flood of shadow/,
-  /no mercy/, /bloodfest/, /sonic break/, /double down/, /rough divide/, /danger zone/, /blasting zone/, /bow shock/, /continuation/, /reign of beasts/,
-  /presence of mind/, /thin air/, /assize/, /afflatus misery/, /temperance/, /liturgy of the bell/,
-  /aetherflow/, /chain stratagem/, /energy drain/, /recitation/, /deployment tactics/, /dissipation/, /summon seraph/, /seraphism/,
-  /draw/, /divination/, /lightspeed/, /earthly star/, /minor arcana/, /lord of crowns/, /lady of crowns/, /sleeve draw/, /astrodyne/,
-  /rhizomata/, /soteria/, /phlegma/, /toxikon/, /psyche/, /pneuma/, /zoe/, /philosophia/,
-  /ley lines/, /triplecast/, /amplifier/, /manafont/, /transpose/, /sharpcast/, /enochian/, /paradox/, /xenoglossy/, /foul/,
-  /acceleration/, /embolden/, /manafication/, /fleche/, /contre sixte/, /corps-a-corps/, /engagement/, /displacement/, /magick barrier/, /resolution/,
-  /searing light/, /summon bahamut/, /summon phoenix/, /summon solar bahamut/, /energy drain/, /energy siphon/, /enkindle/, /aethercharge/, /fester/, /painflare/,
-  /battle litany/, /life surge/, /lance charge/, /dragon sight/, /geirskogul/, /nastrond/, /wyrmwind thrust/, /stardiver/, /dragonfire dive/, /mirage dive/,
-  /brotherhood/, /riddle of fire/, /riddle of wind/, /perfect balance/, /form shift/, /thunderclap/, /enlightenment/, /six-sided star/,
-  /mug/, /trick attack/, /dokumori/, /bunshin/, /kassatsu/, /ten chi jin/, /dream within a dream/, /assassinate/, /bhavacakra/, /hellfrog medium/,
-  /meikyo shisui/, /ikishoten/, /hissatsu/, /tsubame-gaeshi/, /hagakure/, /meditate/, /senei/, /guren/, /shoha/, /kaeshi/,
-  /arcane circle/, /gluttony/, /plentiful harvest/, /enshroud/, /soul sow/, /harvest moon/, /lemure/, /communio/,
-  /serpent's ire/, /reawaken/, /vicewinder/, /slither/, /uncoiled fury/, /twinfang/, /twinblood/,
-  /battle voice/, /raging strikes/, /barrage/, /radiant finale/, /wanderer's minuet/, /mage's ballad/, /army's paeon/, /sidewinder/, /apex arrow/, /blast arrow/, /pitch perfect/,
-  /wildfire/, /reassemble/, /barrel stabilizer/, /hypercharge/, /chainsaw/, /air anchor/, /drill/, /bio blaster/, /automaton queen/, /rook autoturret/, /queen overdrive/,
-  /technical step/, /technical finish/, /devilment/, /flourish/, /standard step/, /standard finish/, /fan dance/, /starfall dance/, /tillana/, /saber dance/,
-  /starry muse/, /subtractive palette/, /creature motif/, /weapon motif/, /landscape motif/, /muse/, /hammer stamp/, /mog of the ages/, /retribution of the madeen/,
-]
-
-const HEAL_PATTERNS = [
-  /cure/, /heal/, /medica/, /regen/, /benefic/, /succor/, /adlo/, /physick/, /lustrate/,
-  /essential dignity/, /afflatus/, /tetra/, /excog/, /indom/, /aspected/, /pneuma/,
-]
-
-function castCategory(event: CastEvent): CastFilter {
-  const name = event.abilityName.toLowerCase().replace(/[’']/g, "'")
-  if (MITIGATION_PATTERNS.some(pattern => pattern.test(name))) return 'mitigations'
-  if (COOLDOWN_PATTERNS.some(pattern => pattern.test(name))) return 'cooldowns'
-  if (HEAL_PATTERNS.some(pattern => pattern.test(name))) return 'heals'
-  return 'dps'
-}
-
-const castFilterLabels: Record<CastFilter, string> = {
-  cooldowns: 'Cooldowns',
-  mitigations: 'Mitigations',
-  dps: 'Abilities',
-  heals: 'Heals',
-}
-
-const castFilterOrder: CastFilter[] = ['cooldowns', 'mitigations', 'dps', 'heals']
-
 function castFilterLabel(filter: CastFilter): string {
-  return castFilterLabels[filter]
+  return CAST_FILTER_LABELS[filter]
 }
 
 function toggleCastGroupCollapsed(category: CastFilter): void {
@@ -1235,34 +606,12 @@ function toggleCastGroupCollapsed(category: CastFilter): void {
 
 const castTimelineRows = computed(() => {
   if (!castPlayerData.value) return []
-  return castPlayerData.value.abilities
-    .map(ability => {
-      const category = castCategory(ability.events[0] ?? { abilityName: ability.name, t: 0, target: '', type: 'cast' })
-      return {
-        ...ability,
-        category,
-        events: ability.events
-          .slice()
-          .sort((a, b) => a.t - b.t),
-      }
-    })
-    .filter(row => castFilters.value.has(row.category))
-    .sort((a, b) => {
-      const order: Record<CastFilter, number> = { cooldowns: 0, mitigations: 1, dps: 2, heals: 3 }
-      return order[a.category] - order[b.category] || b.casts - a.casts || a.name.localeCompare(b.name)
-    })
+  return buildCastTimelineRows(castPlayerData.value.abilities, castFilters.value)
 })
 
-const castTimelineGroups = computed(() => {
-  return castFilterOrder
-    .map(category => ({
-      category,
-      label: castFilterLabels[category],
-      collapsed: collapsedCastGroups.value.has(category),
-      rows: castTimelineRows.value.filter(row => row.category === category),
-    }))
-    .filter(group => group.rows.length > 0)
-})
+const castTimelineGroups = computed(() =>
+  buildCastTimelineGroups(castTimelineRows.value, collapsedCastGroups.value)
+)
 
 const castTimelinePixelWidth = computed(() =>
   Math.max(1100, Math.ceil(castTimelineDuration.value * 14))
@@ -1273,94 +622,40 @@ const selectedResourceSamples = computed(() => {
   return resourceData.value[castSelectedPlayer.value] ?? []
 })
 
-const castResourceTracks = computed(() => {
-  const samples = selectedResourceSamples.value
-  if (samples.length === 0 || castTimelineDuration.value <= 0) return []
-  const latest = samples[samples.length - 1]
-  const rows: Array<{ key: ResourceTrackKey; label: string; value: string; color: string; fill: string }> = [{
-    key: 'hp',
-    label: 'HP',
-    value: `${Math.round((latest.hp ?? 0) * 100)}%`,
-    color: '#22c55e',
-    fill: 'rgba(34,197,94,0.16)',
-  }]
-  if (samples.some(sample => sample.mp !== undefined && (sample.maxMp ?? 0) > 0)) {
-    rows.push({
-      key: 'mp',
-      label: 'MP',
-      value: `${Math.round((latest.mp ?? 0) * 100)}%`,
-      color: '#38bdf8',
-      fill: 'rgba(56,189,248,0.14)',
-    })
-  }
-  return rows
-})
-
-function resourcePoint(sample: ResourceSample, key: ResourceTrackKey): { x: number; y: number } {
-  const durationMs = Math.max(1, castTimelineDuration.value * 1000)
-  const value = key === 'hp' ? sample.hp : (sample.mp ?? 0)
-  return {
-    x: Math.max(0, Math.min(100, (sample.t / durationMs) * 100)),
-    y: Math.max(0, Math.min(100, (1 - value) * 100)),
-  }
-}
+const castResourceTracks = computed(() =>
+  buildCastResourceTracks(selectedResourceSamples.value, castTimelineDuration.value)
+)
 
 function resourcePolyline(key: ResourceTrackKey): string {
-  return selectedResourceSamples.value
-    .filter(sample => key === 'hp' || sample.mp !== undefined)
-    .map(sample => {
-      const point = resourcePoint(sample, key)
-      return `${point.x.toFixed(2)},${point.y.toFixed(2)}`
-    })
-    .join(' ')
+  return polyline(selectedResourceSamples.value, key, castTimelineDuration.value)
 }
 
 function resourceAreaPath(key: ResourceTrackKey): string {
-  const points = selectedResourceSamples.value
-    .filter(sample => key === 'hp' || sample.mp !== undefined)
-    .map(sample => resourcePoint(sample, key))
-  if (points.length === 0) return ''
-  const start = points[0]
-  const end = points[points.length - 1]
-  const line = points.map(point => `L ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ')
-  return `M ${start.x.toFixed(2)} 100 L ${start.x.toFixed(2)} ${start.y.toFixed(2)} ${line} L ${end.x.toFixed(2)} 100 Z`
+  return areaPath(selectedResourceSamples.value, key, castTimelineDuration.value)
 }
 
 function castEventLeft(event: CastEvent): string {
-  if (castTimelineDuration.value <= 0) return '0%'
-  const markerT = event.type === 'cast' && !event.buffDurationMs && event.endT ? event.endT : event.t
-  return `${Math.min(100, Math.max(0, ((markerT / 1000) / castTimelineDuration.value) * 100))}%`
+  return eventLeft(event, castTimelineDuration.value)
 }
 
 function castEventWidth(event: CastEvent): string {
-  if (event.buffDurationMs && castTimelineDuration.value > 0) {
-    const pct = (event.buffDurationMs / 1000) / castTimelineDuration.value * 100
-    return `max(22px, ${Math.max(0, pct)}%)`
-  }
-  return '22px'
-}
-
-function castMarkerWidth(_: CastEvent): string {
-  return '22px'
+  return eventWidth(event, castTimelineDuration.value)
 }
 
 function castCastWindowLeft(event: CastEvent): string {
-  if (castTimelineDuration.value <= 0) return '0%'
-  return `${Math.min(100, Math.max(0, ((event.t / 1000) / castTimelineDuration.value) * 100))}%`
+  return castTimelinePct(event.t, castTimelineDuration.value)
+}
+
+function timelinePct(sec: number): string {
+  return castTimelinePct(sec * 1000, castTimelineDuration.value)
 }
 
 function castCastWindowWidth(event: CastEvent): string {
-  if (event.type !== 'cast' || !event.durationMs || castTimelineDuration.value <= 0) return '0%'
-  const pct = (event.durationMs / 1000) / castTimelineDuration.value * 100
-  return `${Math.max(4, pct)}%`
+  return castWindowWidth(event, castTimelineDuration.value)
 }
 
 function castCooldownWidth(event: CastEvent): string {
-  const cooldownMs = event.cooldownMs ?? abilityRecastMs(event.abilityId, event.abilityName)
-  if (!cooldownMs || castTimelineDuration.value <= 0) return '0%'
-  const pct = (cooldownMs / 1000) / castTimelineDuration.value * 100
-  const startPct = ((event.t / 1000) / castTimelineDuration.value) * 100
-  return `${Math.max(0, Math.min(pct, 100 - startPct))}%`
+  return cooldownWindowWidth(event, castTimelineDuration.value, event.cooldownMs ?? abilityRecastMs(event.abilityId, event.abilityName))
 }
 
 function castCooldownLabel(event: CastEvent): string {
@@ -1455,21 +750,12 @@ function queueVisibleAbilityIcons(): void {
 // ── Encounter tab ─────────────────────────────────────────────────────────────
 const encounterSelectedPlayer = ref('')
 
-watch(activePull, () => { encounterSelectedPlayer.value = '' })
-watch(activePull, () => {
-  selectedAbility.value = ''
-  eventWindowOnly.value = false
-  deathInspectorTab.value = 'recap'
-})
-
-
 const selectedDeathIndex = ref<number | null>(null)
 
 function deathSelectionKey(death: DeathRecord | null | undefined): string {
   return death ? `${death.targetId}|${death.targetName}|${death.timestamp}` : ''
 }
 
-watch(activePull, () => { selectedDeathIndex.value = null })
 watch(deaths, () => {
   if (selectedDeathIndex.value === null) return
   const current = sortedDeaths.value[selectedDeathIndex.value]
@@ -1522,9 +808,8 @@ const selectedCastAbility = computed(() =>
 )
 
 const selectedDeathRelatedDamage = computed(() => {
-  if (!selectedDeath.value) return []
   const totals = new Map<string, number>()
-  for (const event of deathEventsFor(selectedDeath.value)) {
+  for (const event of deathHitLog.value) {
     if (event.type !== 'dmg' || event.isDeathBlow) continue
     totals.set(event.abilityName, (totals.get(event.abilityName) ?? 0) + event.amount)
   }
@@ -1534,12 +819,13 @@ const selectedDeathRelatedDamage = computed(() => {
 })
 
 const selectedDeathWindow = computed(() => {
-  if (!selectedDeath.value) return null
-  const events = deathEventsFor(selectedDeath.value)
+  const death = selectedDeath.value
+  if (!death) return null
+  const events = deathHitLog.value
   if (events.length === 0) return null
   return {
     start: Math.min(...events.map(event => event.t)),
-    end: Math.max(selectedDeath.value.timestamp, ...events.map(event => event.t)),
+    end: Math.max(death.timestamp, ...events.map(event => event.t)),
   }
 })
 
@@ -1557,10 +843,6 @@ const overviewNotableEvents = computed(() => {
     }))
   return items
 })
-
-function hitRowStyle(_: DeathEvent): string {
-  return ''
-}
 
 const formatHpBefore = (event: DeathEvent) => formatDeathHpBefore(event, f)
 const deathHpBars = (death: DeathRecord) => buildDeathHpBars(death)
@@ -1586,10 +868,7 @@ function scheduleBroadcast() {
 }
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
-const CHART_COLORS = [
-  '#ff7675','#74b9ff','#55efc4','#fdcb6e',
-  '#a29bfe','#fd79a8','#00cec9','#e17055',
-]
+const CHART_COLORS = ['#ff7675','#74b9ff','#55efc4','#fdcb6e','#a29bfe','#fd79a8','#00cec9','#e17055']
 const GROUP_NAME  = '__group__'
 const GROUP_COLOR = 'rgba(255,255,255,0.7)'
 
@@ -1626,16 +905,57 @@ const SVG_W = 500, SVG_H = 240
 const CW = SVG_W - PL - PR
 const CH = SVG_H - PT - PB
 
-const activeTimeline = computed<DpsTimeline>(() => {
-  if (chartMetric.value === 'hps')  return hpsTimeline.value
-  if (chartMetric.value === 'dtps') return dtakenTimeline.value
-  if (chartMetric.value === 'rdps') return rdpsTimeline.value
-  return dpsTimeline.value
-})
+const activeTimeline = computed<DpsTimeline>(() => chartMetric.value === 'hps' ? hpsTimeline.value : chartMetric.value === 'dtps' ? dtakenTimeline.value : chartMetric.value === 'rdps' ? rdpsTimeline.value : dpsTimeline.value)
 
 const metricLabel = computed(() =>
   chartMetric.value === 'hps' ? 'HPS' : chartMetric.value === 'dtps' ? 'DTPS' : chartMetric.value === 'rdps' ? 'rDPS' : 'DPS'
 )
+
+const {
+  rowActorNames,
+  attributionDamageFor,
+  dpsFor,
+  rdpsFor,
+  rdpsGivenFor,
+  rdpsTakenFor,
+  rdpsDeltaLabel,
+  deathCountFor,
+  selectorBadgeFor,
+  takenSelectorBadgeFor,
+  castSelectorBadgeFor,
+  selectorFillWidth,
+} = useActorMetrics({
+  allData,
+  selfName,
+  visibleCombatants,
+  damageByCombatant,
+  dpsByCombatant,
+  rdpsByCombatant,
+  rdpsGiven,
+  rdpsTaken,
+  encounterDurationSec,
+  damageTakenData,
+  healingReceivedData,
+  takenMode,
+  sortedDeaths,
+  castData,
+  activeView,
+  chartMetric,
+  activeTimeline,
+  metricLabel,
+  format: f,
+  isEnemy,
+})
+
+const actorRailCommon = computed(() => ({
+  collapsedGroups: groupCollapsed.value,
+  fillWidthFor: selectorFillWidth,
+  actorJob,
+  actorJobIcon,
+  nameStyle,
+  onToggleGroup: toggleGroup,
+  onSelectActor: selectActor,
+}))
 
 const rdpsTimeline = computed<DpsTimeline>(() => {
   const result: DpsTimeline = {}
@@ -1756,7 +1076,7 @@ const hoverTooltip = computed(() => {
     .filter(s => !s.isGroup && !hiddenSeries.value.has(s.name))
     .map(s => ({
       name: s.name,
-      label: tabLabel(s.name),
+      label: s.name,
       color: s.color,
       value: s.values[b] ?? 0,
       rdpsGiven: rdpsGivenFor(s.name),
@@ -1827,102 +1147,20 @@ const timelineCastMarkers = computed(() =>
 )
 
 const timelineSpikeMarkers = computed(() => {
-  const values = (activeTimeline.value[resolvedSelected.value] ?? []).map(value => value / TIMELINE_BUCKET_SEC)
-  return values
-    .map((value, index) => ({ value, index }))
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 3)
+  return topTimelineSpikes(activeTimeline.value[resolvedSelected.value] ?? [])
 })
 
 const overviewTimelineBars = computed(() => {
-  const values = (activeTimeline.value[resolvedSelected.value] ?? []).map(value => value / TIMELINE_BUCKET_SEC)
-  if (values.length === 0) return []
-  const bucketCount = Math.min(28, values.length)
-  const groupSize = Math.ceil(values.length / bucketCount)
-  const grouped: Array<{ key: string; height: string; label: string; value: string; bucket: number }> = []
-
-  for (let i = 0; i < values.length; i += groupSize) {
-    const slice = values.slice(i, i + groupSize)
-    const value = slice.reduce((sum, item) => sum + item, 0) / Math.max(slice.length, 1)
-    grouped.push({
-      key: `overview-timeline-${i}`,
-      height: '0%',
-      label: fmtTime(i * TIMELINE_BUCKET_SEC * 1000),
-      value: f(value),
-      bucket: i,
-    })
-  }
-
-  const max = Math.max(1, ...grouped.map(item => Number(item.value.replace(/[^0-9.]/g, '')) || 0), ...values)
-  return grouped.map(item => {
-    const raw = values.slice(item.bucket, item.bucket + groupSize)
-    const value = raw.reduce((sum, next) => sum + next, 0) / Math.max(raw.length, 1)
-    return {
-      ...item,
-      height: `${Math.max(8, Math.min(100, (value / max) * 100)).toFixed(1)}%`,
-      value: f(value),
-    }
-  })
+  return buildOverviewTimelineBars(activeTimeline.value[resolvedSelected.value] ?? [], fmtTime, f)
 })
 
 const pullGroupDpsBars = computed(() => {
   const names = Object.keys(dpsTimeline.value).filter(name => showEnemies.value || !isEnemy(name))
-  if (names.length === 0) return []
-  const maxBuckets = Math.max(...names.map(name => dpsTimeline.value[name]?.length ?? 0), 0)
-  if (maxBuckets === 0) return []
-  const bucketCount = Math.min(48, maxBuckets)
-  const groupSize = Math.ceil(maxBuckets / bucketCount)
-  const values: number[] = []
-
-  for (let i = 0; i < maxBuckets; i += groupSize) {
-    let total = 0
-    for (let b = i; b < Math.min(i + groupSize, maxBuckets); b++) {
-      total += names.reduce((sum, name) => sum + ((dpsTimeline.value[name]?.[b] ?? 0) / TIMELINE_BUCKET_SEC), 0)
-    }
-    values.push(total / groupSize)
-  }
-
-  const max = Math.max(1, ...values)
-  return values.map((value, index) => {
-    const bucket = index * groupSize
-    const startMs = bucket * TIMELINE_BUCKET_SEC * 1000
-    const endMs = startMs + groupSize * TIMELINE_BUCKET_SEC * 1000
-    const deathCount = sortedDeaths.value.filter(death => death.timestamp >= startMs && death.timestamp < endMs).length
-    const raiseCount = sortedDeaths.value.filter(death => death.resurrectTime && death.resurrectTime >= startMs && death.resurrectTime < endMs).length
-    return {
-      key: `pull-group-dps-${index}`,
-      bucket,
-      height: `${Math.max(6, Math.min(100, (value / max) * 100)).toFixed(1)}%`,
-      value,
-      label: fmtTime(startMs),
-      deathCount,
-      raiseCount,
-    }
-  })
+  return buildPullGroupDpsBars(dpsTimeline.value, names, sortedDeaths.value, fmtTime)
 })
 
 const pullDamageRows = computed(() => {
-  const actorNames = rowActorNames()
-  const totalDamage = actorNames
-    .reduce((sum, name) => sum + attributionDamageFor(name), 0)
-  const rows = actorNames
-    .map(name => {
-      const total = attributionDamageFor(name)
-      return {
-        name,
-        total,
-        pct: totalDamage > 0 ? ((total / totalDamage) * 100).toFixed(1) : '0.0',
-        width: totalDamage > 0 ? `${Math.max(2, Math.min(100, (total / totalDamage) * 100)).toFixed(1)}%` : '2%',
-        dps: dpsFor(name),
-        rdps: rdpsFor(name),
-        given: rdpsGivenFor(name),
-        taken: rdpsTakenFor(name),
-        deaths: deathCountFor(name),
-      }
-    })
-    .filter(row => row.total > 0 || row.deaths > 0)
-    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
-  return rows
+  return buildPullDamageRows(rowActorNames(), { attributionDamageFor, dpsFor, rdpsFor, rdpsGivenFor, rdpsTakenFor, deathCountFor })
 })
 
 function openOverviewCard(view: BreakdownView): void {
@@ -1978,8 +1216,6 @@ const tooltipStyle = computed(() => {
   return { display: 'block', left: `${left}px`, top: `${top}px` }
 })
 
-const f = (n: number) => formatValue(n, 'abbreviated')
-
 const historicalPullEntries = computed(() =>
   pullList.value.filter(entry => entry.index !== null)
 )
@@ -1994,139 +1230,28 @@ const selectedPullEntry = computed(() =>
   pullList.value.find(entry => entry.index === activePull.value) ?? pullList.value[0] ?? null
 )
 
-function pullEnemyHpDetail(entry: PullEntry | null | undefined): string {
-  if (!entry) return 'needs enemy HP samples'
-  if (entry.pullOutcome === 'clear') {
-    return entry.primaryEnemyMaxHp ? `Max HP ${f(entry.primaryEnemyMaxHp)}` : 'enemy defeated'
-  }
-  if (entry.pullOutcome === 'wipe') {
-    return entry.primaryEnemyCurrentHp !== undefined
-      ? `HP Remaining ${f(entry.primaryEnemyCurrentHp)}`
-      : 'needs enemy HP samples'
-  }
-  if (entry.pullOutcome === 'live') {
-    return entry.primaryEnemyCurrentHp !== undefined
-      ? `Current HP ${f(entry.primaryEnemyCurrentHp)}`
-      : 'needs enemy HP samples'
-  }
-  return 'needs enemy HP samples'
-}
-
-const enemyProgressHeadline = computed(() => {
-  const entry = selectedPullEntry.value
-  if (!entry) return '—'
-  if (entry.pullOutcome === 'clear') {
-    return entry.primaryEnemyName ? `Cleared ${entry.primaryEnemyName}` : 'Cleared'
-  }
-  if (entry.bossPercent !== undefined && entry.primaryEnemyName) {
-    return `${entry.bossPercent.toFixed(1)}% ${entry.primaryEnemyName}`
-  }
-  return entry.bossPercentLabel ?? '—'
-})
-
-const enemyProgressMeta = computed(() => {
-  const entry = selectedPullEntry.value
-  if (!entry) return 'No enemy progress captured'
-  if ((entry.enemyCount ?? 0) > 1 && entry.defeatedEnemyCount !== undefined) {
-    return `${entry.defeatedEnemyCount}/${entry.enemyCount} defeated`
-  }
-  if (entry.pullOutcomeLabel) return entry.pullOutcomeLabel
-  return entry.bossPercentLabel ?? 'No enemy progress captured'
-})
-
-const enemyProgressDetail = computed(() => {
-  const entry = selectedPullEntry.value
-  if (!entry) return 'needs enemy HP samples'
-  if (entry.pullOutcomeLabel) {
-    return `${entry.pullOutcomeLabel} · ${pullEnemyHpDetail(entry)}`
-  }
-  if (bestProgressPullEntry.value && entry.bossPercent !== undefined) {
-    const delta = (entry.bossPercent ?? 0) - (bestProgressPullEntry.value.bossPercent ?? 0)
-    const progress = entry.index === bestProgressPullEntry.value.index
-      ? 'best progress'
-      : `${delta.toFixed(1)} pts from best`
-    return `${progress} · ${pullEnemyHpDetail(entry)}`
-  }
-  return pullEnemyHpDetail(entry)
-})
+const enemyProgressHeadline = computed(() => formatEnemyProgressHeadline(selectedPullEntry.value))
+const enemyProgressMeta = computed(() => formatEnemyProgressMeta(selectedPullEntry.value))
+const enemyProgressDetail = computed(() => formatEnemyProgressDetail(selectedPullEntry.value, bestProgressPullEntry.value, f))
 
 const previousPullEntry = computed(() => {
-  const current = selectedPullEntry.value
-  if (!current || current.index === null) return null
-  return selectedEncounterPullEntries.value.find(entry => (entry.pullNumber ?? 0) === (current.pullNumber ?? 0) - 1) ?? null
+  return pickPreviousPullEntry(selectedPullEntry.value, selectedEncounterPullEntries.value)
 })
 
 const bestPullEntry = computed(() =>
-  selectedEncounterPullEntries.value.reduce((best, entry) =>
-    !best || parseEntryDuration(entry) > parseEntryDuration(best) ? entry : best, null as PullEntry | null)
+  pickBestPullEntry(selectedEncounterPullEntries.value)
 )
 
 const bestProgressPullEntry = computed(() =>
-  selectedEncounterPullEntries.value
-    .filter(entry => entry.bossPercent !== undefined)
-    .reduce((best, entry) =>
-      !best || (entry.bossPercent ?? 100) < (best.bossPercent ?? 100) ? entry : best, null as PullEntry | null)
+  pickBestProgressPullEntry(selectedEncounterPullEntries.value)
 )
 
 const pullDashboardNotes = computed(() => {
-  const current = selectedPullEntry.value
-  if (!current) return ['No pull selected yet.']
-  const notes: string[] = []
-  const previous = previousPullEntry.value
-
-  if (bestPullEntry.value && current.index === bestPullEntry.value.index && selectedEncounterPullEntries.value.length > 1) {
-    notes.push('Longest pull for this encounter.')
-  } else if (bestPullEntry.value && current.index !== null) {
-    const delta = parseEntryDuration(current) - parseEntryDuration(bestPullEntry.value)
-    notes.push(`${formatEntryDelta(delta, seconds => fmtSeconds(Math.abs(seconds)))} from best pull duration.`)
-  }
-
-  if (current.pullOutcome !== 'clear' && bestProgressPullEntry.value && current.index === bestProgressPullEntry.value.index && selectedEncounterPullEntries.value.length > 1) {
-    notes.push('Best enemy progress for this encounter.')
-  } else if (current.pullOutcome !== 'clear' && bestProgressPullEntry.value && current.bossPercent !== undefined) {
-    const delta = current.bossPercent - (bestProgressPullEntry.value.bossPercent ?? current.bossPercent)
-    notes.push(`${delta > 0 ? '+' : ''}${delta.toFixed(1)} enemy HP points from best progress.`)
-  }
-
-  if (current.pullOutcome === 'wipe') {
-    notes.push(`Likely wipe: pull ended with enemies remaining${current.bossPercentLabel ? ` (${current.bossPercentLabel})` : ''}.`)
-  } else if (current.pullOutcome === 'unknown' && current.index !== null) {
-    notes.push('Outcome unknown because no enemy HP samples were captured.')
-  }
-
-  if (previous) {
-    const deathDelta = (current.deaths ?? 0) - (previous.deaths ?? 0)
-    if (deathDelta < 0) notes.push(`${Math.abs(deathDelta)} fewer deaths than previous pull.`)
-    if (deathDelta > 0) notes.push(`${deathDelta} more deaths than previous pull.`)
-
-    const dpsDelta = (current.dps ?? 0) - (previous.dps ?? 0)
-    if (Math.abs(dpsDelta) >= Math.max(1500, (previous.dps ?? 0) * 0.03)) {
-      notes.push(`${dpsDelta > 0 ? '+' : ''}${f(dpsDelta)} party DPS vs previous.`)
-    }
-  }
-
-  const firstCluster = deathClustersForCurrent.value[0]
-  if (firstCluster) {
-    notes.push(`${firstCluster.count} deaths clustered around ${fmtTime(firstCluster.start)}-${fmtTime(firstCluster.end)}.`)
-  }
-
-  if (notes.length === 0) notes.push('No obvious swing yet; use the drilldown tabs for details.')
-  return notes.slice(0, 5)
+  return buildPullDashboardNotes(selectedPullEntry.value, selectedEncounterPullEntries.value, previousPullEntry.value, bestPullEntry.value, bestProgressPullEntry.value, deathClustersForCurrent.value, f, fmtSeconds, fmtTime)
 })
 
 const deathClustersForCurrent = computed(() => {
-  const sorted = sortedDeaths.value.slice().sort((a, b) => a.timestamp - b.timestamp)
-  const clusters: Array<{ start: number; end: number; count: number }> = []
-  for (const death of sorted) {
-    const last = clusters[clusters.length - 1]
-    if (last && death.timestamp - last.end <= 15000) {
-      last.end = death.timestamp
-      last.count++
-    } else {
-      clusters.push({ start: death.timestamp, end: death.timestamp, count: 1 })
-    }
-  }
-  return clusters.filter(cluster => cluster.count >= 2)
+  return deathClusters(sortedDeaths.value)
 })
 
 function selectPullEntry(entry: PullEntry): void {
@@ -2149,11 +1274,7 @@ const { eventRowCountFor, eventRows } = useEventRows({
 watch([abilities, takenAbilities, eventRows, deathHitLog], queueVisibleAbilityIcons, { immediate: true })
 
 const activeFilterChips = computed(() => {
-  const chips = [
-    `Pull=${pullStatusLabel.value}`,
-    `Player=${resolvedSelected.value || 'None'}`,
-    `Metric=${metricLabel.value}`,
-  ]
+  const chips = [`Pull=${pullStatusLabel.value}`, `Player=${resolvedSelected.value || 'None'}`, `Metric=${metricLabel.value}`]
   if (showEnemies.value) chips.push('Show Enemies')
   if (showFriendlyNPCs.value) chips.push('Show NPCs')
   if (selectedAbility.value) chips.push(`Ability=${selectedAbility.value}`)
@@ -2165,26 +1286,6 @@ const activeFilterChips = computed(() => {
 let channel: BroadcastChannel | null = null
 let requestRetryTimers: Array<ReturnType<typeof setTimeout>> = []
 let requestInterval: ReturnType<typeof setInterval> | null = null
-
-function clearBreakdownData() {
-  allData.value = {}
-  dpsTimeline.value = {}
-  hpsTimeline.value = {}
-  dtakenTimeline.value = {}
-  dpsByCombatant.value = {}
-  damageByCombatant.value = {}
-  rdpsByCombatant.value = {}
-  rdpsGiven.value = {}
-  rdpsTaken.value = {}
-  damageTakenData.value = {}
-  healingReceivedData.value = {}
-  hitData.value = {}
-  deaths.value = []
-  combatantIds.value = {}
-  combatantJobs.value = {}
-  castData.value = {}
-  resourceData.value = {}
-}
 
 function historicalPullListSignature(entries: PullEntry[] | undefined): string {
   if (!Array.isArray(entries)) return ''
@@ -2421,17 +1522,10 @@ onUnmounted(() => {
     <template v-else-if="activeView === 'overview'">
       <div class="bp-workspace">
         <ActorRail
+          v-bind="actorRailCommon"
           :groups="combatantGroups"
-          :collapsed-groups="groupCollapsed"
           :selected-name="resolvedSelected"
           :value-for="selectorBadgeFor"
-          :fill-width-for="selectorFillWidth"
-          :actor-job="actorJob"
-          :actor-job-icon="actorJobIcon"
-          :name-style="nameStyle"
-          :tab-label="tabLabel"
-          @toggle-group="toggleGroup"
-          @select-actor="selectActor"
         />
 
         <main class="bp-main">
@@ -2535,7 +1629,7 @@ onUnmounted(() => {
               <div class="bp-kv"><span>Biggest Hit</span><strong>{{ selectedDoneHighestHitAbility ? `${selectedDoneHighestHitAbility.abilityName} · ${f(selectedDoneHighestHitAbility.maxHit)}` : '—' }}</strong></div>
             <div class="bp-kv"><span>Biggest Taken</span><strong>{{ selectedTakenAbility?.abilityName ?? '—' }}</strong></div>
             <div class="bp-kv"><span>Deaths</span><strong>{{ selectedActorDeaths.length }}</strong></div>
-            <div class="bp-kv"><span>Casts</span><strong>{{ selectedActorCastCount }}</strong></div>
+            <div class="bp-kv"><span>Casts</span><strong>{{ selectedActorCastEvents.length }}</strong></div>
           </div>
           <div class="bp-inspector-block">
             <div class="bp-section-heading">Quick Actions</div>
@@ -2712,17 +1806,10 @@ onUnmounted(() => {
     <template v-else-if="activeView === 'done'">
       <div class="bp-workspace">
         <ActorRail
+          v-bind="actorRailCommon"
           :groups="combatantGroups"
-          :collapsed-groups="groupCollapsed"
           :selected-name="resolvedSelected"
           :value-for="selectorBadgeFor"
-          :fill-width-for="selectorFillWidth"
-          :actor-job="actorJob"
-          :actor-job-icon="actorJobIcon"
-          :name-style="nameStyle"
-          :tab-label="tabLabel"
-          @toggle-group="toggleGroup"
-          @select-actor="selectActor"
         />
 
         <main class="bp-main">
@@ -2839,12 +1926,12 @@ onUnmounted(() => {
               <div class="bp-kv"><span>DPS</span><strong>{{ encounterDurationSec > 0 ? f(selectedDoneAbility.dps) : '—' }}</strong></div>
               <div class="bp-kv"><span>Rate</span><strong>{{ selectedDoneAbility.pct }}%</strong></div>
               <div class="bp-kv"><span>Range</span><strong>{{ f(selectedDoneAbility.minHit) }} - {{ f(selectedDoneAbility.maxHit) }}</strong></div>
-              <div class="bp-kv"><span>Crit %</span><strong>{{ critPct(selectedDoneAbility) }}</strong></div>
-              <div class="bp-kv"><span>Crit Range</span><strong>{{ hitRange(selectedDoneAbility.critMinHit, selectedDoneAbility.critMaxHit) }}</strong></div>
-              <div class="bp-kv"><span>Direct Hit %</span><strong>{{ directPct(selectedDoneAbility) }}</strong></div>
-              <div class="bp-kv"><span>Direct Hit Range</span><strong>{{ hitRange(selectedDoneAbility.directMinHit, selectedDoneAbility.directMaxHit) }}</strong></div>
-              <div class="bp-kv"><span>Crit Direct Hit %</span><strong>{{ critDirectPct(selectedDoneAbility) }}</strong></div>
-              <div class="bp-kv"><span>Crit Direct Hit Range</span><strong>{{ hitRange(selectedDoneAbility.critDirectMinHit, selectedDoneAbility.critDirectMaxHit) }}</strong></div>
+              <div class="bp-kv"><span>Crit %</span><strong>{{ selectedDoneAbility.critPct }}</strong></div>
+              <div class="bp-kv"><span>Crit Range</span><strong>{{ formatHitRange(selectedDoneAbility.critMinHit, selectedDoneAbility.critMaxHit, f) }}</strong></div>
+              <div class="bp-kv"><span>Direct Hit %</span><strong>{{ pctOf(selectedDoneAbility.directHits, selectedDoneAbility.hits) }}</strong></div>
+              <div class="bp-kv"><span>Direct Hit Range</span><strong>{{ formatHitRange(selectedDoneAbility.directMinHit, selectedDoneAbility.directMaxHit, f) }}</strong></div>
+              <div class="bp-kv"><span>Crit Direct Hit %</span><strong>{{ pctOf(selectedDoneAbility.critDirectHits, selectedDoneAbility.hits) }}</strong></div>
+              <div class="bp-kv"><span>Crit Direct Hit Range</span><strong>{{ formatHitRange(selectedDoneAbility.critDirectMinHit, selectedDoneAbility.critDirectMaxHit, f) }}</strong></div>
             </div>
           </template>
         </aside>
@@ -2854,18 +1941,11 @@ onUnmounted(() => {
     <template v-else-if="activeView === 'taken'">
       <div class="bp-workspace">
         <ActorRail
+          v-bind="actorRailCommon"
           :groups="combatantGroups"
-          :collapsed-groups="groupCollapsed"
           :selected-name="resolvedSelected"
           fill-class="bp-rail-fill--taken"
           :value-for="takenSelectorBadgeFor"
-          :fill-width-for="selectorFillWidth"
-          :actor-job="actorJob"
-          :actor-job-icon="actorJobIcon"
-          :name-style="nameStyle"
-          :tab-label="tabLabel"
-          @toggle-group="toggleGroup"
-          @select-actor="selectActor"
         />
 
         <main class="bp-main">
@@ -2927,18 +2007,11 @@ onUnmounted(() => {
     <template v-else-if="activeView === 'timeline'">
       <div class="bp-workspace">
         <ActorRail
+          v-bind="actorRailCommon"
           :groups="combatantGroups"
-          :collapsed-groups="groupCollapsed"
           :selected-name="resolvedSelected"
           fill-class="bp-rail-fill--timeline"
           :value-for="selectorBadgeFor"
-          :fill-width-for="selectorFillWidth"
-          :actor-job="actorJob"
-          :actor-job-icon="actorJobIcon"
-          :name-style="nameStyle"
-          :tab-label="tabLabel"
-          @toggle-group="toggleGroup"
-          @select-actor="selectActor"
         >
           <template #before-groups>
             <div class="bp-metric-tabs">
@@ -3096,7 +2169,7 @@ onUnmounted(() => {
               <div v-for="s in chartLines.series" :key="s.name" class="bp-legend-item" :class="{ hidden: hiddenSeries.has(s.name) }" @click="toggleSeries(s.name)">
                 <span class="bp-legend-dot"
                   :style="{ background: s.isGroup ? 'transparent' : s.color, border: s.isGroup ? `1px dashed ${GROUP_COLOR}` : 'none' }" />
-                <span class="bp-legend-name" :class="{ 'bp-legend-name--focused': s.isFocused }" :style="s.isGroup ? undefined : nameStyle(s.name)">{{ s.isGroup ? 'Group' : tabLabel(s.name) }}</span>
+                <span class="bp-legend-name" :class="{ 'bp-legend-name--focused': s.isFocused }" :style="s.isGroup ? undefined : nameStyle(s.name)">{{ s.isGroup ? 'Group' : s.name }}</span>
               </div>
             </div>
           </div>
@@ -3185,7 +2258,6 @@ onUnmounted(() => {
                   <tr
                     v-for="(hit, hi) in deathHitLog" :key="hi"
                     :class="[hit.type === 'heal' ? 'dl-row-heal' : 'dl-row-dmg', hit.isDeathBlow ? 'dl-row-death' : '', selectedAbility === hit.abilityName ? 'bp-row-active' : '']"
-                    :style="!hit.isDeathBlow ? hitRowStyle(hit) : {}"
                     @click="selectAbility(hit.abilityName)"
                   >
                     <td class="dl-col-time">{{ fmtTime(hit?.t ?? 0) }}</td>
@@ -3268,18 +2340,11 @@ onUnmounted(() => {
     <template v-else-if="activeView === 'casts'">
       <div class="bp-workspace">
         <ActorRail
+          v-bind="actorRailCommon"
           :groups="castGroups"
-          :collapsed-groups="groupCollapsed"
           :selected-name="castSelectedPlayer"
           fill-class="bp-rail-fill--casts"
           :value-for="castSelectorBadgeFor"
-          :fill-width-for="selectorFillWidth"
-          :actor-job="actorJob"
-          :actor-job-icon="actorJobIcon"
-          :name-style="nameStyle"
-          :tab-label="tabLabel"
-          @toggle-group="toggleGroup"
-          @select-actor="selectActor"
         />
 
         <main class="bp-main">
@@ -3314,16 +2379,16 @@ onUnmounted(() => {
                   </div>
                   <div class="cast-analysis-grid cast-analysis-grid--head">
                     <div class="cast-analysis-axis">
-                      <span v-for="tick in castTimeTicks" :key="`axis-${tick}`" class="cast-xiv-tick" :style="{ left: (tick / castTimelineDuration * 100) + '%' }">{{ fmtSeconds(tick) }}</span>
+                      <span v-for="tick in castTimeTicks" :key="`axis-${tick}`" class="cast-xiv-tick" :style="{ left: timelinePct(tick) }">{{ fmtSeconds(tick) }}</span>
                     </div>
                     <div
                       v-for="tick in castTimeTicks"
                       :key="`grid-${tick}`"
                       class="cast-analysis-gridline"
-                      :style="{ left: (tick / castTimelineDuration * 100) + '%' }"
+                      :style="{ left: timelinePct(tick) }"
                     />
-                    <div v-if="castPlayerDeathTime !== null" class="cast-analysis-death-line" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%' }" />
-                    <div v-if="castPlayerResTime !== null" class="cast-analysis-raise-line" :style="{ left: (castPlayerResTime / castTimelineDuration * 100) + '%' }" />
+                    <div v-if="castPlayerDeathTime !== null" class="cast-analysis-death-line" :style="{ left: timelinePct(castPlayerDeathTime) }" />
+                    <div v-if="castPlayerResTime !== null" class="cast-analysis-raise-line" :style="{ left: timelinePct(castPlayerResTime) }" />
                   </div>
 
                   <template v-if="castResourceTracks.length > 0">
@@ -3339,14 +2404,14 @@ onUnmounted(() => {
                           v-for="tick in castTimeTicks"
                           :key="`resource-grid-${track.key}-${tick}`"
                           class="cast-analysis-gridline"
-                          :style="{ left: (tick / castTimelineDuration * 100) + '%' }"
+                          :style="{ left: timelinePct(tick) }"
                         />
                         <svg class="cast-resource-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
                           <path :d="resourceAreaPath(track.key)" :fill="track.fill" />
                           <polyline :points="resourcePolyline(track.key)" fill="none" :stroke="track.color" stroke-width="2.3" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
                         </svg>
-                        <div v-if="castPlayerDeathTime !== null" class="cast-analysis-death-line" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%' }" />
-                        <div v-if="castPlayerResTime !== null" class="cast-analysis-raise-line" :style="{ left: (castPlayerResTime / castTimelineDuration * 100) + '%' }" />
+                        <div v-if="castPlayerDeathTime !== null" class="cast-analysis-death-line" :style="{ left: timelinePct(castPlayerDeathTime) }" />
+                        <div v-if="castPlayerResTime !== null" class="cast-analysis-raise-line" :style="{ left: timelinePct(castPlayerResTime) }" />
                       </div>
                     </template>
                   </template>
@@ -3386,7 +2451,7 @@ onUnmounted(() => {
                         v-for="tick in castTimeTicks"
                         :key="`row-grid-${row.name}-${tick}`"
                         class="cast-analysis-gridline"
-                        :style="{ left: (tick / castTimelineDuration * 100) + '%' }"
+                        :style="{ left: timelinePct(tick) }"
                       />
                       <template v-if="row.category === 'cooldowns' || row.category === 'mitigations'">
                         <div
@@ -3409,15 +2474,15 @@ onUnmounted(() => {
                         :key="`row-event-${event.t}-${event.abilityName}-${event.target}`"
                         class="cast-analysis-event"
                         :class="[`cast-analysis-event--${row.category}`, { active: castSelectedEventKey === castEventKey(event) }]"
-                        :style="{ left: castEventLeft(event), width: (row.category === 'cooldowns' || row.category === 'mitigations') ? castMarkerWidth(event) : castEventWidth(event) }"
+                        :style="{ left: castEventLeft(event), width: (row.category === 'cooldowns' || row.category === 'mitigations') ? '22px' : castEventWidth(event) }"
                         :title="`${fmtTime(event.t)} · ${event.abilityName}${event.durationMs ? ` · ${(event.durationMs / 1000).toFixed(1)}s cast` : ''}${event.buffDurationMs ? ` · ${(event.buffDurationMs / 1000).toFixed(0)}s active` : ''}${castCooldownLabel(event) ? ` · ${castCooldownLabel(event)}` : ''}${event.target ? ` → ${event.target}` : ''}`"
                         @click.stop="selectCastEvent(row.name, event)"
                       >
                         <img v-if="abilityIconSrc(event.abilityId, event.abilityName)" class="cast-event-icon" :src="abilityIconSrc(event.abilityId, event.abilityName)" :alt="event.abilityName" @error="clearAbilityIcon(event.abilityId, event.abilityName)" />
                         <span v-else>{{ abilityInitials(row.name) }}</span>
                       </button>
-                      <div v-if="castPlayerDeathTime !== null" class="cast-analysis-death-line" :style="{ left: (castPlayerDeathTime / castTimelineDuration * 100) + '%' }" />
-                      <div v-if="castPlayerResTime !== null" class="cast-analysis-raise-line" :style="{ left: (castPlayerResTime / castTimelineDuration * 100) + '%' }" />
+                      <div v-if="castPlayerDeathTime !== null" class="cast-analysis-death-line" :style="{ left: timelinePct(castPlayerDeathTime) }" />
+                      <div v-if="castPlayerResTime !== null" class="cast-analysis-raise-line" :style="{ left: timelinePct(castPlayerResTime) }" />
                     </div>
                     </template>
                     </template>
@@ -3492,18 +2557,11 @@ onUnmounted(() => {
     <template v-else-if="activeView === 'events'">
       <div class="bp-workspace">
         <ActorRail
+          v-bind="actorRailCommon"
           :groups="combatantGroups"
-          :collapsed-groups="groupCollapsed"
           :selected-name="resolvedSelected"
           fill-class="bp-rail-fill--events"
           :value-for="eventSelectorBadgeFor"
-          :fill-width-for="selectorFillWidth"
-          :actor-job="actorJob"
-          :actor-job-icon="actorJobIcon"
-          :name-style="nameStyle"
-          :tab-label="tabLabel"
-          @toggle-group="toggleGroup"
-          @select-actor="selectActor"
         />
 
         <main class="bp-main">
