@@ -43,10 +43,9 @@ import {
   previousPullEntry as pickPreviousPullEntry,
   pullDashboardNotes as buildPullDashboardNotes,
 } from './AbilityBreakdown/pullInsights'
-import { buildOverviewTimelineBars, buildPullGroupDpsBars, deathClusters, topTimelineSpikes } from './AbilityBreakdown/timelineSummary'
+import { buildOverviewTimelineBars, buildPullGroupDpsBars, buildTimelineChartModel, deathClusters, GROUP_COLOR, METRIC_LABELS, topTimelineSpikes } from './AbilityBreakdown/timelineSummary'
 import { useBreakdownViewState } from './AbilityBreakdown/viewState'
 
-// ── State from main window ────────────────────────────────────────────────────
 const {
   allData,
   dpsTimeline,
@@ -175,7 +174,6 @@ let lastAutoHidePull: number | null | undefined = undefined
 const initName = localStorage.getItem('flexi-breakdown-init') ?? ''
 localStorage.removeItem('flexi-breakdown-init')
 
-// ── Combatants / blur ─────────────────────────────────────────────────────────
 const combatants = computed(() => Object.keys(allData.value))
 
 function isEnemy(name: string): boolean {
@@ -235,7 +233,6 @@ function nameStyle(name: string) {
     ? blurTextStyle : undefined
 }
 
-// ── Summary ───────────────────────────────────────────────────────────────────
 const rawData = computed(() => allData.value[resolvedSelected.value] ?? {})
 
 const playerTotal = computed(() => totalAbilityDamage(rawData.value))
@@ -271,7 +268,6 @@ const doneSourceRows = computed(() => {
     .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
 })
 
-// ── Damage Taken (Summary "Taken" mode) ──────────────────────────────────────
 const takenRawData = computed(() => damageTakenData.value[resolvedSelected.value] ?? {})
 
 const takenTotal = computed(() => totalAbilityDamage(takenRawData.value))
@@ -362,10 +358,8 @@ function selectAbility(name: string): void {
   selectedAbility.value = name
 }
 
-// ── Deaths ────────────────────────────────────────────────────────────────────
 const sortedDeaths = computed(() => sortPlayerDeaths(deaths.value))
 
-// ── Casts tab ─────────────────────────────────────────────────────────────────
 const castSelectedPlayer = ref('')
 const castSelectedAbility = ref<string | null>(null)
 const castSelectedEventKey = ref<string | null>(null)
@@ -745,6 +739,12 @@ function queueVisibleAbilityIcons(): void {
 
 const selectedDeathIndex = ref<number | null>(null)
 
+function openDeath(death: DeathRecord): void { selectActor(death.targetName); selectedDeathIndex.value = sortedDeaths.value.findIndex(d => d === death); activeView.value = 'deaths' }
+
+function toggleDeathSelection(index: number, death: DeathRecord): void { selectedDeathIndex.value = selectedDeathIndex.value === index ? null : index; selectActor(death.targetName) }
+
+function openActorDone(name: string): void { selectActor(name); activeView.value = 'done' }
+
 function deathSelectionKey(death: DeathRecord | null | undefined): string {
   return death ? `${death.targetId}|${death.targetName}|${death.timestamp}` : ''
 }
@@ -871,7 +871,6 @@ const overviewNotableEvents = computed(() => {
 const formatHpBefore = (event: DeathEvent) => formatDeathHpBefore(event, f)
 const deathHpBars = (death: DeathRecord) => buildDeathHpBars(death)
 
-// ── Pull selector ─────────────────────────────────────────────────────────────
 function onPullSelect(e: Event): void {
   const val = (e.target as HTMLSelectElement).value
   const idx = val === 'null' ? null : parseInt(val, 10)
@@ -890,11 +889,6 @@ function scheduleBroadcast() {
     channel?.postMessage({ type: 'loadPull', index: activePull.value })
   }, 250)
 }
-
-// ── Chart ─────────────────────────────────────────────────────────────────────
-const CHART_COLORS = ['#ff7675','#74b9ff','#55efc4','#fdcb6e','#a29bfe','#fd79a8','#00cec9','#e17055']
-const GROUP_NAME  = '__group__'
-const GROUP_COLOR = 'rgba(255,255,255,0.7)'
 
 // Auto-hide non-party members when pull changes (skip enemies — handled by showEnemies toggle)
 function applyAutoHide(pullIdx: number | null | undefined, timeline: DpsTimeline): void {
@@ -916,24 +910,13 @@ function toggleSeries(name: string): void {
   hiddenSeries.value = next
 }
 
-function smoothBuckets(buckets: number[], win = 4): number[] {
-  return buckets.map((_, i) => {
-    const start = Math.max(0, i - win + 1)
-    const slice = buckets.slice(start, i + 1)
-    return slice.reduce((s, v) => s + v, 0) / slice.length
-  })
-}
-
 const PL = 52, PR = 16, PT = 12, PB = 28
 const SVG_W = 500, SVG_H = 240
 const CW = SVG_W - PL - PR
 const CH = SVG_H - PT - PB
 
 const activeTimeline = computed<DpsTimeline>(() => chartMetric.value === 'hps' ? hpsTimeline.value : chartMetric.value === 'dtps' ? dtakenTimeline.value : chartMetric.value === 'rdps' ? rdpsTimeline.value : dpsTimeline.value)
-
-const metricLabel = computed(() =>
-  chartMetric.value === 'hps' ? 'HPS' : chartMetric.value === 'dtps' ? 'DTPS' : chartMetric.value === 'rdps' ? 'rDPS' : 'DPS'
-)
+const metricLabel = computed(() => METRIC_LABELS[chartMetric.value])
 
 const {
   rowActorNames,
@@ -992,70 +975,15 @@ const rdpsTimeline = computed<DpsTimeline>(() => {
   return result
 })
 
-const chartLines = computed(() => {
-  const timeline = activeTimeline.value
-  const names = Object.keys(timeline)
-  if (names.length === 0) return null
+const chartLines = computed(() => buildTimelineChartModel(activeTimeline.value, {
+  showEnemies: showEnemies.value,
+  isEnemy,
+  selected: resolvedSelected.value,
+  hiddenSeries: hiddenSeries.value,
+  formatValue,
+  geometry: { pl: PL, pt: PT, cw: CW, ch: CH },
+}))
 
-  const maxBuckets = Math.max(...names.map(n => (timeline[n] ?? []).length))
-  if (maxBuckets < 2) return null
-
-  const series = names
-    .filter(n => showEnemies.value || !isEnemy(n))
-    .sort((a, b) => {
-      if (a === resolvedSelected.value) return -1
-      if (b === resolvedSelected.value) return 1
-      return a.localeCompare(b)
-    })
-    .map((name, i) => ({
-      name,
-      color: CHART_COLORS[i % CHART_COLORS.length],
-      values: smoothBuckets(timeline[name] ?? []).map(v => v / TIMELINE_BUCKET_SEC),
-      isGroup: false,
-      isFocused: name === resolvedSelected.value,
-    }))
-
-  // Group line = sum of all individual series per bucket
-  const groupBuckets: number[] = Array(maxBuckets).fill(0)
-  for (const s of series) {
-    for (let i = 0; i < s.values.length; i++) groupBuckets[i] += s.values[i] ?? 0
-  }
-  const allSeries = [
-    ...series,
-    { name: GROUP_NAME, color: GROUP_COLOR, values: groupBuckets, isGroup: true, isFocused: false },
-  ]
-
-  // Y max: highest visible value (individual or group)
-  const visibleVals = allSeries
-    .filter(s => !hiddenSeries.value.has(s.name))
-    .flatMap(s => s.values)
-  const maxDps = Math.max(...visibleVals, 1)
-
-  function points(values: number[]): string {
-    return values.map((v, i) => {
-      const x = PL + (i / (maxBuckets - 1)) * CW
-      const y = PT + CH - Math.min(v / maxDps, 1) * CH
-      return `${x.toFixed(1)},${y.toFixed(1)}`
-    }).join(' ')
-  }
-
-  const yTicks = Array.from({ length: 5 }, (_, i) => ({
-    y: PT + CH - (i / 4) * CH,
-    label: formatValue(maxDps * (i / 4), 'abbreviated'),
-  }))
-
-  const xStep = Math.ceil(60 / TIMELINE_BUCKET_SEC)
-  const xTicks: { x: number; label: string }[] = []
-  for (let b = 0; b < maxBuckets; b += xStep) {
-    const secs = b * TIMELINE_BUCKET_SEC
-    const m = Math.floor(secs / 60), s = secs % 60
-    xTicks.push({ x: PL + (b / (maxBuckets - 1)) * CW, label: `${m}:${String(s).padStart(2, '0')}` })
-  }
-
-  return { series: allSeries, maxBuckets, maxDps, points, yTicks, xTicks }
-})
-
-// ── Hover tooltip ─────────────────────────────────────────────────────────────
 const svgRef      = ref<SVGSVGElement | null>(null)
 const chartAreaRef = ref<HTMLDivElement | null>(null)
 const hoverVisible = ref(false)
@@ -1313,7 +1241,6 @@ const activeFilterChips = computed(() => {
 })
 const eventInspectorRows = computed(() => [['Rows', String(eventRows.value.length)], ['Actor Scope', eventActorScope.value === 'all' ? 'All actors' : 'Selected actor'], ['Selected Ability', selectedAbility.value || 'None'], ['Window', eventWindowOnly.value && selectedDeathWindow.value ? 'Selected death' : 'Whole pull']])
 
-// ── BroadcastChannel ──────────────────────────────────────────────────────────
 let channel: BroadcastChannel | null = null
 let requestRetryTimers: Array<ReturnType<typeof setTimeout>> = []
 let requestInterval: ReturnType<typeof setInterval> | null = null
@@ -1641,7 +1568,7 @@ onUnmounted(() => {
                 v-for="item in overviewNotableEvents"
                 :key="item.key"
                 class="bp-event-item"
-                @click="selectActor(item.death.targetName); selectedDeathIndex = sortedDeaths.findIndex(d => d === item.death); activeView = 'deaths'"
+                @click="openDeath(item.death)"
               >
                 <span class="bp-event-name" :style="nameStyle(item.death.targetName)">{{ item.label }}</span>
                 <span class="bp-event-detail">{{ item.detail }}</span>
@@ -1752,7 +1679,7 @@ onUnmounted(() => {
                 v-for="death in sortedDeaths.slice(0, 8)"
                 :key="`${death.targetName}-${death.timestamp}`"
                 class="bp-event-item"
-                @click="selectActor(death.targetName); selectedDeathIndex = sortedDeaths.findIndex(d => d === death); activeView = 'deaths'"
+                @click="openDeath(death)"
               >
                 <span class="bp-event-name" :style="nameStyle(death.targetName)">{{ death.targetName }}</span>
                 <span class="bp-event-detail">
@@ -1803,7 +1730,7 @@ onUnmounted(() => {
                     <th class="col-num">Deaths</th>
                   </tr></thead>
                   <tbody>
-                    <tr v-for="row in pullDamageRows" :key="`pull-damage-${row.name}`" :class="{ 'bp-row-active': resolvedSelected === row.name }" @click="selectActor(row.name); activeView = 'done'">
+                    <tr v-for="row in pullDamageRows" :key="`pull-damage-${row.name}`" :class="{ 'bp-row-active': resolvedSelected === row.name }" @click="openActorDone(row.name)">
                       <td class="col-name">
                         <div class="row-fill" :style="{ width: row.width }" />
                         <span class="aname bp-player-cell" :style="nameStyle(row.name)">
@@ -2209,7 +2136,7 @@ onUnmounted(() => {
             v-for="(death, i) in sortedDeaths" :key="i"
             class="dl-death-row"
             :class="{ active: selectedDeathIndex === i }"
-            @click="selectedDeathIndex = selectedDeathIndex === i ? null : i; selectActor(death.targetName)"
+            @click="toggleDeathSelection(i, death)"
           >
             <div class="dl-death-info">
               <span class="dl-death-name" :style="nameStyle(death?.targetName ?? '')">{{ death?.targetName ?? 'Unknown' }}</span>
@@ -2602,31 +2529,21 @@ onUnmounted(() => {
 * { box-sizing: border-box; margin: 0; padding: 0; }
 .bp-root {
   width: 100vw; height: 100vh;
-  --flexi-bg-base: #0f0f17;
-  --flexi-bg-panel: #16161f;
-  --flexi-bg-control: #1e1e2e;
-  --flexi-bg-hover: #252538;
-  --flexi-border: rgba(255,255,255,0.08);
   --flexi-accent: #9b5de5;
   --flexi-accent-soft: rgba(155,93,229,0.16);
   --flexi-accent-border: rgba(155,93,229,0.42);
-  --flexi-info: #8ecae6;
-  --flexi-success: #06d6a0;
-  --flexi-warning: #ffd166;
-  --flexi-danger: #ef476f;
-  background: var(--flexi-bg-base);
+  background: #0f0f17;
   color: rgba(255,255,255,0.85);
   font-family: 'Segoe UI', monospace, sans-serif;
   font-size: 12px;
   display: flex; flex-direction: column; overflow: hidden;
 }
 
-/* ── Top bar ── */
 .bp-topbar {
   display: flex; align-items: center; gap: 8px;
   padding: 5px 10px;
-  background: var(--flexi-bg-panel);
-  border-bottom: 1px solid var(--flexi-border);
+  background: #16161f;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
   flex-shrink: 0;
 }
 .bp-app-title { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.5); letter-spacing: 0.03em; white-space: nowrap; }
@@ -2660,7 +2577,6 @@ onUnmounted(() => {
   padding: 3px 8px;
 }
 
-/* ── View tabs ── */
 .bp-view-tabs { display: flex; border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0; }
 .bp-view-tab {
   background: transparent; border: none;
@@ -2675,12 +2591,6 @@ onUnmounted(() => {
 .bp-view-tab:hover { color: rgba(255,255,255,0.65); }
 .bp-view-tab.active { color: var(--flexi-accent); border-bottom-color: var(--flexi-accent); }
 
-/* ── Combatant tabs ── */
-.bp-tab { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.5); padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 11px; font-family: inherit; transition: all 0.15s; }
-.bp-tab:hover { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.8); }
-.bp-tab.active { background: var(--flexi-accent-soft); border-color: var(--flexi-accent-border); color: #d9bcff; }
-
-/* ── Metric tabs ── */
 .bp-metric-tabs { display: flex; gap: 0; padding: 4px 10px; border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0; }
 .bp-metric-tab {
   background: rgba(255,255,255,0.04);
@@ -2694,10 +2604,8 @@ onUnmounted(() => {
 .bp-metric-tab:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.08); }
 .bp-metric-tab.active { background: rgba(100,180,255,0.15); border-color: rgba(100,180,255,0.4); color: #64b4ff; }
 
-/* ── Waiting ── */
 .bp-waiting { flex: 1; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.25); font-size: 13px; }
 
-/* ── Summary table ── */
 .bp-scroll { flex: 1; min-height: 0; overflow: auto; }
 .bp-table { width: 100%; border-collapse: collapse; }
 .bp-table--targets { table-layout: fixed; min-width: 760px; }
@@ -2760,12 +2668,10 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   white-space: nowrap;
 }
 
-/* ── Chart area ── */
 .bp-chart-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 8px 10px 4px; gap: 4px; position: relative; }
 .bp-chart-svg { width: 100%; flex: 1; min-height: 0; overflow: visible; }
 .axis-label { font-size: 9px; fill: rgba(255,255,255,0.3); font-family: 'Segoe UI', monospace, sans-serif; }
 
-/* ── Tooltip ── */
 .bp-tooltip {
   position: absolute;
   background: rgba(10,10,16,0.92);
@@ -2804,7 +2710,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   color: rgba(142,202,230,0.72);
 }
 
-/* ── Legend ── */
 .bp-chart-legend { display: flex; flex-wrap: wrap; gap: 3px 10px; flex-shrink: 0; padding-bottom: 2px; }
 .bp-legend-item { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; transition: opacity 0.15s; }
 .bp-legend-item:hover { opacity: 0.75; }
@@ -2813,7 +2718,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .bp-legend-name { font-size: 11px; color: rgba(255,255,255,0.65); white-space: nowrap; }
 .bp-legend-name--focused { color: #ffd250; font-weight: 700; }
 
-/* ── Deaths tab badge ── */
 .bp-death-badge {
   display: inline-block;
   background: rgba(255,100,100,0.3);
@@ -2837,7 +2741,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 
 .enc-row-fill { background: rgba(220,70,70,0.10); }
 
-/* ── Deaths tab (dedicated) ── */
 .dl-death-row {
   display: flex; flex-direction: column; gap: 4px;
   padding: 7px 10px;
@@ -2852,11 +2755,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .dl-death-time { font-size: 10px; color: rgba(255,100,100,0.7); font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; }
 .dl-spark { display: flex; align-items: center; }
 
-/* Right: hit log detail */
-.dl-detail {
-  flex: 1; min-width: 0;
-  display: flex; flex-direction: column; overflow: hidden;
-}
 .dl-detail-empty {
   flex: 1; display: flex; align-items: center; justify-content: center;
   color: rgba(255,255,255,0.2); font-size: 12px; text-align: center; padding: 16px;
@@ -2882,7 +2780,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.05em;
   text-align: left; white-space: nowrap;
 }
-.dl-col-amount { }
 .dl-hit-table tbody tr { border-bottom: 1px solid rgba(255,255,255,0.03); }
 .dl-hit-table td {
   padding: 3px 7px; white-space: nowrap;
@@ -2891,17 +2788,15 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .dl-row-dmg:hover  { background: rgba(255,255,255,0.03); }
 .dl-row-heal:hover { background: rgba(255,255,255,0.03); }
 
-.dl-badge-dmg  { display: inline-block; width: 14px; height: 14px; border-radius: 3px; background: #ff1744; color: #fff; font-size: 9px; font-weight: 700; text-align: center; line-height: 14px; }
-.dl-badge-heal { display: inline-block; width: 14px; height: 14px; border-radius: 3px; background: #00e676; color: #000; font-size: 9px; font-weight: 700; text-align: center; line-height: 14px; }
-.dl-badge-death { display: inline-block; width: 14px; height: 14px; border-radius: 3px; background: #ff1744; color: #fff; font-size: 9px; font-weight: 700; text-align: center; line-height: 14px; }
+.dl-badge-dmg,.dl-badge-heal,.dl-badge-death { display: inline-block; width: 14px; height: 14px; border-radius: 3px; font-size: 9px; font-weight: 700; text-align: center; line-height: 14px; }
+.dl-badge-dmg,.dl-badge-death { background: #ff1744; color: #fff; }
+.dl-badge-heal { background: #00e676; color: #000; }
 
 .dl-row-death { background: rgba(255,0,0,0.15) !important; }
 
-.dl-amount-dmg  { color: rgba(255,130,130,0.9); text-align: right; }
-.dl-amount-dmg-bold { color: #ff1744 !important; font-weight: 700 !important; text-align: right; }
-.dl-amount-heal { color: rgba(110,232,122,0.9); text-align: right; }
-.dl-amount-heal-bold { color: #00e676 !important; font-weight: 700 !important; text-align: right; }
-.dl-amount-death { color: #ff1744 !important; font-weight: 700 !important; text-align: right; }
+.dl-amount-dmg-bold,.dl-amount-heal-bold,.dl-amount-death { text-align: right; }
+.dl-amount-dmg-bold,.dl-amount-death { color: #ff1744 !important; font-weight: 700 !important; }
+.dl-amount-heal-bold { color: #00e676 !important; font-weight: 700 !important; }
 
 .dl-col-time    { width: 36px; color: rgba(255,255,255,0.35) !important; }
 .dl-col-type    { width: 20px; }
@@ -2919,7 +2814,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .bp-spark-svg { display: block; }
 .bp-spark-none { font-size: 10px; color: rgba(255,255,255,0.2); }
 
-/* ── Casts tab ── */
 .cast-xiv-tick {
   position: absolute;
   top: 5px;
@@ -3152,23 +3046,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cast-analysis-event--castbar {
-  min-width: 38px;
-  height: 18px;
-  top: 6px;
-  transform: none;
-  border-radius: 4px;
-  background: linear-gradient(90deg, rgba(48,120,255,0.42), rgba(116,185,255,0.78)) !important;
-  border-color: rgba(116,185,255,0.72) !important;
-  color: rgba(255,255,255,0.95) !important;
-  text-align: left;
-  padding: 0 6px;
-  font-size: 9px;
-  line-height: 16px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .cast-analysis-event:hover {
   z-index: 6;
   filter: brightness(1.25);
@@ -3208,28 +3085,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .cast-analysis-event--mitigations { background: linear-gradient(135deg, #027a45, #00e676); color: #05100a; }
 .cast-analysis-event--dps { background: linear-gradient(135deg, #9a7422, #ffd250); color: #1b1300; }
 .cast-analysis-event--heals { background: linear-gradient(135deg, #a83464, #fd79a8); }
-.cast-analysis-event--buff-window {
-  height: 22px;
-  top: 4px;
-  min-width: 30px;
-  transform: none;
-  text-align: left;
-  padding: 0;
-  border-radius: 4px;
-  opacity: 0.72;
-}
-.cast-analysis-event--buff-window .cast-event-icon {
-  width: 22px;
-  height: 22px;
-  border-right: 1px solid rgba(255,255,255,0.18);
-}
-.cast-analysis-event--buff-window > span {
-  width: 22px;
-  height: 22px;
-  line-height: 22px;
-  text-align: center;
-  background: rgba(0,0,0,0.16);
-}
 .cast-analysis-death-line,
 .cast-analysis-raise-line {
   position: absolute;
@@ -3361,6 +3216,9 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   border-radius: 999px;
   padding: 4px 9px;
   letter-spacing: 0.04em;
+  background: rgba(155,93,229,0.1);
+  border: 1px solid rgba(155,93,229,0.22);
+  color: #d9bcff;
 }
 .bp-filter-btn {
   background: rgba(255,255,255,0.04);
@@ -3372,11 +3230,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   color: #d9bcff;
   border-color: var(--flexi-accent-border);
   background: var(--flexi-accent-soft);
-}
-.bp-chip {
-  background: rgba(155,93,229,0.1);
-  border: 1px solid rgba(155,93,229,0.22);
-  color: #d9bcff;
 }
 .bp-workspace {
   flex: 1;
@@ -3446,6 +3299,9 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .bp-pull-row-stats {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
+  color: rgba(255,255,255,0.48);
+  font-size: 10px;
 }
 .bp-pull-row-main {
   min-width: 0;
@@ -3461,11 +3317,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.bp-pull-row-stats {
-  flex-wrap: wrap;
-  color: rgba(255,255,255,0.48);
-  font-size: 10px;
 }
 .bp-pull-row-stats span {
   padding: 2px 6px;
@@ -3505,12 +3356,10 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
   flex-direction: column;
   overflow: hidden;
   background: rgba(255,255,255,0.02);
+  border-left: 1px solid rgba(255,255,255,0.07);
 }
 .bp-rail {
   border-right: 1px solid rgba(255,255,255,0.07);
-}
-.bp-inspector {
-  border-left: 1px solid rgba(255,255,255,0.07);
 }
 .bp-main {
   min-width: 0;
@@ -3542,8 +3391,6 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 .bp-job-icon {
   position: relative;
   z-index: 1;
-}
-.bp-job-icon {
   width: 18px;
   height: 18px;
   flex: 0 0 18px;

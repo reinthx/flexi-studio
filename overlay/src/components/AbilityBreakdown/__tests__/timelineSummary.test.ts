@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { buildOverviewTimelineBars, buildPullGroupDpsBars, deathClusters, topTimelineSpikes } from '../timelineSummary'
+import { buildOverviewTimelineBars, buildPullGroupDpsBars, buildTimelineChartModel, deathClusters, GROUP_NAME, topTimelineSpikes } from '../timelineSummary'
 
 const fmtTime = (ms: number) => `${ms / 1000}s`
 const fmt = (value: number) => value.toFixed(0)
@@ -18,6 +18,23 @@ it('groups pull dps bars with death and raise counts', () => {
     { targetName: 'B', targetId: '2', timestamp: 4000, resurrectTime: 5000, hpSamples: [] },
   ], fmtTime)
   expect(bars.map(bar => [bar.value, bar.deathCount, bar.raiseCount])).toEqual([[4, 1, 0], [6, 1, 1]])
+})
+
+it('builds timeline chart series with focus, smoothing, and group totals', () => {
+  const chart = buildTimelineChartModel({ B: [0, 12, 24], A: [3, 6, 9], Enemy: [90, 90, 90] }, {
+    showEnemies: false,
+    isEnemy: name => name === 'Enemy',
+    selected: 'B',
+    hiddenSeries: new Set(),
+    formatValue: value => value.toFixed(0),
+    geometry: { pl: 10, pt: 5, cw: 100, ch: 50 },
+  })
+
+  expect(chart?.series.map(series => series.name)).toEqual(['B', 'A', GROUP_NAME])
+  expect(chart?.series[0]).toMatchObject({ name: 'B', isFocused: true })
+  expect(chart?.series[2].values).toEqual([1, 3.5, 6])
+  expect(chart?.yTicks.at(-1)?.label).toBe('6')
+  expect(chart?.points([0, 6])).toBe('10.0,55.0 60.0,5.0')
 })
 
 it('clusters deaths within fifteen seconds', () => {
