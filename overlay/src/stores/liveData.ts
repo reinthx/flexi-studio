@@ -379,7 +379,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const latest = samples.at(-1)
         const duplicateName = (candidateNameCounts.get(name) ?? 0) > 1
         const killed = enemyDeaths[key] !== undefined ||
-          (!duplicateName && (enemyDeaths[name] !== undefined || samples.some(sample => sample.currentHp <= 0 || sample.hp <= 0)))
+          (!duplicateName && (enemyDeaths[name] !== undefined || samples.some(sample => sample.currentHp <= 1 || sample.hp <= 0)))
         const maxHp = latest?.maxHp ?? 0
         const currentHp = latest && maxHp > 0
           ? (killed ? 0 : Math.max(0, Math.min(latest.currentHp, maxHp)))

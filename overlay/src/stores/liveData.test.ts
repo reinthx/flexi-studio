@@ -970,6 +970,48 @@ describe('overlay liveData store', () => {
     store.stop()
   })
 
+  it('treats one HP objective enemies as defeated when no death line arrives', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      2: '10AAAAAA',
+      3: 'Alice',
+      4: '0001',
+      5: 'Tomahawk',
+      6: '40000001',
+      7: 'Training Spirit',
+      8: '03',
+      9: '03E80000',
+      24: '1',
+      25: '10000',
+    }))
+
+    mocks.listeners.CombatData(combatData(false, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    store.broadcastForCombatant('Alice')
+    const payload = JSON.parse(localStorage.getItem('flexi-breakdown-snapshot') ?? '{}')
+    const historicalPull = payload.pullList.find((entry: { index: number | null }) => entry.index === 0)
+
+    expect(historicalPull).toMatchObject({
+      pullOutcome: 'clear',
+      pullOutcomeLabel: 'Clear',
+      bossKilled: true,
+      enemyCount: 1,
+      defeatedEnemyCount: 1,
+    })
+    expect(historicalPull.bossPercentLabel).toBe('Defeated')
+
+    store.stop()
+  })
+
   it('excludes Trust avatars from defeated enemy objective counts', async () => {
     const store = await createStore()
     store.start()
