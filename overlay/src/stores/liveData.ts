@@ -387,8 +387,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const percent = latest && maxHp > 0
           ? (killed ? 0 : Math.max(0, Math.min(100, latest.hp * 100)))
           : undefined
-        return { key, name, id, percent, currentHp, maxHp, killed }
+        const ignored = !killed && currentHp === 1
+        return { key, name, id, percent, currentHp, maxHp, killed, ignored }
       })
+      .filter(enemy => !enemy.ignored)
       .sort((a, b) => b.maxHp - a.maxHp || a.name.localeCompare(b.name))
 
     if (enemies.length === 0) {
