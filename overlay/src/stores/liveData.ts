@@ -136,7 +136,6 @@ export const useLiveDataStore = defineStore('liveData', () => {
   let pullStartLogTime = 0
   let currentLogTime: number | null = null
   const networkEnemyInstances = new Map<string, { id: string; lastSeen: number; maxHp: number }>()
-  const NETWORK_PULL_BOUNDARY_GAP_MS = 20_000
   const NETWORK_PULL_BOUNDARY_MIN_HP = 500_000
   const lastKnownHp = new Map<string, { currentHp: number; maxHp: number }>()
 
@@ -283,7 +282,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const seen = (seenByEncounter.get(encounterId) ?? 0) + 1
       seenByEncounter.set(encounterId, seen)
       const total = totalsByEncounter.get(encounterId) ?? seen
-      const duration = parseFloat(p.encounter?.DURATION ?? '0') || 1
+      const duration = encounterDurationSec(p.encounter ?? {}) || 1
       const damageTaken = combatantTotal(p.combatants, 'damagetaken')
       const rdps = combatantTotal(p.combatants, 'rdps')
       cachedHistoricalPullEntries.push({
@@ -458,6 +457,18 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return parseInt(s, 10) || 0
   }
 
+  function parseEncounterDurationValue(value: string | undefined): number {
+    if (!value) return 0
+    if (value.includes(':')) return parseDurationToSec(value)
+    const seconds = parseFloat(value)
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : 0
+  }
+
+  function encounterDurationSec(encounter: Record<string, string>): number {
+    return parseEncounterDurationValue(encounter['DURATION']) ||
+      parseEncounterDurationValue(encounter['duration'])
+  }
+
   function snapshotHitData(): Record<string, HitRecord[]> {
     return deepClone(Object.fromEntries(hitEventBuffer.entries()))
   }
@@ -543,7 +554,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       dpsByCombatant: combatantMetricRecord(historicalCombatants, 'encdps'),
       damageByCombatant: combatantMetricRecord(historicalCombatants, 'damage'),
     }
-    const encounterDurationSec = pullIndex === null ? liveDuration : parseInt(pull?.encounter?.['DURATION'] ?? '0', 10)
+    const payloadDurationSec = pullIndex === null ? liveDuration : encounterDurationSec(pull?.encounter ?? {})
     const timestamp = Date.now()
     return {
       type: 'encounterData',
@@ -553,7 +564,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       blurNames: profile.value.global.blurNames ?? false,
       partyNames: Array.from(pullIndex === null ? partyNames.value : new Set(payloadData.partyData.map(p => p.name))),
       partyData: payloadData.partyData.map(p => ({ id: p.id, name: p.name, inParty: p.inParty, partyType: p.partyType, job: p.job })),
-      encounterDurationSec,
+      encounterDurationSec: payloadDurationSec,
       pullIndex,
       selectedCombatant,
       pullList: buildPullList(),
@@ -694,7 +705,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       recordResourceSample(c)
     }
 
-    refreshLiveCombatantMetrics(combatants, parseFloat(event.Encounter['DURATION'] ?? '0') || 1)
+    refreshLiveCombatantMetrics(combatants, encounterDurationSec(event.Encounter) || 1)
 
     // Use combatantFilter if set, otherwise fall back to legacy selfOnly/partyOnly
     const filter = g.combatantFilter ?? (g.selfOnly ? 'self' : g.partyOnly ? 'party' : 'all')
@@ -722,7 +733,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       encounterDuration: event.Encounter['duration'] ?? '',
       totalDps: formatValue(parseFloat(event.Encounter['ENCDPS'] ?? '0'), g.valueFormat),
       totalHps: formatValue(parseFloat(event.Encounter['ENCHPS'] ?? '0'), g.valueFormat),
-      totalDtps: formatValue(parseFloat(event.Encounter['DTRPS'] ?? event.Encounter['damagetaken'] ?? '0') / (parseFloat(event.Encounter['DURATION'] ?? '0') || 1), g.valueFormat),
+      totalDtps: formatValue(parseFloat(event.Encounter['DTRPS'] ?? event.Encounter['damagetaken'] ?? '0') / (encounterDurationSec(event.Encounter) || 1), g.valueFormat),
       totalRdps: formatValue(
         combatantTotal(filtered, 'rdps'),
         g.valueFormat,
@@ -761,15 +772,13 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return pullStartTime > 0 ? Date.now() - pullStartTime : 0
   }
 
-  function maybeResetForNetworkEnemyInstance(name: string, id: string, maxHp: number): void {
+  function recordNetworkEnemyInstance(name: string, id: string, maxHp: number): void {
     if (!name || !isEnemyId(id) || currentLogTime === null) return
     if (!Number.isFinite(maxHp) || maxHp < NETWORK_PULL_BOUNDARY_MIN_HP) return
 
-    const previous = networkEnemyInstances.get(name)
-    if (previous && previous.id !== id && currentLogTime - previous.lastSeen > NETWORK_PULL_BOUNDARY_GAP_MS) {
-      resetAbilityData()
-    }
-
+    // Bosses can become untargetable and return with a new network object id
+    // during intermissions. ACT/kagerou keep those as one pull, so Flexi should
+    // not use enemy id churn as an independent pull boundary.
     networkEnemyInstances.set(name, { id, lastSeen: currentLogTime, maxHp })
   }
 
@@ -1387,8 +1396,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const effectiveName = petOwnerName || sourceName
       const flagByte     = actionEffectKind(flags)
 
-      maybeResetForNetworkEnemyInstance(sourceName, sourceId, srcMaxHp)
-      maybeResetForNetworkEnemyInstance(targetName, targetId, tgtMaxHp)
+      recordNetworkEnemyInstance(sourceName, sourceId, srcMaxHp)
+      recordNetworkEnemyInstance(targetName, targetId, tgtMaxHp)
       recordCombatantId(sourceName, sourceId)
       recordCombatantId(targetName, targetId)
       if (effectiveName && abilityId) {
@@ -1604,12 +1613,13 @@ export const useLiveDataStore = defineStore('liveData', () => {
   // ─── Pull history ────────────────────────────────────────────────────────────
   function detectNewPull(event: CombatDataEvent): void {
     const title = event.Encounter['title'] ?? ''
-    // Use DURATION (integer seconds) for numeric comparison — avoids lexicographic
-    // failures on 10+ min fights where "10:00" < "09:59" as strings
-    const duration = parseInt(event.Encounter['DURATION'] ?? '0', 10) || 0
+    // ACT can briefly send zero/missing duration during long intermissions. Treat
+    // only positive rewinds as pull boundaries so transient packets do not wipe
+    // log-derived DPS state while the pull is still ongoing.
+    const duration = encounterDurationSec(event.Encounter)
     const lastDuration = parseInt(lastEncounterStart || '0', 10) || 0
     const titleChanged = !!title && title !== lastEncounterTitle
-    const durationRewound = !!title && title === lastEncounterTitle && lastDuration > 0 && duration + 2 < lastDuration
+    const durationRewound = !!title && title === lastEncounterTitle && lastDuration > 0 && duration > 0 && duration + 2 < lastDuration
 
     if (titleChanged || durationRewound) {
       resetAbilityData()
@@ -1624,7 +1634,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (!title) return
 
     const { combatants } = resolvePets(event.Combatant, profile.value.global.pets)
-    const stashDuration = parseFloat(event.Encounter['DURATION'] ?? '0') || 1
+    const stashDuration = encounterDurationSec(event.Encounter) || 1
     for (const c of combatants) injectCombatantRdps(c, stashDuration)
     const record: PullRecord = {
       id: `${Date.now()}`,
@@ -1873,7 +1883,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       encounterDuration: pull.duration,
       totalDps: formatValue(parseFloat(pull.encounter['ENCDPS'] ?? '0'), g.valueFormat),
       totalHps: formatValue(parseFloat(pull.encounter['ENCHPS'] ?? '0'), g.valueFormat),
-      totalDtps: formatValue(parseFloat(pull.encounter['damagetaken'] ?? '0') / (parseFloat(pull.encounter['DURATION'] ?? '0') || 1), g.valueFormat),
+      totalDtps: formatValue(parseFloat(pull.encounter['damagetaken'] ?? '0') / (encounterDurationSec(pull.encounter) || 1), g.valueFormat),
       totalRdps: formatValue(
         bars.reduce((s, b) => s + parseFloat(b.rdps ?? '0'), 0),
         g.valueFormat,

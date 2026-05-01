@@ -3,47 +3,87 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { formatValue } from '@shared/formatValue'
 import type { DpsTimeline, DeathRecord, DeathEvent, CastEvent } from '@shared/configSchema'
 import { TIMELINE_BUCKET_SEC } from '@shared/configSchema'
-import { RAID_BUFFS } from '@shared/raidBuffs'
 import { getJobIconSrc, normalizeJob } from '@shared/jobMap'
-import { abilityInitials, resolveAbilityInfo } from '@shared/abilityIcons'
+import { abilityInitials } from '@shared/abilityIcons'
 import ActorRail from './AbilityBreakdown/ActorRail.vue'
 import AbilityCell from './AbilityBreakdown/AbilityCell.vue'
+import AbilityRowsTable from './AbilityBreakdown/AbilityRowsTable.vue'
+import DeathsView from './AbilityBreakdown/DeathsView.vue'
+import InspectorList from './AbilityBreakdown/InspectorList.vue'
+import InspectorRows from './AbilityBreakdown/InspectorRows.vue'
+import PullsView from './AbilityBreakdown/PullsView.vue'
 import type { BreakdownView, CastFilter, EventFilter, PullEntry, ResourceTrackKey, TimelineOverlay } from './AbilityBreakdown/types'
-import { buildDoneTargetRows, buildHealingAbilityRows, buildSortedAbilityRows, totalAbilityDamage, totalAbilityOverheal, totalEncounterDamage } from './AbilityBreakdown/abilityRows'
+import { abilityIdForName as findAbilityIdForName, useAbilityIconCache } from './AbilityBreakdown/abilityIconCache'
+import { buildDoneInspectorRows, buildDoneSourceRows, buildDoneTargetRows, buildHealingAbilityRows, buildSortedAbilityRows, buildTakenInspectorRows, highestHitAbility, partyHighestHit as pickPartyHighestHit, selectAbilityRow, totalAbilityDamage, totalAbilityOverheal, totalEncounterDamage } from './AbilityBreakdown/abilityRows'
 import { useActorMetrics } from './AbilityBreakdown/actorMetrics'
 import {
+  buildCastMitigationEffectiveness,
+  buildCastEventInspectorRows,
+  buildCastInspectorRows,
+  buildMitigationInspectorRows,
   buildCastPlayerData,
-  buildCastResourceTracks,
-  buildCastTimelineGroups,
-  buildCastTimelineRows,
+  buildCastTimelineContext,
   castCastWindowWidth as castWindowWidth,
+  castCooldownLabel as formatCastCooldownLabel,
   castCooldownWidth as cooldownWindowWidth,
+  castEventKey,
   castEventLeft as eventLeft,
   castEventWidth as eventWidth,
+  castFilterLabel as formatCastFilterLabel,
   castTimelinePct,
-  CAST_FILTER_LABELS,
   CAST_FILTER_ORDER,
-  isMitigationAbility,
   resourceAreaPath as areaPath,
   resourcePolyline as polyline,
+  selectedCastEventsForAbility,
+  singleSelectedCastEvent,
 } from './AbilityBreakdown/castTimeline'
-import { groupCombatants, isEnemyId, isNpcId } from './AbilityBreakdown/combatants'
-import { BREAKDOWN_REQUEST_INTERVAL_MS, BREAKDOWN_SNAPSHOT_KEY, BREAKDOWN_SNAPSHOT_MAX_AGE_MS, useBreakdownDataState } from './AbilityBreakdown/dataState'
+import { actorJobFor, groupCombatants, isEnemyId, isNpcId, nameStyleFor, resolveSelectedCombatant, visibleCombatantNames } from './AbilityBreakdown/combatants'
+import { BREAKDOWN_REQUEST_INTERVAL_MS, BREAKDOWN_SNAPSHOT_KEY, evaluateEncounterPayload, parseValidBreakdownSnapshot, useBreakdownDataState } from './AbilityBreakdown/dataState'
 import type { BreakdownPayload } from './AbilityBreakdown/dataState'
-import { deathEventsFor, deathHpBars as buildDeathHpBars, formatHpBefore as formatDeathHpBefore, sortPlayerDeaths } from './AbilityBreakdown/deathTransforms'
-import { useEventRows } from './AbilityBreakdown/eventRows'
-import { entryPullLabel, fmtSeconds, fmtTime, formatEntryDelta, hitRange as formatHitRange, overhealPct, parseEntryDuration, pctOf, pullOutcomeClass, rawHealingAverage } from './AbilityBreakdown/formatters'
 import {
-  bestProgressPullEntry as pickBestProgressPullEntry,
-  bestPullEntry as pickBestPullEntry,
+  castsInDeathWindow,
+  deathEventsFor,
+  deathHealingAbilityCounts,
+  deathHpBars as buildDeathHpBars,
+  deathRecapRows as buildDeathRecapRows,
+  deathRelatedDamage as buildDeathRelatedDamage,
+  deathTimeSecondsForActor,
+  deathWindow as buildDeathWindow,
+  deathsForActor,
+  formatHpBefore as formatDeathHpBefore,
+  nearDeathAbilityCounts,
+  overviewDeathEvents,
+  resTimeSecondsForActor,
+  sortPlayerDeaths,
+} from './AbilityBreakdown/deathTransforms'
+import { buildActiveFilterChips, buildEventInspectorRows, useEventRows } from './AbilityBreakdown/eventRows'
+import { entryPullLabel, fmtSeconds, fmtTime, formatEntryDelta, parseEntryDuration, pullOutcomeClass } from './AbilityBreakdown/formatters'
+import {
+  buildPullDashboardContext,
   buildPullDamageRows,
-  enemyProgressDetail as formatEnemyProgressDetail,
-  enemyProgressHeadline as formatEnemyProgressHeadline,
-  enemyProgressMeta as formatEnemyProgressMeta,
-  previousPullEntry as pickPreviousPullEntry,
-  pullDashboardNotes as buildPullDashboardNotes,
+  partyHasRaidBuffJobs as detectPartyRaidBuffJobs,
+  pullBuffWarnings,
+  pullHasRaidBuffCast as detectPullRaidBuffCast,
+  pullHasRaidBuffCredit as detectPullRaidBuffCredit,
 } from './AbilityBreakdown/pullInsights'
-import { buildOverviewTimelineBars, buildPullGroupDpsBars, buildTimelineChartModel, deathClusters, GROUP_COLOR, METRIC_LABELS, topTimelineSpikes } from './AbilityBreakdown/timelineSummary'
+import {
+  buildOverviewTimelineBars,
+  buildPullGroupDpsBars,
+  buildRdpsTimeline,
+  buildTimelineChartModel,
+  buildTimelineDeathMarkers,
+  buildTimelineHoverTooltip,
+  buildTimelineInspectorRows,
+  buildTimelineRaidBuffWindows,
+  buildTimelineRaiseMarkers,
+  castsInTimelineWindow,
+  deathClusters,
+  deathsInTimelineWindow,
+  GROUP_COLOR,
+  METRIC_LABELS,
+  timelineWindowForBucket,
+  topTimelineSpikes,
+} from './AbilityBreakdown/timelineSummary'
 import { useBreakdownViewState } from './AbilityBreakdown/viewState'
 
 const {
@@ -76,6 +116,7 @@ const {
   resourceData,
   partyData,
   clearBreakdownData,
+  assignBreakdownPayload,
 } = useBreakdownDataState()
 
 const f = (n: number) => formatValue(n, 'abbreviated')
@@ -112,63 +153,30 @@ if (initialView === 'pulls') {
   localStorage.removeItem('flexi-breakdown-view')
 }
 
-const abilityIconSrcs = ref<Record<string, string>>({})
-const abilityCooldownMs = ref<Record<string, number>>({})
-const abilityIconRequested = new Set<string>()
 const collapsedCastGroups = ref<Set<CastFilter>>(new Set())
+const {
+  abilityIconSrc,
+  abilityRecastMs,
+  clearAbilityIcon,
+  queueCastTimelineRowIcons,
+  queueVisibleAbilityIcons,
+} = useAbilityIconCache()
 
-const pullHasRaidBuffCredit = computed(() =>
-  Object.values(rdpsGiven.value).some(value => value > 0)
-)
+const pullHasRaidBuffCredit = computed(() => detectPullRaidBuffCredit(rdpsGiven.value))
+const pullHasRaidBuffCast = computed(() => detectPullRaidBuffCast(castData.value))
+const partyHasRaidBuffJobs = computed(() => detectPartyRaidBuffJobs(partyData.value, visibleCombatants.value, actorJob))
+const buffWarnings = computed(() => pullBuffWarnings({
+  activeView: activeView.value,
+  selectedName: resolvedSelected.value,
+  castData: castData.value,
+  jobFor: actorJob,
+  hasRaidBuffJobs: partyHasRaidBuffJobs.value,
+  hasRaidBuffCast: pullHasRaidBuffCast.value,
+  hasRaidBuffCredit: pullHasRaidBuffCredit.value,
+}))
 
-const pullHasRaidBuffCast = computed(() =>
-  Object.values(castData.value).some(casts =>
-    casts.some(cast => {
-      const abilityKey = cast.abilityName.trim().toLowerCase()
-      const effectKey = cast.effectName?.trim().toLowerCase() ?? ''
-      return !!RAID_BUFFS[abilityKey] || !!RAID_BUFFS[effectKey]
-    }),
-  )
-)
-
-const RAID_BUFF_JOBS = new Set([
-  'AST', 'BRD', 'DNC', 'DRG', 'MNK', 'NIN', 'PCT', 'RDM', 'RPR', 'SCH', 'SMN',
-])
-
-const partyHasRaidBuffJobs = computed(() => {
-  const jobs = new Set<string>()
-  for (const member of partyData.value) {
-    if (member.name) jobs.add(actorJob(member.name))
-  }
-  for (const name of visibleCombatants.value) {
-    const job = actorJob(name)
-    if (job) jobs.add(job)
-  }
-  return Array.from(jobs).some(job => RAID_BUFF_JOBS.has(job))
-})
-
-const buffWarnings = computed(() => {
-  if (activeView.value !== 'pulls') return []
-  const warnings: string[] = []
-  const job = actorJob(resolvedSelected.value)
-  const isHealer = ['WHM', 'SCH', 'AST', 'SGE'].includes(job)
-  const casts = castData.value[resolvedSelected.value] ?? []
-  const abilityNamesLower = new Set(casts.map(c => c.abilityName.toLowerCase()))
-  if (isHealer) {
-    const hasHeal = abilityNamesLower.has('cure') || abilityNamesLower.has('cure ii') || abilityNamesLower.has('medica') ||
-      abilityNamesLower.has('benefic') || abilityNamesLower.has('diagnosis') || abilityNamesLower.has('heal') || abilityNamesLower.has('heal ii')
-    if (!hasHeal) warnings.push('No direct heals cast')
-  }
-  if (partyHasRaidBuffJobs.value && !pullHasRaidBuffCast.value && !pullHasRaidBuffCredit.value) {
-    warnings.push('No raid buffs detected')
-  }
-  return warnings
-})
-
-// Toggle to show friendly NPCs (Non-player companions, minions that deal damage, etc.)
 const showFriendlyNPCs = ref(false)
 
-// Track last pull index so we can reset hiddenSeries on pull change
 let lastAutoHidePull: number | null | undefined = undefined
 
 const initName = localStorage.getItem('flexi-breakdown-init') ?? ''
@@ -185,12 +193,11 @@ function isNPC(name: string): boolean {
 }
 
 const visibleCombatants = computed(() =>
-  combatants.value.filter(n => (showEnemies.value || !isEnemy(n)) && (showFriendlyNPCs.value || !isNPC(n)))
+  visibleCombatantNames(combatants.value, showEnemies.value, showFriendlyNPCs.value, isEnemy, isNPC)
 )
 
 const combatantGroups = computed(() => groupCombatants(visibleCombatants.value, partyData.value, selfName.value))
 
-// Track collapsed state for groups
 const groupCollapsed = ref<Set<string>>(new Set())
 
 function toggleGroup(label: string) {
@@ -201,19 +208,16 @@ function toggleGroup(label: string) {
   }
 }
 
-const resolvedSelected = computed(() => {
-  const visible = visibleCombatants.value
-  if (selected.value && allData.value[selected.value] && visible.includes(selected.value)) return selected.value
-  if (initName && allData.value[initName] && visible.includes(initName)) return initName
-  if (selfName.value && allData.value[selfName.value]) return selfName.value
-  return visible[0] ?? ''
-})
+const resolvedSelected = computed(() => resolveSelectedCombatant({
+  selected: selected.value,
+  initName,
+  selfName: selfName.value,
+  allData: allData.value,
+  visibleCombatants: visibleCombatants.value,
+}))
 
 function actorJob(name: string): string {
-  const direct = combatantJobs.value[name]
-  if (direct) return normalizeJob(direct)
-  const partyJob = partyData.value.find(member => member.name === name)?.job
-  return partyJob ? normalizeJob(partyJob) : ''
+  return actorJobFor(name, combatantJobs.value, partyData.value, normalizeJob)
 }
 
 function actorJobIcon(name: string): string {
@@ -221,16 +225,8 @@ function actorJobIcon(name: string): string {
   return job ? getJobIconSrc(job) : ''
 }
 
-const blurTextStyle = {
-  fontFamily: "'redacted-script-bold', monospace",
-  filter: 'blur(1px)',
-  userSelect: 'none' as const,
-  letterSpacing: '-0.04em',
-}
-
 function nameStyle(name: string) {
-  return blurNames.value && name !== selfName.value && name !== 'YOU'
-    ? blurTextStyle : undefined
+  return nameStyleFor(name, blurNames.value, selfName.value)
 }
 
 const rawData = computed(() => allData.value[resolvedSelected.value] ?? {})
@@ -247,26 +243,9 @@ const doneTargetRows = computed(() =>
   buildDoneTargetRows(selectedActorCastEvents.value, rawData.value, healingReceivedData.value, resolvedSelected.value)
 )
 
-const doneSourceRows = computed(() => {
-  const rows = visibleCombatants.value
-    .filter(name => !isEnemy(name))
-    .map(name => {
-      const abilityRows = Object.values(allData.value[name] ?? {})
-      const total = abilityRows.reduce((sum, ability) => sum + ability.totalDamage, 0)
-      return {
-        name,
-        total,
-        hits: abilityRows.reduce((sum, ability) => sum + ability.hits, 0),
-        abilityCount: abilityRows.length,
-        dps: encounterDurationSec.value > 0 ? Math.round(total / encounterDurationSec.value) : 0,
-      }
-    })
-    .filter(row => row.total > 0)
-  const total = rows.reduce((sum, row) => sum + row.total, 0)
-  return rows
-    .map(row => ({ ...row, pct: total > 0 ? ((row.total / total) * 100).toFixed(1) : '0.0' }))
-    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
-})
+const doneSourceRows = computed(() =>
+  buildDoneSourceRows(visibleCombatants.value, allData.value, encounterDurationSec.value, isEnemy)
+)
 
 const takenRawData = computed(() => damageTakenData.value[resolvedSelected.value] ?? {})
 
@@ -306,29 +285,11 @@ const encounterDurationLabel = computed(() =>
 )
 
 const selectedActorDeaths = computed(() =>
-  sortedDeaths.value.filter(death => death.targetName === resolvedSelected.value)
+  deathsForActor(sortedDeaths.value, resolvedSelected.value)
 )
 
-function countSelectedDeathAbilities(include: (event: DeathEvent, events: DeathEvent[]) => boolean) {
-  const counts = new Map<string, number>()
-  for (const death of selectedActorDeaths.value) {
-    const events = deathEventsFor(death)
-    for (const event of events) {
-      if (event.abilityName && include(event, events)) counts.set(event.abilityName, (counts.get(event.abilityName) ?? 0) + 1)
-    }
-  }
-  return counts
-}
-
-const selectedActorNearDeathCounts = computed(() => countSelectedDeathAbilities((event, events) => {
-  if (event.type !== 'dmg' || event.hpAfter >= 0.1) return false
-  const windowStart = Math.max(0, event.t - 15000)
-  return !events.some(e => e.type === 'heal' && e.t >= windowStart && e.t <= event.t + 5000)
-}))
-
-const selectedActorDeathHealingAbilitySet = computed(() =>
-  countSelectedDeathAbilities(event => event.type === 'heal')
-)
+const selectedActorNearDeathCounts = computed(() => nearDeathAbilityCounts(selectedActorDeaths.value))
+const selectedActorDeathHealingAbilitySet = computed(() => deathHealingAbilityCounts(selectedActorDeaths.value))
 
 const selectedActorCastEvents = computed(() =>
   castData.value[resolvedSelected.value] ?? []
@@ -388,72 +349,13 @@ const castGroups = computed(() => {
   return groupCombatants(visibleCastNames, partyData.value, selfName.value)
 })
 
-// Get death time for selected player (if they died)
-const castPlayerDeathTime = computed(() => {
-  if (!castSelectedPlayer.value) return null
-  const death = deaths.value.find(d => d.targetName === castSelectedPlayer.value)
-  return death ? death.timestamp / 1000 : null // convert to seconds
-})
-
-// Get resurrection time for selected player (if they were raised)
-const castPlayerResTime = computed(() => {
-  if (!castSelectedPlayer.value) return null
-  const death = deaths.value.find(d => d.targetName === castSelectedPlayer.value)
-  return death && death.resurrectTime ? death.resurrectTime / 1000 : null
-})
+const castPlayerDeathTime = computed(() => deathTimeSecondsForActor(deaths.value, castSelectedPlayer.value))
+const castPlayerResTime = computed(() => resTimeSecondsForActor(deaths.value, castSelectedPlayer.value))
 
 const castPlayerData = computed(() => {
   if (!castSelectedPlayer.value) return null
   return buildCastPlayerData(castData.value[castSelectedPlayer.value] ?? [], rawData.value, healingReceivedData.value, castSelectedPlayer.value)
 })
-
-function castMitigationWindow(event: CastEvent): { start: number; end: number } {
-  const durationMs = event.buffDurationMs ?? Math.max(event.durationMs ?? 0, 15_000)
-  return { start: event.t, end: event.t + durationMs }
-}
-
-function castEventKey(event: CastEvent): string {
-  return `${event.source}|${event.abilityId}|${event.abilityName}|${event.target}|${event.targetId ?? ''}|${event.t}`
-}
-
-function mitigationReductionPercent(abilityName: string): number {
-  const name = abilityName.toLowerCase().replace(/[’']/g, "'")
-  const reductions: Array<[RegExp, number]> = [
-    [/reprisal/, 0.10],
-    [/feint/, 0.10],
-    [/addle/, 0.10],
-    [/rampart/, 0.20],
-    [/sentinel/, 0.30],
-    [/guardian/, 0.40],
-    [/vengeance/, 0.30],
-    [/damnation/, 0.40],
-    [/bloodwhetting/, 0.10],
-    [/raw intuition/, 0.10],
-    [/nascent flash/, 0.10],
-    [/shadow wall/, 0.30],
-    [/dark mind/, 0.20],
-    [/dark missionary/, 0.10],
-    [/oblation/, 0.10],
-    [/nebula/, 0.30],
-    [/great nebula/, 0.40],
-    [/camouflage/, 0.10],
-    [/heart of stone/, 0.15],
-    [/heart of corundum/, 0.15],
-    [/heart of light/, 0.10],
-    [/aquaveil/, 0.15],
-    [/temperance/, 0.10],
-    [/sacred soil/, 0.10],
-    [/expedient/, 0.10],
-    [/exaltation/, 0.10],
-    [/collective unconscious/, 0.10],
-    [/troubadour/, 0.10],
-    [/tactician/, 0.10],
-    [/shield samba/, 0.10],
-    [/dismantle/, 0.10],
-    [/magick barrier/, 0.10],
-  ]
-  return reductions.find(([pattern]) => pattern.test(name))?.[1] ?? 0
-}
 
 function selectCastAbilityRow(name: string): void {
   castSelectedAbility.value = name
@@ -467,124 +369,27 @@ function selectCastEvent(name: string, event: CastEvent): void {
   selectAbility(name)
 }
 
-function mitigationCouldAffectSelectedPlayer(event: CastEvent): boolean {
-  const player = castSelectedPlayer.value
-  if (!player) return false
-  if (event.source === player || event.target === player) return true
-  if (!event.target) return true
+const selectedCastEvents = computed(() => selectedCastEventsForAbility(selectedCastAbility.value, castSelectedEventKey.value))
+const selectedCastEvent = computed(() => singleSelectedCastEvent(selectedCastEvents.value))
 
-  const targetHasJob = Boolean(combatantJobs.value[event.target])
-  const targetIsParty = partyNames.value.includes(event.target) || targetHasJob
-  if (targetIsParty) return false
-
-  const targetId = event.targetId || combatantIds.value[event.target] || ''
-  return targetId.startsWith('4') || !targetHasJob
-}
-
-const selectedCastEvents = computed(() => {
-  const castAbility = selectedCastAbility.value
-  if (!castAbility) return []
-  const selectedEvent = castSelectedEventKey.value
-    ? castAbility.events.find(event => castEventKey(event) === castSelectedEventKey.value)
-    : null
-  return selectedEvent ? [selectedEvent] : castAbility.events
-})
-
-const selectedCastEvent = computed(() => selectedCastEvents.value.length === 1 ? selectedCastEvents.value[0] : null)
-
-const castMitigationEffectiveness = computed(() => {
-  if (!castSelectedPlayer.value) return null
-  const castAbility = selectedCastAbility?.value
-  if (!castAbility) return null
-  const abilityName = castAbility.name
-  const isMitigation = isMitigationAbility(abilityName)
-  if (!isMitigation) return null
-
-  const reductionPct = mitigationReductionPercent(abilityName)
-  const canEstimate = reductionPct > 0 && reductionPct < 1
-  const events = selectedCastEvents.value
-  const windows = events
-    .map(castMitigationWindow)
-    .filter(window => window.end > window.start)
-  const incomingHits = (hitData.value[castSelectedPlayer.value] ?? [])
-    .filter(hit => hit.type === 'dmg' && hit.amount > 0)
-  const activeHits = incomingHits.filter(hit =>
-    windows.some(window => hit.t >= window.start && hit.t <= window.end),
-  )
-  const selectedEventKeys = new Set(events.map(castEventKey))
-  const otherMitigationWindows = Object.values(castData.value)
-    .flatMap(events => events)
-    .filter(event => {
-      if (!isMitigationAbility(event.abilityName)) return false
-      if (!mitigationCouldAffectSelectedPlayer(event)) return false
-      return !selectedEventKeys.has(castEventKey(event))
-    })
-    .map(event => ({ event, window: castMitigationWindow(event) }))
-    .filter(({ window }) => window.end > window.start)
-  const stackedHits = activeHits.filter(hit =>
-    otherMitigationWindows.some(({ window }) => hit.t >= window.start && hit.t <= window.end),
-  )
-  const soloHits = activeHits.filter(hit => !stackedHits.includes(hit))
-  const stackedWith = otherMitigationWindows
-    .map(({ event, window }) => {
-      const overlaps = windows
-        .map(selectedWindow => ({
-          start: Math.max(selectedWindow.start, window.start),
-          end: Math.min(selectedWindow.end, window.end),
-        }))
-        .filter(overlap => overlap.end > overlap.start)
-      const overlapMs = overlaps.reduce((sum, overlap) => sum + overlap.end - overlap.start, 0)
-      return {
-        key: castEventKey(event),
-        name: event.abilityName,
-        source: event.source,
-        target: event.target,
-        time: fmtTime(event.t),
-        overlap: `${(overlapMs / 1000).toFixed(overlapMs >= 10_000 ? 0 : 1)}s`,
-        expected: mitigationReductionPercent(event.abilityName) > 0
-          ? `${(mitigationReductionPercent(event.abilityName) * 100).toFixed(0)}%`
-          : '—',
-        overlapMs,
-      }
-    })
-    .filter(row => row.overlapMs > 0)
-    .sort((a, b) => b.overlapMs - a.overlapMs || a.name.localeCompare(b.name))
-  const estimatedReduced = canEstimate
-    ? activeHits.reduce((sum, hit) => sum + (hit.amount / (1 - reductionPct) - hit.amount), 0)
-    : 0
-  const estimatedWithoutThisMit = activeHits.reduce((sum, hit) =>
-    sum + (canEstimate ? hit.amount / (1 - reductionPct) : hit.amount),
-  0)
-
-  return {
-    expected: canEstimate ? `${(reductionPct * 100).toFixed(0)}%` : '—',
-    hits: `${activeHits.length}`,
-    stackedHits: `${stackedHits.length}`,
-    soloHits: `${soloHits.length}`,
-    mitigated: estimatedReduced > 0 ? f(Math.round(estimatedReduced)) : '—',
-    withoutThisMit: estimatedWithoutThisMit > 0 ? f(Math.round(estimatedWithoutThisMit)) : '—',
-    scope: selectedCastEvent.value ? 'Selected Cast' : 'All Casts',
-    stackedWith,
-  }
-})
-
-const castTimelineDuration = computed(() => {
-  if (!castPlayerData.value) return 0
-  return Math.ceil((castPlayerData.value.maxDuration / 1000) / 10) * 10
-})
+const castMitigationEffectiveness = computed(() => buildCastMitigationEffectiveness({
+  selectedPlayer: castSelectedPlayer.value,
+  selectedAbility: selectedCastAbility.value,
+  selectedEvents: selectedCastEvents.value,
+  selectedEvent: selectedCastEvent.value,
+  allCastData: castData.value,
+  hitData: hitData.value,
+  combatantJobs: combatantJobs.value,
+  partyNames: partyNames.value,
+  combatantIds: combatantIds.value,
+  formatNumber: f,
+  formatTime: fmtTime,
+}))
 
 const castFilterOrder = CAST_FILTER_ORDER
 
-const castTimeTicks = computed(() => {
-  const dur = castTimelineDuration.value
-  if (dur <= 0) return []
-  const ticks: number[] = []
-  for (let t = 0; t <= dur; t += 30) ticks.push(t)
-  return ticks
-})
-
 function castFilterLabel(filter: CastFilter): string {
-  return CAST_FILTER_LABELS[filter]
+  return formatCastFilterLabel(filter)
 }
 
 function toggleCastGroupCollapsed(category: CastFilter): void {
@@ -594,27 +399,20 @@ function toggleCastGroupCollapsed(category: CastFilter): void {
   collapsedCastGroups.value = next
 }
 
-const castTimelineRows = computed(() => {
-  if (!castPlayerData.value) return []
-  return buildCastTimelineRows(castPlayerData.value.abilities, castFilters.value)
-})
-
-const castTimelineGroups = computed(() =>
-  buildCastTimelineGroups(castTimelineRows.value, collapsedCastGroups.value)
-)
-
-const castTimelinePixelWidth = computed(() =>
-  Math.max(1100, Math.ceil(castTimelineDuration.value * 14))
-)
-
 const selectedResourceSamples = computed(() => {
   if (!castSelectedPlayer.value) return []
   return resourceData.value[castSelectedPlayer.value] ?? []
 })
 
-const castResourceTracks = computed(() =>
-  buildCastResourceTracks(selectedResourceSamples.value, castTimelineDuration.value)
+const castTimelineContext = computed(() =>
+  buildCastTimelineContext(castPlayerData.value, castFilters.value, collapsedCastGroups.value, selectedResourceSamples.value)
 )
+const castTimelineDuration = computed(() => castTimelineContext.value.duration)
+const castTimeTicks = computed(() => castTimelineContext.value.timeTicks)
+const castTimelineRows = computed(() => castTimelineContext.value.rows)
+const castTimelineGroups = computed(() => castTimelineContext.value.groups)
+const castTimelinePixelWidth = computed(() => castTimelineContext.value.pixelWidth)
+const castResourceTracks = computed(() => castTimelineContext.value.resourceTracks)
 
 function resourcePolyline(key: ResourceTrackKey): string {
   return polyline(selectedResourceSamples.value, key, castTimelineDuration.value)
@@ -650,7 +448,7 @@ function castCooldownWidth(event: CastEvent): string {
 
 function castCooldownLabel(event: CastEvent): string {
   const cooldownMs = event.cooldownMs ?? abilityRecastMs(event.abilityId, event.abilityName)
-  return cooldownMs ? `${Math.round(cooldownMs / 1000)}s cooldown` : ''
+  return formatCastCooldownLabel(cooldownMs)
 }
 
 function scrollElementHorizontallyByWheel(el: HTMLElement, e: WheelEvent): boolean {
@@ -671,70 +469,10 @@ function onCastTimelineWheel(e: WheelEvent): void {
   }
 }
 
-function abilityIconKey(abilityId: string, abilityName: string): string {
-  return `${abilityId || 'unknown'}:${abilityName}`
-}
-
-function abilityIconSrc(abilityId: string, abilityName: string): string {
-  return abilityIconSrcs.value[abilityIconKey(abilityId, abilityName)] ?? ''
-}
-
-function abilityRecastMs(abilityId: string, abilityName: string): number {
-  return abilityCooldownMs.value[abilityIconKey(abilityId, abilityName)] ?? 0
-}
-
-function queueAbilityIcon(abilityId: string, abilityName: string): void {
-  const key = abilityIconKey(abilityId, abilityName)
-  if (abilityIconRequested.has(key)) return
-  abilityIconRequested.add(key)
-  resolveAbilityInfo(abilityId).then(info => {
-    if (info.iconSrc) abilityIconSrcs.value = { ...abilityIconSrcs.value, [key]: info.iconSrc }
-    if (info.recastMs) abilityCooldownMs.value = { ...abilityCooldownMs.value, [key]: info.recastMs }
-  })
-}
-
-function clearAbilityIcon(abilityId: string, abilityName: string): void {
-  const key = abilityIconKey(abilityId, abilityName)
-  if (!abilityIconSrcs.value[key]) return
-  const next = { ...abilityIconSrcs.value }
-  delete next[key]
-  abilityIconSrcs.value = next
-}
-
-watch(castTimelineRows, rows => {
-  for (const row of rows) {
-    const first = row.events[0]
-    if (first?.abilityId) queueAbilityIcon(first.abilityId, row.name)
-  }
-}, { immediate: true })
+watch(castTimelineRows, queueCastTimelineRowIcons, { immediate: true })
 
 function abilityIdForName(abilityName: string): string {
-  for (const source of [allData.value, damageTakenData.value, healingReceivedData.value]) {
-    for (const actorData of Object.values(source)) {
-      for (const ability of Object.values(actorData)) {
-        if (ability.abilityName === abilityName) return ability.abilityId
-      }
-    }
-  }
-  for (const events of Object.values(castData.value)) {
-    const match = events.find(event => event.abilityName === abilityName)
-    if (match?.abilityId) return match.abilityId
-  }
-  return ''
-}
-
-function queueVisibleAbilityIcons(): void {
-  for (const row of [...abilities.value, ...takenAbilities.value, ...healingAbilities.value]) {
-    queueAbilityIcon(row.abilityId, row.abilityName)
-  }
-  for (const row of eventRows.value.slice(0, 80)) {
-    const id = abilityIdForName(row.ability)
-    if (id) queueAbilityIcon(id, row.ability)
-  }
-  for (const hit of deathHitLog.value) {
-    const id = abilityIdForName(hit.abilityName)
-    if (id) queueAbilityIcon(id, hit.abilityName)
-  }
+  return findAbilityIdForName(abilityName, [allData.value, damageTakenData.value, healingReceivedData.value], castData.value)
 }
 
 const selectedDeathIndex = ref<number | null>(null)
@@ -768,29 +506,17 @@ const selectedDeath = computed<DeathRecord | null>(() =>
 const deathHitLog = computed(() => selectedDeath.value ? deathEventsFor(selectedDeath.value) : [])
 
 const selectedDoneAbility = computed(() =>
-  abilities.value.find(row => row.abilityName === selectedAbility.value) ?? abilities.value[0] ?? null
+  selectAbilityRow(abilities.value, selectedAbility.value)
 )
 
 const selectedDoneHighestHitAbility = computed(() =>
-  abilities.value.reduce((best, row) =>
-    !best || row.maxHit > best.maxHit ? row : best, null as (typeof abilities.value)[number] | null)
+  highestHitAbility(abilities.value)
 )
 
-const partyHighestHit = computed(() => {
-  let best: { actor: string; ability: string; amount: number } | null = null
-  for (const name of visibleCombatants.value) {
-    if (isEnemy(name)) continue
-    for (const ability of Object.values(allData.value[name] ?? {})) {
-      if (!best || ability.maxHit > best.amount) {
-        best = { actor: name, ability: ability.abilityName, amount: ability.maxHit }
-      }
-    }
-  }
-  return best
-})
+const partyHighestHit = computed(() => pickPartyHighestHit(visibleCombatants.value, allData.value, isEnemy))
 
 const selectedTakenAbility = computed(() =>
-  incomingAbilities.value.find(row => row.abilityName === selectedAbility.value) ?? incomingAbilities.value[0] ?? null
+  selectAbilityRow(incomingAbilities.value, selectedAbility.value)
 )
 
 const selectedCastAbility = computed(() =>
@@ -799,74 +525,24 @@ const selectedCastAbility = computed(() =>
     ?? castPlayerData.value?.abilities[0]
     ?? null
 )
-const selectedDoneInspectorRows = computed(() => {
-  const ability = selectedDoneAbility.value
-  return ability ? [['Ability', ability.abilityName], ['Total', f(ability.totalDamage)], ['DPS', encounterDurationSec.value > 0 ? f(ability.dps) : '—'], ['Rate', `${ability.pct}%`], ['Range', `${f(ability.minHit)} - ${f(ability.maxHit)}`], ['Crit %', ability.critPct], ['Crit Range', formatHitRange(ability.critMinHit, ability.critMaxHit, f)], ['Direct Hit %', pctOf(ability.directHits, ability.hits)], ['Direct Hit Range', formatHitRange(ability.directMinHit, ability.directMaxHit, f)], ['Crit Direct Hit %', pctOf(ability.critDirectHits, ability.hits)], ['Crit Direct Hit Range', formatHitRange(ability.critDirectMinHit, ability.critDirectMaxHit, f)]] : []
-})
+const selectedDoneInspectorRows = computed(() =>
+  buildDoneInspectorRows(selectedDoneAbility.value, encounterDurationSec.value, f)
+)
 
-const selectedTakenInspectorRows = computed(() => {
-  const ability = selectedTakenAbility.value
-  if (!ability) return []
-  const rows = [['Ability', ability.abilityName], [takenMode.value === 'healing' ? 'Effective' : 'Total', f(ability.totalDamage)], ['Share', `${ability.pct}%`], [takenMode.value === 'healing' ? 'Heals' : 'Hits', String(ability.hits)], ['Average', f(takenMode.value === 'healing' ? rawHealingAverage(ability) : ability.avg)], ['Near Deaths', (takenMode.value === 'healing' ? selectedActorDeathHealingAbilitySet.value : selectedActorNearDeathCounts.value).get(ability.abilityName) ?? 'None tracked']]
-  if (takenMode.value === 'healing') rows.splice(2, 0, ['Overheal', `${f(ability.overheal ?? 0)} · ${overhealPct(ability)}%`])
-  return rows
-})
+const selectedTakenInspectorRows = computed(() =>
+  buildTakenInspectorRows(selectedTakenAbility.value, takenMode.value, selectedActorNearDeathCounts.value, selectedActorDeathHealingAbilitySet.value, f)
+)
 
-const selectedCastInspectorRows = computed(() => {
-  const ability = selectedCastAbility.value
-  return ability ? [['Ability', ability.name], ['Casts', String(ability.casts)], ['Avg Interval', `${ability.avgInterval}s`], ['Target(s)', String(ability.targets.length)]] : []
-})
-
-const selectedCastEventRows = computed(() => {
-  const event = selectedCastEvent.value
-  return event ? [['Time', fmtTime(event.t)], ['Target', event.target || '—'], ['Duration', `${((event.buffDurationMs ?? event.durationMs ?? 0) / 1000).toFixed(1)}s`]] : []
-})
-
-const mitigationInspectorRows = computed(() => {
-  const mitigation = castMitigationEffectiveness.value
-  return mitigation ? [['Scope', mitigation.scope], ['Expected Reduction', mitigation.expected], ['Hits in Duration', mitigation.hits], ['Solo / Stacked Hits', `${mitigation.soloHits} / ${mitigation.stackedHits}`], ['Reduced Damage Taken By', mitigation.mitigated], ['Damage Without This Mit', mitigation.withoutThisMit]] : []
-})
+const selectedCastInspectorRows = computed(() => buildCastInspectorRows(selectedCastAbility.value))
+const selectedCastEventRows = computed(() => buildCastEventInspectorRows(selectedCastEvent.value, fmtTime))
+const mitigationInspectorRows = computed(() => buildMitigationInspectorRows(castMitigationEffectiveness.value))
 const overviewInspectorRows = computed(() => [['rDPS', f(rdpsFor(resolvedSelected.value))], ['DPS Given', f(rdpsGivenFor(resolvedSelected.value))], ['DPS Taken', f(rdpsTakenFor(resolvedSelected.value))], ['Biggest Hit', selectedDoneHighestHitAbility.value ? `${selectedDoneHighestHitAbility.value.abilityName} · ${f(selectedDoneHighestHitAbility.value.maxHit)}` : '—'], ['Biggest Taken', selectedTakenAbility.value?.abilityName ?? '—'], ['Deaths', String(selectedActorDeaths.value.length)], ['Casts', String(selectedActorCastEvents.value.length)]])
 
-const selectedDeathRelatedDamage = computed(() => {
-  const totals = new Map<string, number>()
-  for (const event of deathHitLog.value) {
-    if (event.type !== 'dmg' || event.isDeathBlow) continue
-    totals.set(event.abilityName, (totals.get(event.abilityName) ?? 0) + event.amount)
-  }
-  return Array.from(totals.entries())
-    .map(([ability, amount]) => ({ ability, amount }))
-    .sort((a, b) => b.amount - a.amount)
-})
-
-const selectedDeathWindow = computed(() => {
-  const death = selectedDeath.value
-  if (!death) return null
-  const events = deathHitLog.value
-  if (events.length === 0) return null
-  return {
-    start: Math.min(...events.map(event => event.t)),
-    end: Math.max(death.timestamp, ...events.map(event => event.t)),
-  }
-})
-
-const selectedDeathWindowCasts = computed(() => selectedDeathWindow.value ? selectedActorCastEvents.value.filter(event => event.t >= selectedDeathWindow.value!.start && event.t <= selectedDeathWindow.value!.end) : [])
-const selectedDeathRecapRows = computed(() => selectedDeath.value ? [['Time', fmtTime(selectedDeath.value.timestamp)], ['Raised', selectedDeath.value.resurrectTime ? fmtTime(selectedDeath.value.resurrectTime) : 'No'], ['Window Length', selectedDeathWindow.value ? fmtTime(selectedDeathWindow.value.end - selectedDeathWindow.value.start) : '—'], ['Estimated', deathHitLog.value.some(hit => hit.isEstimated) ? 'Yes' : 'No']] : [])
-
-const overviewNotableEvents = computed(() => {
-  const items = sortedDeaths.value
-    .slice()
-    .reverse()
-    .slice(0, 6)
-    .map((death, index) => ({
-      key: `death-${index}-${death.timestamp}`,
-      label: `${death.targetName} died`,
-      detail: `at ${fmtTime(death.timestamp)}${death.resurrectTime ? ` · raised ${fmtTime(death.resurrectTime)}` : ''}`,
-      type: 'death' as const,
-      death,
-    }))
-  return items
-})
+const selectedDeathRelatedDamage = computed(() => buildDeathRelatedDamage(deathHitLog.value))
+const selectedDeathWindow = computed(() => buildDeathWindow(selectedDeath.value, deathHitLog.value))
+const selectedDeathWindowCasts = computed(() => castsInDeathWindow(selectedActorCastEvents.value, selectedDeathWindow.value))
+const selectedDeathRecapRows = computed(() => buildDeathRecapRows(selectedDeath.value, selectedDeathWindow.value, deathHitLog.value, fmtTime))
+const overviewNotableEvents = computed(() => overviewDeathEvents(sortedDeaths.value, fmtTime))
 
 const formatHpBefore = (event: DeathEvent) => formatDeathHpBefore(event, f)
 const deathHpBars = (death: DeathRecord) => buildDeathHpBars(death)
@@ -890,7 +566,6 @@ function scheduleBroadcast() {
   }, 250)
 }
 
-// Auto-hide non-party members when pull changes (skip enemies — handled by showEnemies toggle)
 function applyAutoHide(pullIdx: number | null | undefined, timeline: DpsTimeline): void {
   if (pullIdx === lastAutoHidePull) return
   lastAutoHidePull = pullIdx
@@ -964,16 +639,9 @@ const actorRailCommon = computed(() => ({
   onSelectActor: selectActor,
 }))
 
-const rdpsTimeline = computed<DpsTimeline>(() => {
-  const result: DpsTimeline = {}
-  for (const [name, buckets] of Object.entries(dpsTimeline.value)) {
-    const personalRate = buckets.reduce((sum, value) => sum + value, 0) / Math.max(encounterDurationSec.value, 1)
-    const rdpsRate = rdpsByCombatant.value[name] ?? personalRate
-    const scale = personalRate > 0 ? rdpsRate / personalRate : 1
-    result[name] = buckets.map(value => value * scale)
-  }
-  return result
-})
+const rdpsTimeline = computed<DpsTimeline>(() =>
+  buildRdpsTimeline(dpsTimeline.value, rdpsByCombatant.value, encounterDurationSec.value)
+)
 
 const chartLines = computed(() => buildTimelineChartModel(activeTimeline.value, {
   showEnemies: showEnemies.value,
@@ -1018,85 +686,23 @@ const hoverLineX = computed(() => {
   return PL + (hoverBucket.value / (chartLines.value.maxBuckets - 1)) * CW
 })
 
-const hoverTooltip = computed(() => {
-  if (!chartLines.value || hoverBucket.value < 0) return null
-  const b = hoverBucket.value
-  const secs = b * TIMELINE_BUCKET_SEC
-  const m = Math.floor(secs / 60), s = secs % 60
-  const timeLabel = `${m}:${String(s).padStart(2, '0')}`
-  const entries = chartLines.value.series
-    .filter(s => !s.isGroup && !hiddenSeries.value.has(s.name))
-    .map(s => ({
-      name: s.name,
-      label: s.name,
-      color: s.color,
-      value: s.values[b] ?? 0,
-      rdpsGiven: rdpsGivenFor(s.name),
-      rdpsTaken: rdpsTakenFor(s.name),
-    }))
-    .sort((a, b) => b.value - a.value)
-  const groupVal = entries.reduce((sum, e) => sum + e.value, 0)
-  const windowStart = secs
-  const windowEnd = secs + TIMELINE_BUCKET_SEC
-  const activeBuffs = timelineRaidBuffWindows.value
-    .filter(buff => buff.start < windowEnd && buff.end >= windowStart)
-    .slice(0, 8)
-  const deaths = timelineDeathMarkers.value
-    .filter(marker => marker.time >= windowStart && marker.time < windowEnd)
-  const raises = timelineRaiseMarkers.value
-    .filter(marker => marker.time >= windowStart && marker.time < windowEnd)
-  return { timeLabel, entries, groupVal, activeBuffs, deaths, raises }
-})
+const hoverTooltip = computed(() => buildTimelineHoverTooltip(chartLines.value, hoverBucket.value, hiddenSeries.value, timelineRaidBuffWindows.value, timelineDeathMarkers.value, timelineRaiseMarkers.value, rdpsGivenFor, rdpsTakenFor))
 
-const timelineInspectorRows = computed(() => {
-  const rows = [['Metric', metricLabel.value], ['Hover Window', hoverTooltip.value?.timeLabel ?? '—'], ['Deaths', String(timelineInspectorDeaths.value.length)], ['Casts', String(timelineInspectorCasts.value.length)]]
-  if (chartMetric.value === 'rdps') rows.splice(1, 0, ['DPS Given', f(rdpsGivenFor(resolvedSelected.value))], ['DPS Taken', f(rdpsTakenFor(resolvedSelected.value))])
-  return rows
-})
+const timelineInspectorRows = computed(() => buildTimelineInspectorRows({
+  metricLabel: metricLabel.value,
+  hoverTimeLabel: hoverTooltip.value?.timeLabel,
+  deathCount: timelineInspectorDeaths.value.length,
+  castCount: timelineInspectorCasts.value.length,
+  chartMetric: chartMetric.value,
+  selectedName: resolvedSelected.value,
+  rdpsGivenFor,
+  rdpsTakenFor,
+  formatValue: f,
+}))
 
-const timelineRaidBuffWindows = computed(() => {
-  const windows: Array<{ key: string; start: number; end: number; source: string; target: string; name: string }> = []
-  for (const [source, events] of Object.entries(castData.value)) {
-    for (const event of events) {
-      if (!event.buffDurationMs) continue
-      const buffName = event.effectName || event.abilityName
-      const buffKey = buffName.trim().toLowerCase()
-      if (!RAID_BUFFS[buffKey]) continue
-      windows.push({
-        key: `${source}-${event.target}-${buffName}-${event.t}`,
-        start: event.t / 1000,
-        end: (event.t + event.buffDurationMs) / 1000,
-        source,
-        target: event.target,
-        name: buffName,
-      })
-    }
-  }
-  return windows.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name))
-})
-
-const timelineDeathMarkers = computed(() =>
-  sortedDeaths.value
-    .map(death => ({
-      key: `death-${death.targetId}-${death.timestamp}`,
-      time: death.timestamp / 1000,
-      label: `${death.targetName} died at ${fmtTime(death.timestamp)}`,
-      death,
-    }))
-    .filter(marker => marker.time >= 0)
-)
-
-const timelineRaiseMarkers = computed(() =>
-  sortedDeaths.value
-    .filter(death => death.resurrectTime)
-    .map(death => ({
-      key: `raise-${death.targetId}-${death.resurrectTime}`,
-      time: (death.resurrectTime ?? 0) / 1000,
-      label: `${death.targetName} Raised by ${death.resurrectSourceName || 'Unknown'} at ${fmtTime(death.resurrectTime ?? 0)}`,
-      death,
-    }))
-    .filter(marker => marker.time >= 0)
-)
+const timelineRaidBuffWindows = computed(() => buildTimelineRaidBuffWindows(castData.value))
+const timelineDeathMarkers = computed(() => buildTimelineDeathMarkers(sortedDeaths.value, fmtTime))
+const timelineRaiseMarkers = computed(() => buildTimelineRaiseMarkers(sortedDeaths.value, fmtTime))
 
 const timelineCastMarkers = computed(() =>
   selectedActorCastEvents.value
@@ -1144,24 +750,9 @@ function markerXForTime(timeSec: number, maxBuckets: number): number {
   return PL + (bucket / Math.max(maxBuckets - 1, 1)) * CW
 }
 
-const hoverWindow = computed(() => {
-  if (hoverBucket.value < 0) return null
-  const start = hoverBucket.value * TIMELINE_BUCKET_SEC * 1000
-  const end = start + TIMELINE_BUCKET_SEC * 1000
-  return { start, end }
-})
-
-const timelineInspectorCasts = computed(() => {
-  if (!hoverWindow.value) return []
-  return selectedActorCastEvents.value
-    .filter(event => event.t >= hoverWindow.value!.start && event.t < hoverWindow.value!.end)
-    .slice(0, 6)
-})
-
-const timelineInspectorDeaths = computed(() => {
-  if (!hoverWindow.value) return []
-  return sortedDeaths.value.filter(death => death.timestamp >= hoverWindow.value!.start && death.timestamp < hoverWindow.value!.end)
-})
+const hoverWindow = computed(() => timelineWindowForBucket(hoverBucket.value))
+const timelineInspectorCasts = computed(() => castsInTimelineWindow(selectedActorCastEvents.value, hoverWindow.value, 6))
+const timelineInspectorDeaths = computed(() => deathsInTimelineWindow(sortedDeaths.value, hoverWindow.value))
 
 const tooltipStyle = computed(() => {
   if (!hoverVisible.value || !hoverTooltip.value || !chartAreaRef.value) return { display: 'none' }
@@ -1174,43 +765,16 @@ const tooltipStyle = computed(() => {
   return { display: 'block', left: `${left}px`, top: `${top}px` }
 })
 
-const historicalPullEntries = computed(() =>
-  pullList.value.filter(entry => entry.index !== null)
-)
-
-const selectedEncounterPullEntries = computed(() => {
-  const selectedEncounter = selectedPullEntry.value?.encounterId
-  if (!selectedEncounter) return historicalPullEntries.value
-  return historicalPullEntries.value.filter(entry => entry.encounterId === selectedEncounter)
-})
-
-const selectedPullEntry = computed(() =>
-  pullList.value.find(entry => entry.index === activePull.value) ?? pullList.value[0] ?? null
-)
-
-const enemyProgressHeadline = computed(() => formatEnemyProgressHeadline(selectedPullEntry.value))
-const enemyProgressMeta = computed(() => formatEnemyProgressMeta(selectedPullEntry.value))
-const enemyProgressDetail = computed(() => formatEnemyProgressDetail(selectedPullEntry.value, bestProgressPullEntry.value, f))
-
-const previousPullEntry = computed(() => {
-  return pickPreviousPullEntry(selectedPullEntry.value, selectedEncounterPullEntries.value)
-})
-
-const bestPullEntry = computed(() =>
-  pickBestPullEntry(selectedEncounterPullEntries.value)
-)
-
-const bestProgressPullEntry = computed(() =>
-  pickBestProgressPullEntry(selectedEncounterPullEntries.value)
-)
-
-const pullDashboardNotes = computed(() => {
-  return buildPullDashboardNotes(selectedPullEntry.value, selectedEncounterPullEntries.value, previousPullEntry.value, bestPullEntry.value, bestProgressPullEntry.value, deathClustersForCurrent.value, f, fmtSeconds, fmtTime)
-})
-
 const deathClustersForCurrent = computed(() => {
   return deathClusters(sortedDeaths.value)
 })
+const pullDashboard = computed(() => buildPullDashboardContext(pullList.value, activePull.value, deathClustersForCurrent.value, f, fmtSeconds, fmtTime))
+const selectedPullEntry = computed(() => pullDashboard.value.selectedPullEntry)
+const enemyProgressHeadline = computed(() => pullDashboard.value.enemyProgressHeadline)
+const enemyProgressMeta = computed(() => pullDashboard.value.enemyProgressMeta)
+const enemyProgressDetail = computed(() => pullDashboard.value.enemyProgressDetail)
+const previousPullEntry = computed(() => pullDashboard.value.previousPullEntry)
+const pullDashboardNotes = computed(() => pullDashboard.value.pullDashboardNotes)
 
 function selectPullEntry(entry: PullEntry): void {
   activePull.value = entry.index
@@ -1229,97 +793,59 @@ const { eventRowCountFor, eventRows } = useEventRows({
   format: f,
 })
 
-watch([abilities, takenAbilities, eventRows, deathHitLog], queueVisibleAbilityIcons, { immediate: true })
+watch([abilities, takenAbilities, eventRows, deathHitLog], () => queueVisibleAbilityIcons({
+  abilities: abilities.value,
+  takenAbilities: takenAbilities.value,
+  healingAbilities: healingAbilities.value,
+  eventRows: eventRows.value,
+  deathHitLog: deathHitLog.value,
+  allData: allData.value,
+  damageTakenData: damageTakenData.value,
+  healingReceivedData: healingReceivedData.value,
+  castData: castData.value,
+}), { immediate: true })
 
-const activeFilterChips = computed(() => {
-  const chips = [`Pull=${pullStatusLabel.value}`, `Player=${resolvedSelected.value || 'None'}`, `Metric=${metricLabel.value}`]
-  if (showEnemies.value) chips.push('Show Enemies')
-  if (showFriendlyNPCs.value) chips.push('Show NPCs')
-  if (selectedAbility.value) chips.push(`Ability=${selectedAbility.value}`)
-  if (eventWindowOnly.value && selectedDeathWindow.value) chips.push(`Window=Death #${(selectedDeathIndex.value ?? 0) + 1}`)
-  return chips
-})
-const eventInspectorRows = computed(() => [['Rows', String(eventRows.value.length)], ['Actor Scope', eventActorScope.value === 'all' ? 'All actors' : 'Selected actor'], ['Selected Ability', selectedAbility.value || 'None'], ['Window', eventWindowOnly.value && selectedDeathWindow.value ? 'Selected death' : 'Whole pull']])
+const activeFilterChips = computed(() => buildActiveFilterChips({
+  pullStatusLabel: pullStatusLabel.value,
+  selectedPlayer: resolvedSelected.value,
+  metricLabel: metricLabel.value,
+  showEnemies: showEnemies.value,
+  showFriendlyNPCs: showFriendlyNPCs.value,
+  selectedAbility: selectedAbility.value,
+  eventWindowOnly: eventWindowOnly.value,
+  selectedDeathIndex: selectedDeathIndex.value,
+  hasSelectedDeathWindow: Boolean(selectedDeathWindow.value),
+}))
+const eventInspectorRows = computed(() => buildEventInspectorRows({
+  rowCount: eventRows.value.length,
+  actorScope: eventActorScope.value,
+  selectedAbility: selectedAbility.value,
+  eventWindowOnly: eventWindowOnly.value,
+  hasSelectedDeathWindow: Boolean(selectedDeathWindow.value),
+}))
 
 let channel: BroadcastChannel | null = null
 let requestRetryTimers: Array<ReturnType<typeof setTimeout>> = []
 let requestInterval: ReturnType<typeof setInterval> | null = null
 
-function historicalPullListSignature(entries: PullEntry[] | undefined): string {
-  if (!Array.isArray(entries)) return ''
-  return JSON.stringify(entries
-    .filter(entry => entry.index !== null)
-    .map(entry => [
-      pullEntryStableKey(entry),
-      entry.index,
-      entry.pullCount ?? 0,
-      entry.bossPercentLabel ?? '',
-      entry.pullOutcome ?? '',
-    ]))
-}
-
-function pullEntryStableKey(entry: PullEntry | null | undefined): string {
-  if (!entry || entry.index === null) return ''
-  return [
-    entry.encounterId ?? entry.encounterName,
-    entry.duration,
-    entry.pullNumber ?? 0,
-  ].join('|')
-}
-
 function applyEncounterPayload(data: BreakdownPayload): boolean {
-  if (data.type !== 'encounterData') return false
-
-  const ts = data.timestamp ?? 0
-
-  // When viewing historical pull, validate by pullIndex, not timestamp.
-  // Historical data has pullIndex >= 0, live data has pullIndex === null.
-  const incomingPullIndex = 'pullIndex' in data ? data.pullIndex ?? null : null
-
-  // If viewing historical pull, accept only data for that specific pull.
-  if (activePull.value !== null) {
-    if (incomingPullIndex !== activePull.value) {
-      const liveHistoryChanged = incomingPullIndex === null &&
-        historicalPullListSignature(data.pullList) !== historicalPullListSignature(pullList.value)
-      if (!liveHistoryChanged) return false
-      const selectedKey = pullEntryStableKey(selectedPullEntry.value)
-      pullList.value = Array.isArray(data.pullList) ? data.pullList : pullList.value
-      const remappedEntry = pullList.value.find(entry => pullEntryStableKey(entry) === selectedKey)
-      if (remappedEntry) activePull.value = remappedEntry.index
-      return true
-    }
-  } else {
-    // For live view, skip if timestamp is not newer.
-    if (lastBroadcastTime.value > 0 && ts <= lastBroadcastTime.value) return false
+  const decision = evaluateEncounterPayload(data, {
+    activePull: activePull.value,
+    lastBroadcastTime: lastBroadcastTime.value,
+    currentPullList: pullList.value,
+    selectedPullEntry: selectedPullEntry.value,
+  })
+  if (!decision.accept) return false
+  if (decision.liveHistoryChanged) {
+    if (decision.nextPullList) pullList.value = decision.nextPullList
+    if (decision.nextActivePull !== undefined) activePull.value = decision.nextActivePull
+    return true
   }
 
-  // Clear data if pull changed before updating with new data.
-  if (incomingPullIndex !== activePull.value) clearBreakdownData()
+  if (decision.incomingPullIndex !== activePull.value) clearBreakdownData()
 
-  lastBroadcastTime.value = ts
-  allData.value              = data.abilityData      ?? {}
-  dpsTimeline.value          = data.dpsTimeline      ?? {}
-  hpsTimeline.value          = data.hpsTimeline      ?? {}
-  dtakenTimeline.value       = data.dtakenTimeline   ?? {}
-  dpsByCombatant.value       = data.dpsByCombatant   ?? {}
-  damageByCombatant.value    = data.damageByCombatant ?? {}
-  rdpsByCombatant.value      = data.rdpsByCombatant  ?? {}
-  rdpsGiven.value            = data.rdpsGiven        ?? {}
-  rdpsTaken.value            = data.rdpsTaken        ?? {}
-  damageTakenData.value      = data.damageTakenData  ?? {}
-  healingReceivedData.value  = data.healingReceivedData ?? {}
-  hitData.value              = data.hitData          ?? {}
-  deaths.value               = data.deaths           ?? []
-  combatantIds.value         = data.combatantIds     ?? {}
-  combatantJobs.value        = data.combatantJobs    ?? {}
-  castData.value             = data.castData         ?? {}
-  resourceData.value         = data.resourceData     ?? {}
-  selfName.value             = data.selfName         ?? ''
-  blurNames.value            = data.blurNames        ?? false
-  partyNames.value           = Array.isArray(data.partyNames) ? data.partyNames : []
-  partyData.value            = Array.isArray(data.partyData) ? data.partyData : []
-  encounterDurationSec.value = data.encounterDurationSec ?? 0
-  pullList.value             = Array.isArray(data.pullList) ? data.pullList : []
+  lastBroadcastTime.value = data.timestamp ?? 0
+  assignBreakdownPayload(data)
   if ('pullIndex' in data) {
     activePull.value = data.pullIndex ?? null
     applyAutoHide(data.pullIndex ?? null, data.dpsTimeline ?? {})
@@ -1337,15 +863,11 @@ function tryApplySnapshot(): boolean {
 
   try {
     const raw = localStorage.getItem(BREAKDOWN_SNAPSHOT_KEY)
-    if (!raw) return false
-
-    const data = JSON.parse(raw) as BreakdownPayload
-    const ts = data.timestamp ?? 0
-    if (data.type !== 'encounterData' || !ts || Date.now() - ts > BREAKDOWN_SNAPSHOT_MAX_AGE_MS) {
+    const data = parseValidBreakdownSnapshot(raw, Date.now())
+    if (!data) {
       localStorage.removeItem(BREAKDOWN_SNAPSHOT_KEY)
       return false
     }
-
     return applyEncounterPayload(data)
   } catch {
     localStorage.removeItem(BREAKDOWN_SNAPSHOT_KEY)
@@ -1502,35 +1024,9 @@ onUnmounted(() => {
           </div>
 
           <div class="bp-overview-grid">
-            <section class="bp-panel">
-              <div class="bp-panel-title">Top Abilities Done</div>
-              <table class="bp-table">
-                <thead><tr><th class="col-name">Ability</th><th class="col-num">Total</th><th class="col-pct">%</th><th class="col-num">Rate</th></tr></thead>
-                <tbody>
-                  <tr v-for="row in abilities.slice(0, 6)" :key="`ov-done-${row.abilityId}`" @click="selectAbility(row.abilityName)">
-                    <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
-                    <td class="col-num">{{ f(row.totalDamage) }}</td>
-                    <td class="col-pct">{{ row.pct }}%</td>
-                    <td class="col-num">{{ encounterDurationSec > 0 ? f(row.dps) : '—' }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </section>
+            <AbilityRowsTable panel-title="Top Abilities Done" compact mode="done" :rows="abilities" :limit="6" :format="f" :icon-src="abilityIconSrc" :encounter-duration-sec="encounterDurationSec" @select="selectAbility" @icon-error="clearAbilityIcon" />
 
-            <section class="bp-panel">
-              <div class="bp-panel-title">Top Abilities Taken</div>
-              <table class="bp-table">
-                <thead><tr><th class="col-name">Source Ability</th><th class="col-num">Total</th><th class="col-pct">%</th><th class="col-num">Near Deaths</th></tr></thead>
-                <tbody>
-                  <tr v-for="row in takenAbilities.slice(0, 6)" :key="`ov-taken-${row.abilityId}`" @click="selectAbility(row.abilityName)">
-                    <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
-                    <td class="col-num">{{ f(row.totalDamage) }}</td>
-                    <td class="col-pct">{{ row.pct }}%</td>
-                    <td class="col-num">{{ selectedActorNearDeathCounts.get(row.abilityName) ?? '—' }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </section>
+            <AbilityRowsTable panel-title="Top Abilities Taken" compact mode="taken" fill-class="enc-row-fill" :rows="takenAbilities" :limit="6" :format="f" :icon-src="abilityIconSrc" :near-death-counts="selectedActorNearDeathCounts" @select="selectAbility" @icon-error="clearAbilityIcon" />
 
             <section class="bp-panel">
               <div class="bp-panel-title">Timeline Snapshot</div>
@@ -1601,158 +1097,36 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="activeView === 'pulls'">
-      <div class="bp-pulls-workspace bp-pulls-workspace--scrollable">
-        <aside class="bp-pull-list-panel">
-          <div class="bp-panel-title">Session Pulls</div>
-          <button
-            v-for="entry in pullList"
-            :key="String(entry.index)"
-            class="bp-pull-row"
-            :class="{ active: activePull === entry.index }"
-            @click="selectPullEntry(entry)"
-          >
-            <span v-if="entry.index !== null && entry.isFirstInEncounter" class="bp-pull-encounter-header">
-              {{ entry.encounterName }} · {{ entry.pullCount ?? 1 }} pull{{ (entry.pullCount ?? 1) === 1 ? '' : 's' }}
-            </span>
-            <span class="bp-pull-row-main">
-              <strong>{{ entryPullLabel(entry) }}</strong>
-              <span>{{ entry.index === null ? (entry.primaryEnemyName ?? entry.encounterName) : entry.encounterName }}</span>
-            </span>
-            <span class="bp-pull-row-stats">
-              <span>{{ entry.duration || '0:00' }}</span>
-              <span v-if="entry.pullOutcomeLabel" :class="pullOutcomeClass(entry)">{{ entry.pullOutcomeLabel }}</span>
-              <span v-if="entry.bossPercentLabel">{{ entry.bossPercentLabel }} enemy</span>
-              <span v-if="entry.pullOutcome === 'wipe' && entry.primaryEnemyCurrentHp !== undefined">HP {{ f(entry.primaryEnemyCurrentHp) }}</span>
-              <span v-else-if="entry.pullOutcome === 'clear' && entry.primaryEnemyMaxHp">Max {{ f(entry.primaryEnemyMaxHp) }}</span>
-              <span>{{ f(entry.dps ?? 0) }} DPS</span>
-              <span title="Raid-contributing DPS adjusted by buff credit">{{ f(entry.rdps ?? entry.dps ?? 0) }} rDPS</span>
-              <span :class="{ danger: (entry.deaths ?? 0) > 0 }">{{ entry.deaths ?? 0 }} deaths</span>
-            </span>
-          </button>
-        </aside>
-
-        <main class="bp-main bp-main--pulls-pane">
-          <div class="bp-card-grid">
-            <div class="bp-card bp-card--taken bp-card--progress">
-              <div class="bp-card-label">Enemy Progress</div>
-              <div class="bp-card-progress-copy">
-                <div class="bp-card-value bp-card-value--progress">{{ enemyProgressHeadline }}</div>
-                <div class="bp-card-detail bp-card-detail--progress">{{ enemyProgressMeta }}</div>
-              </div>
-              <div class="bp-card-detail bp-card-detail--split">{{ enemyProgressDetail }}</div>
-            </div>
-            <div class="bp-card bp-card--done">
-              <div class="bp-card-label">Party rDPS</div>
-              <div class="bp-card-value">{{ f(selectedPullEntry?.rdps ?? selectedPullEntry?.dps ?? 0) }}</div>
-              <div class="bp-card-detail">
-                <template v-if="previousPullEntry">
-                  {{ formatEntryDelta((selectedPullEntry?.rdps ?? selectedPullEntry?.dps ?? 0) - (previousPullEntry.rdps ?? previousPullEntry.dps ?? 0), f) }} vs previous
-                </template>
-                <template v-else>{{ f(selectedPullEntry?.dps ?? 0) }} DPS</template>
-              </div>
-            </div>
-            <div class="bp-card bp-card--deaths">
-              <div class="bp-card-label">Deaths</div>
-              <div class="bp-card-value">{{ selectedPullEntry?.deaths ?? sortedDeaths.length }}</div>
-              <div class="bp-card-detail">{{ deathClustersForCurrent.length > 0 ? `${deathClustersForCurrent.length} death cluster${deathClustersForCurrent.length === 1 ? '' : 's'}` : 'no clustered deaths' }}</div>
-            </div>
-            <div class="bp-card bp-card--taken">
-              <div class="bp-card-label">Damage Taken</div>
-              <div class="bp-card-value">{{ f(selectedPullEntry?.damageTaken ?? 0) }}</div>
-              <div class="bp-card-detail">{{ f(selectedPullEntry?.dtps ?? 0) }} DTPS</div>
-            </div>
-          </div>
-
-          <div class="bp-pulls-grid">
-            <section class="bp-panel">
-              <div class="bp-panel-title">Quick Read</div>
-              <div class="bp-pull-note-list">
-                <div v-for="note in pullDashboardNotes" :key="note" class="bp-pull-note">{{ note }}</div>
-                <div v-for="warn in buffWarnings" :key="warn" class="bp-pull-note" style="color: #f87171;">{{ warn }}</div>
-              </div>
-            </section>
-
-            <section class="bp-panel">
-              <div class="bp-panel-title">Death Windows</div>
-              <div v-if="sortedDeaths.length === 0" class="bp-empty-panel">No deaths recorded for this pull.</div>
-              <button
-                v-for="death in sortedDeaths.slice(0, 8)"
-                :key="`${death.targetName}-${death.timestamp}`"
-                class="bp-event-item"
-                @click="openDeath(death)"
-              >
-                <span class="bp-event-name" :style="nameStyle(death.targetName)">{{ death.targetName }}</span>
-                <span class="bp-event-detail">
-                  {{ fmtTime(death.timestamp) }}{{ death.resurrectTime ? ` · raised ${fmtTime(death.resurrectTime)}` : ' · no raise seen' }}
-                </span>
-              </button>
-            </section>
-
-            <section class="bp-panel bp-panel--wide">
-              <div class="bp-panel-title">Damage Attribution</div>
-              <div class="bp-panel-toolbar bp-panel-toolbar--summary">
-                <div class="bp-toolbar-stat">
-                  <span class="bp-toolbar-stat-label">Duration</span>
-                  <strong>{{ selectedPullEntry?.duration || encounterDurationLabel }}</strong>
-                </div>
-                <div class="bp-toolbar-context">
-                  <template v-if="previousPullEntry">
-                    {{ formatEntryDelta(parseEntryDuration(selectedPullEntry) - parseEntryDuration(previousPullEntry), fmtSeconds) }} vs previous
-                  </template>
-                  <template v-else>current pull context</template>
-                </div>
-              </div>
-              <div class="bp-pull-attribution-chart" :class="{ empty: pullGroupDpsBars.length === 0 }">
-                <button
-                  v-for="bar in pullGroupDpsBars"
-                  :key="bar.key"
-                  class="bp-pull-dps-bar"
-                  :style="{ height: bar.height }"
-                  :title="`${bar.label} · ${f(bar.value)} group DPS`"
-                  @click="openTimelineAtBucket(bar.bucket)"
-                >
-                  <span v-if="bar.deathCount > 0" class="bp-pull-marker bp-pull-marker--death" :title="`${bar.deathCount} death${bar.deathCount === 1 ? '' : 's'}`"></span>
-                  <span v-if="bar.raiseCount > 0" class="bp-pull-marker bp-pull-marker--raise" :title="`${bar.raiseCount} raise${bar.raiseCount === 1 ? '' : 's'}`"></span>
-                </button>
-                <span v-if="pullGroupDpsBars.length === 0">No group DPS samples yet.</span>
-              </div>
-              <div v-if="pullDamageRows.length === 0" class="bp-empty-panel">No damage attribution rows for this pull.</div>
-              <div v-else class="bp-scroll">
-                <table class="bp-table bp-attribution-table">
-                  <thead><tr>
-                    <th class="col-name">Name</th>
-                    <th class="col-num">Amount</th>
-                    <th class="col-pct">%</th>
-                    <th class="col-num">DPS</th>
-                    <th class="col-num">rDPS</th>
-                    <th class="col-num">Given</th>
-                    <th class="col-num">Taken</th>
-                    <th class="col-num">Deaths</th>
-                  </tr></thead>
-                  <tbody>
-                    <tr v-for="row in pullDamageRows" :key="`pull-damage-${row.name}`" :class="{ 'bp-row-active': resolvedSelected === row.name }" @click="openActorDone(row.name)">
-                      <td class="col-name">
-                        <div class="row-fill" :style="{ width: row.width }" />
-                        <span class="aname bp-player-cell" :style="nameStyle(row.name)">
-                          <img v-if="actorJobIcon(row.name)" :src="actorJobIcon(row.name)" alt="" class="bp-job-icon bp-player-cell-icon" />
-                          <span class="bp-player-cell-name">{{ row.name }}</span>
-                        </span>
-                      </td>
-                      <td class="col-num">{{ f(row.total) }}</td>
-                      <td class="col-pct">{{ row.pct }}%</td>
-                      <td class="col-num">{{ f(row.dps) }}</td>
-                      <td class="col-num">{{ f(row.rdps) }}</td>
-                      <td class="col-num">{{ row.given > 0 ? f(row.given) : '—' }}</td>
-                      <td class="col-num">{{ row.taken > 0 ? f(row.taken) : '—' }}</td>
-                      <td class="col-num" :class="{ danger: row.deaths > 0 }">{{ row.deaths || '—' }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          </div>
-        </main>
-      </div>
+      <PullsView
+        :pull-list="pullList"
+        :active-pull="activePull"
+        :selected-pull-entry="selectedPullEntry"
+        :previous-pull-entry="previousPullEntry"
+        :enemy-progress-headline="enemyProgressHeadline"
+        :enemy-progress-meta="enemyProgressMeta"
+        :enemy-progress-detail="enemyProgressDetail"
+        :sorted-deaths="sortedDeaths"
+        :death-clusters-for-current="deathClustersForCurrent"
+        :pull-dashboard-notes="pullDashboardNotes"
+        :buff-warnings="buffWarnings"
+        :encounter-duration-label="encounterDurationLabel"
+        :pull-group-dps-bars="pullGroupDpsBars"
+        :pull-damage-rows="pullDamageRows"
+        :resolved-selected="resolvedSelected"
+        :f="f"
+        :fmt-time="fmtTime"
+        :fmt-seconds="fmtSeconds"
+        :format-entry-delta="formatEntryDelta"
+        :parse-entry-duration="parseEntryDuration"
+        :entry-pull-label="entryPullLabel"
+        :pull-outcome-class="pullOutcomeClass"
+        :name-style="nameStyle"
+        :actor-job-icon="actorJobIcon"
+        @select-pull="selectPullEntry"
+        @open-death="openDeath"
+        @open-timeline-bucket="openTimelineAtBucket"
+        @open-actor="openActorDone"
+      />
     </template>
 
     <template v-else-if="activeView === 'done'">
@@ -1843,37 +1217,14 @@ onUnmounted(() => {
           </div>
           <div v-else-if="abilities.length === 0" class="bp-waiting">No outgoing ability data for this pull.</div>
           <div v-else class="bp-scroll">
-            <table class="bp-table">
-              <thead><tr>
-                <th class="col-name" @click="sortDoneBy('abilityName')">Ability</th>
-                <th class="col-num col-sort" :class="{ active: doneSortColumn === 'totalDamage' }" @click="sortDoneBy('totalDamage')">Total{{ doneSortColumn === 'totalDamage' ? (doneSortDesc ? ' ↓' : ' ↑') : '' }}</th>
-                <th class="col-pct">%</th>
-                <th class="col-num col-sort" :class="{ active: doneSortColumn === 'dps' }" @click="sortDoneBy('dps')">DPS{{ doneSortColumn === 'dps' ? (doneSortDesc ? ' ↓' : ' ↑') : '' }}</th>
-                <th class="col-num col-sort" :class="{ active: doneSortColumn === 'hits' }" @click="sortDoneBy('hits')">Casts{{ doneSortColumn === 'hits' ? (doneSortDesc ? ' ↓' : ' ↑') : '' }}</th>
-                <th class="col-num col-sort" :class="{ active: doneSortColumn === 'maxHit' }" @click="sortDoneBy('maxHit')">Max{{ doneSortColumn === 'maxHit' ? (doneSortDesc ? ' ↓' : ' ↑') : '' }}</th>
-              </tr></thead>
-              <tbody>
-                <tr v-for="row in abilities" :key="row.abilityId" :class="{ 'bp-row-active': selectedDoneAbility?.abilityName === row.abilityName }" @click="selectAbility(row.abilityName)">
-                  <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
-                  <td class="col-num">{{ f(row.totalDamage) }}</td>
-                  <td class="col-pct">{{ row.pct }}%</td>
-                  <td class="col-num">{{ encounterDurationSec > 0 ? f(row.dps) : '—' }}</td>
-                  <td class="col-num">{{ row.hits }}</td>
-                  <td class="col-num">{{ f(row.maxHit) }}</td>
-                </tr>
-              </tbody>
-            </table>
+            <AbilityRowsTable mode="done" :rows="abilities" :format="f" :icon-src="abilityIconSrc" :selected-ability-name="selectedDoneAbility?.abilityName" :sort-column="doneSortColumn" :sort-desc="doneSortDesc" :encounter-duration-sec="encounterDurationSec" @select="selectAbility" @sort="column => sortDoneBy(column as typeof doneSortColumn.value)" @icon-error="clearAbilityIcon" />
           </div>
         </main>
 
         <aside class="bp-inspector">
           <div class="bp-inspector-title">Ability Inspector</div>
           <div v-if="!selectedDoneAbility" class="bp-empty-panel">Select an ability to inspect it.</div>
-          <template v-else>
-            <div class="bp-inspector-block">
-              <div v-for="[label, value] in selectedDoneInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
-            </div>
-          </template>
+          <InspectorRows v-else :rows="selectedDoneInspectorRows" />
         </aside>
       </div>
     </template>
@@ -1898,41 +1249,14 @@ onUnmounted(() => {
           </div>
           <div v-if="incomingAbilities.length === 0" class="bp-waiting">No incoming {{ takenMode === 'healing' ? 'healing' : 'damage' }} data for this pull.</div>
           <div v-else class="bp-scroll">
-            <table class="bp-table">
-              <thead><tr>
-                <th class="col-name" @click="sortTakenBy('abilityName')">Source Ability</th>
-                <th class="col-num col-sort" :class="{ active: takenSortColumn === 'totalDamage' }" @click="sortTakenBy('totalDamage')">{{ takenMode === 'healing' ? 'Effective' : 'Total' }}{{ takenSortColumn === 'totalDamage' ? (takenSortDesc ? ' ↓' : ' ↑') : '' }}</th>
-                <th v-if="takenMode === 'healing'" class="col-num">Overheal</th>
-                <th class="col-pct">%</th>
-                <th class="col-num col-sort" :class="{ active: takenSortColumn === 'hits' }" @click="sortTakenBy('hits')">{{ takenMode === 'healing' ? 'Heals' : 'Hits' }}{{ takenSortColumn === 'hits' ? (takenSortDesc ? ' ↓' : ' ↑') : '' }}</th>
-                <th class="col-num">Avg</th>
-                <th class="col-num col-sort" :class="{ active: takenSortColumn === 'maxHit' }" @click="sortTakenBy('maxHit')">Max{{ takenSortColumn === 'maxHit' ? (takenSortDesc ? ' ↓' : ' ↑') : '' }}</th>
-                <th class="col-num">Near Deaths</th>
-              </tr></thead>
-              <tbody>
-                <tr v-for="row in incomingAbilities" :key="`${takenMode}-${row.abilityId}`" :class="{ 'bp-row-active': selectedTakenAbility?.abilityName === row.abilityName }" @click="selectAbility(row.abilityName)">
-                  <td class="col-name"><div class="row-fill enc-row-fill" :style="{ width: row.pct + '%' }" /><span class="aname"><AbilityCell :ability-id="row.abilityId" :ability-name="row.abilityName" :icon-src="abilityIconSrc(row.abilityId, row.abilityName)" @icon-error="clearAbilityIcon(row.abilityId, row.abilityName)" /></span></td>
-                  <td class="col-num">{{ f(row.totalDamage) }}</td>
-                  <td v-if="takenMode === 'healing'" class="col-num">{{ (row.overheal ?? 0) > 0 ? f(row.overheal ?? 0) : '—' }}</td>
-                  <td class="col-pct">{{ row.pct }}%</td>
-                  <td class="col-num">{{ row.hits }}</td>
-                  <td class="col-num">{{ f(takenMode === 'healing' ? rawHealingAverage(row) : row.avg) }}</td>
-                  <td class="col-num">{{ f(row.maxHit) }}</td>
-                  <td class="col-num">{{ (takenMode === 'healing' ? selectedActorDeathHealingAbilitySet : selectedActorNearDeathCounts).get(row.abilityName) ?? '—' }}</td>
-                </tr>
-              </tbody>
-            </table>
+            <AbilityRowsTable mode="taken" fill-class="enc-row-fill" :rows="incomingAbilities" :format="f" :icon-src="abilityIconSrc" :selected-ability-name="selectedTakenAbility?.abilityName" :sort-column="takenSortColumn" :sort-desc="takenSortDesc" :taken-mode="takenMode" :near-death-counts="takenMode === 'healing' ? selectedActorDeathHealingAbilitySet : selectedActorNearDeathCounts" @select="selectAbility" @sort="column => sortTakenBy(column as typeof takenSortColumn.value)" @icon-error="clearAbilityIcon" />
           </div>
         </main>
 
         <aside class="bp-inspector">
           <div class="bp-inspector-title">{{ takenMode === 'healing' ? 'Healing Inspector' : 'Taken Inspector' }}</div>
           <div v-if="!selectedTakenAbility" class="bp-empty-panel">Select an incoming ability to inspect it.</div>
-          <template v-else>
-            <div class="bp-inspector-block">
-              <div v-for="[label, value] in selectedTakenInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
-            </div>
-          </template>
+          <InspectorRows v-else :rows="selectedTakenInspectorRows" />
         </aside>
       </div>
     </template>
@@ -2109,152 +1433,45 @@ onUnmounted(() => {
           <div class="bp-inspector-title">Timeline Inspector</div>
             <div class="bp-inspector-block">
               <div class="bp-kv"><span>Selected Actor</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected }}</strong></div>
-              <div v-for="[label, value] in timelineInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
-          </div>
-          <div class="bp-inspector-block">
-            <div class="bp-section-heading">Window Events</div>
-            <div v-if="timelineInspectorDeaths.length === 0 && timelineInspectorCasts.length === 0" class="bp-empty-panel">Hover the chart to correlate deaths, raises, and casts in the same time bucket.</div>
-            <div v-for="death in timelineInspectorDeaths" :key="`ins-death-${death.timestamp}`" class="bp-inspector-list-item">
-              <strong :style="nameStyle(death.targetName)">{{ death.targetName }}</strong>
-              <span>Death @ {{ fmtTime(death.timestamp) }}</span>
             </div>
-            <div v-for="cast in timelineInspectorCasts" :key="`ins-cast-${cast.t}-${cast.abilityName}`" class="bp-inspector-list-item">
-              <strong>{{ cast.abilityName }}</strong>
-              <span>{{ cast.target ? `→ ${cast.target}` : 'cast' }}</span>
-            </div>
-          </div>
+          <InspectorRows :rows="timelineInspectorRows" />
+          <InspectorList
+            heading="Window Events"
+            empty-text="Hover the chart to correlate deaths, raises, and casts in the same time bucket."
+            :rows="[
+              ...timelineInspectorDeaths.map(death => ({ key: `ins-death-${death.timestamp}`, title: death.targetName, detail: `Death @ ${fmtTime(death.timestamp)}` })),
+              ...timelineInspectorCasts.map(cast => ({ key: `ins-cast-${cast.t}-${cast.abilityName}`, title: cast.abilityName, detail: cast.target ? `→ ${cast.target}` : 'cast' })),
+            ]"
+          />
         </aside>
       </div>
     </template>
 
     <template v-else-if="activeView === 'deaths'">
-      <div v-if="sortedDeaths.length === 0" class="bp-waiting">No deaths recorded this pull.</div>
-      <div v-else class="bp-workspace">
-        <aside class="bp-rail bp-rail--deaths">
-          <div class="bp-rail-title">Deaths</div>
-          <div
-            v-for="(death, i) in sortedDeaths" :key="i"
-            class="dl-death-row"
-            :class="{ active: selectedDeathIndex === i }"
-            @click="toggleDeathSelection(i, death)"
-          >
-            <div class="dl-death-info">
-              <span class="dl-death-name" :style="nameStyle(death?.targetName ?? '')">{{ death?.targetName ?? 'Unknown' }}</span>
-              <span class="dl-death-time">{{ fmtTime(death?.timestamp ?? 0) }}</span>
-            </div>
-            <div class="dl-spark">
-              <svg viewBox="0 0 120 28" preserveAspectRatio="none" width="120" height="28" class="bp-spark-svg">
-                <line x1="0" y1="28" x2="120" y2="28" stroke="rgba(255,255,255,0.07)" stroke-width="1" />
-                <line x1="0" y1="14" x2="120" y2="14" stroke="rgba(255,255,255,0.04)" stroke-width="1" />
-                <template v-for="(bar, bi) in deathHpBars(death)" :key="'b-' + bi">
-                  <rect :x="bar.x" :y="28 - (bar.hpBefore * 28)" :width="bar.width - 1" :height="bar.hpBefore * 28" :fill="bar.hpBefore > 0.5 ? 'rgba(5,136,55,0.5)' : (bar.hpBefore > 0.25 ? 'rgba(180,150,50,0.5)' : 'rgba(180,50,50,0.5)')" opacity="0.7" />
-                  <rect v-if="bar.type === 'heal' || bar.type === 'dmg'" :x="bar.x" :y="bar.type === 'heal' ? (28 - (bar.hpAfter * 28)) : (28 - (bar.hpBefore * 28))" :width="bar.width - 1" :height="Math.abs((bar.hpAfter - bar.hpBefore) * 28)" :fill="bar.type === 'heal' ? '#ffffff' : '#000000'" opacity="0.35" />
-                  <rect v-if="bar.type === 'death'" :x="bar.x" y="0" :width="Math.max(1, bar.width - 1)" height="28" fill="rgba(255,0,0,0.18)" />
-                </template>
-                <line x1="120" y1="0" x2="120" y2="28" stroke="#ff0000" stroke-width="2" />
-                <text x="115" y="8" fill="#ff0000" font-size="6">X</text>
-              </svg>
-              <span v-if="!deathHpBars(death).length" class="bp-spark-none">no HP data</span>
-            </div>
-          </div>
-        </aside>
-
-        <main class="bp-main">
-          <div v-if="!selectedDeath" class="dl-detail-empty">Select a death to review</div>
-          <template v-else>
-            <div class="dl-detail-header">
-              <span class="dl-detail-name" :style="nameStyle(selectedDeath.targetName)">{{ selectedDeath.targetName }}</span>
-              <span class="dl-detail-time">died @ {{ fmtTime(selectedDeath?.timestamp ?? 0) }}</span>
-              <span class="dl-detail-sub">window {{ selectedDeathWindow ? `${fmtTime(selectedDeathWindow.start)} → ${fmtTime(selectedDeathWindow.end)}` : '—' }}</span>
-            </div>
-            <div v-if="deathHitLog.length === 0" class="dl-detail-empty">No hit data recorded.</div>
-            <div v-else class="dl-hit-scroll">
-              <table class="dl-hit-table">
-                <thead><tr>
-                  <th class="dl-col-time">Time</th>
-                  <th class="dl-col-type"></th>
-                  <th class="dl-col-ability">Ability</th>
-                  <th class="dl-col-source">Source</th>
-                  <th class="dl-col-hpbefore">HP Before</th>
-                  <th class="dl-col-hpbar">Trend</th>
-                  <th class="dl-col-amount">Amount</th>
-                </tr></thead>
-                <tbody>
-                  <tr
-                    v-for="(hit, hi) in deathHitLog" :key="hi"
-                    :class="[hit.type === 'heal' ? 'dl-row-heal' : 'dl-row-dmg', hit.isDeathBlow ? 'dl-row-death' : '', selectedAbility === hit.abilityName ? 'bp-row-active' : '']"
-                    @click="selectAbility(hit.abilityName)"
-                  >
-                    <td class="dl-col-time">{{ fmtTime(hit?.t ?? 0) }}</td>
-                    <td class="dl-col-type">
-                      <span v-if="hit.isDeathBlow" class="dl-badge-death">X</span>
-                      <span v-else :class="hit.type === 'heal' ? 'dl-badge-heal' : 'dl-badge-dmg'">{{ hit.type === 'heal' ? 'H' : 'D' }}</span>
-                    </td>
-                    <td class="dl-col-ability"><AbilityCell :ability-id="abilityIdForName(hit.abilityName)" :ability-name="hit.abilityName" :icon-src="abilityIconSrc(abilityIdForName(hit.abilityName), hit.abilityName)" small @icon-error="clearAbilityIcon(abilityIdForName(hit.abilityName), hit.abilityName)" /></td>
-                    <td class="dl-col-source">{{ hit.sourceName }}</td>
-                    <td class="dl-col-hpbefore">
-                      <span>{{ formatHpBefore(hit) }}</span>
-                      <span v-if="hit.isEstimated" class="dl-hp-estimate">est.</span>
-                    </td>
-                    <td class="dl-col-hpbar">
-                      <div class="dl-hpbar-container">
-                        <div class="dl-hpbar-bg" :style="`width: ${hit.hpBefore * 100}%`"></div>
-                        <div
-                          v-if="Math.abs(hit.hpAfter - hit.hpBefore) > 0.001"
-                          class="dl-hpbar-change"
-                          :class="hit.type === 'heal' ? 'dl-hpbar-heal' : 'dl-hpbar-dmg'"
-                          :style="hit.type === 'heal' ? `left: ${hit.hpBefore * 100}%; width: ${(hit.hpAfter - hit.hpBefore) * 100}%` : `left: ${hit.hpAfter * 100}%; width: ${(hit.hpBefore - hit.hpAfter) * 100}%`"
-                        ></div>
-                      </div>
-                    </td>
-                    <td class="dl-col-amount" :class="hit.type === 'heal' ? 'dl-amount-heal-bold' : (hit.isDeathBlow ? 'dl-amount-death' : 'dl-amount-dmg-bold')">
-                      {{ hit.isDeathBlow ? 'KO' : (hit.type === 'heal' ? '+' : '-') + f(hit.amount) }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </template>
-        </main>
-
-        <aside class="bp-inspector">
-          <div class="bp-inspector-title">Death Inspector</div>
-          <div class="bp-toolbar-group bp-toolbar-group--full">
-            <button v-for="[value, label] in deathInspectorTabs" :key="value" class="bp-mode-btn" :class="{ active: deathInspectorTab === value }" @click="deathInspectorTab = value">{{ label }}</button>
-          </div>
-          <div v-if="!selectedDeath" class="bp-empty-panel">Pick a death to inspect it.</div>
-          <template v-else-if="deathInspectorTab === 'recap'">
-            <div class="bp-inspector-block">
-              <div class="bp-kv"><span>Target</span><strong :style="nameStyle(selectedDeath.targetName)">{{ selectedDeath.targetName }}</strong></div>
-              <div v-for="[label, value] in selectedDeathRecapRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
-            </div>
-          </template>
-          <template v-else-if="deathInspectorTab === 'context'">
-            <div class="bp-inspector-block">
-              <div class="bp-section-heading">Nearby casts</div>
-              <div v-if="selectedDeathWindowCasts.length === 0" class="bp-empty-panel">No casts for this player inside the selected death window.</div>
-              <div
-                v-for="cast in selectedDeathWindowCasts.slice(0, 8)"
-                :key="`death-cast-${cast.t}-${cast.abilityName}`"
-                class="bp-inspector-list-item"
-              >
-                <strong>{{ cast.abilityName }}</strong>
-                <span>{{ fmtTime(cast.t) }}</span>
-              </div>
-            </div>
-          </template>
-          <template v-else>
-            <div class="bp-inspector-block">
-              <div class="bp-section-heading">Related damage</div>
-              <div v-if="selectedDeathRelatedDamage.length === 0" class="bp-empty-panel">No incoming damage rows were captured in this recap.</div>
-              <div v-for="row in selectedDeathRelatedDamage" :key="row.ability" class="bp-inspector-list-item">
-                <strong>{{ row.ability }}</strong>
-                <span>{{ f(row.amount) }}</span>
-              </div>
-            </div>
-          </template>
-        </aside>
-      </div>
+      <DeathsView
+        :sorted-deaths="sortedDeaths"
+        :selected-death-index="selectedDeathIndex"
+        :selected-death="selectedDeath"
+        :selected-death-window="selectedDeathWindow"
+        :death-hit-log="deathHitLog"
+        :death-inspector-tab="deathInspectorTab"
+        :death-inspector-tabs="deathInspectorTabs"
+        :selected-death-recap-rows="selectedDeathRecapRows"
+        :selected-death-window-casts="selectedDeathWindowCasts"
+        :selected-death-related-damage="selectedDeathRelatedDamage"
+        :selected-ability="selectedAbility"
+        :f="f"
+        :fmt-time="fmtTime"
+        :name-style="nameStyle"
+        :death-hp-bars="deathHpBars"
+        :format-hp-before="formatHpBefore"
+        :ability-id-for-name="abilityIdForName"
+        :ability-icon-src="abilityIconSrc"
+        @select-death="toggleDeathSelection"
+        @select-ability="selectAbility"
+        @clear-ability-icon="clearAbilityIcon"
+        @update-death-inspector-tab="deathInspectorTab = $event"
+      />
     </template>
 
     <template v-else-if="activeView === 'casts'">
@@ -2414,13 +1631,8 @@ onUnmounted(() => {
           <div class="bp-inspector-title">Cast Inspector</div>
           <div v-if="!selectedCastAbility" class="bp-empty-panel">Select an ability to inspect its cadence and targets.</div>
           <template v-else>
-            <div class="bp-inspector-block">
-              <div v-for="[label, value] in selectedCastInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
-            </div>
-            <div v-if="selectedCastEvent" class="bp-inspector-block">
-              <div class="bp-section-heading">Selected Cast</div>
-              <div v-for="[label, value] in selectedCastEventRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
-            </div>
+            <InspectorRows :rows="selectedCastInspectorRows" />
+            <InspectorRows v-if="selectedCastEvent" heading="Selected Cast" :rows="selectedCastEventRows" />
             <div class="bp-inspector-block">
               <div class="bp-section-heading">Target(s)</div>
               <div v-if="selectedCastAbility.targets.length === 0" class="bp-empty-panel">No target data captured for this ability.</div>
@@ -2437,9 +1649,8 @@ onUnmounted(() => {
                 </div>
               </div>
             </div>
+            <InspectorRows v-if="castMitigationEffectiveness" heading="Mitigation Efficiency" :rows="mitigationInspectorRows" />
             <div v-if="castMitigationEffectiveness" class="bp-inspector-block">
-              <div class="bp-section-heading">Mitigation Efficiency</div>
-              <div v-for="[label, value] in mitigationInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
               <div class="bp-section-heading">Stacked With</div>
               <div v-if="castMitigationEffectiveness.stackedWith.length === 0" class="bp-empty-panel">No overlapping mitigation captured.</div>
               <div v-else class="cast-target-list">
@@ -2511,9 +1722,7 @@ onUnmounted(() => {
 
         <aside class="bp-inspector">
           <div class="bp-inspector-title">Event Inspector</div>
-          <div class="bp-inspector-block">
-            <div v-for="[label, value] in eventInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong>{{ value }}</strong></div>
-          </div>
+          <InspectorRows :rows="eventInspectorRows" />
           <div class="bp-inspector-block">
             <div class="bp-section-heading">Scope</div>
             <p class="bp-inspector-copy">This first pass merges cast rows, death recap rows, and raise detection into one table so we can keep cross-view continuity today while the shared event stream grows underneath it.</p>
@@ -2525,1303 +1734,4 @@ onUnmounted(() => {
   </div>
 </template>
 
-<style scoped>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-.bp-root {
-  width: 100vw; height: 100vh;
-  --flexi-accent: #9b5de5;
-  --flexi-accent-soft: rgba(155,93,229,0.16);
-  --flexi-accent-border: rgba(155,93,229,0.42);
-  background: #0f0f17;
-  color: rgba(255,255,255,0.85);
-  font-family: 'Segoe UI', monospace, sans-serif;
-  font-size: 12px;
-  display: flex; flex-direction: column; overflow: hidden;
-}
-
-.bp-topbar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 5px 10px;
-  background: #16161f;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-  flex-shrink: 0;
-}
-.bp-app-title { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.5); letter-spacing: 0.03em; white-space: nowrap; }
-.bp-topbar-link {
-  margin-left: auto;
-  color: #8ecae6;
-  border: 1px solid rgba(142,202,230,0.28);
-  background: rgba(142,202,230,0.08);
-  border-radius: 4px;
-  padding: 2px 7px;
-  font-size: 11px;
-  text-decoration: none;
-  line-height: 1.2;
-}
-.bp-topbar-link:hover { color: #c6efff; border-color: rgba(142,202,230,0.48); }
-.bp-total { font-size: 11px; color: rgba(255,255,255,0.3); white-space: nowrap; }
-.bp-pull-select {
-  flex: 1; min-width: 0;
-  background: #1a1a24;
-  border: 1px solid rgba(255,255,255,0.15);
-  color: rgba(255,255,255,0.8);
-  font-family: inherit; font-size: 11px;
-  padding: 2px 6px; border-radius: 3px;
-  cursor: pointer; outline: none; color-scheme: dark;
-}
-.bp-pull-select option { background: #1a1a24; color: rgba(255,255,255,0.85); }
-.bp-pull-select:focus { border-color: var(--flexi-accent-border); }
-.bp-pull-select--header {
-  flex: 0 1 340px;
-  min-width: 220px;
-  padding: 3px 8px;
-}
-
-.bp-view-tabs { display: flex; border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0; }
-.bp-view-tab {
-  background: transparent; border: none;
-  border-bottom: 2px solid transparent;
-  color: rgba(255,255,255,0.35);
-  padding: 5px 14px; cursor: pointer;
-  font-size: 11px; font-family: inherit;
-  letter-spacing: 0.04em;
-  transition: color 0.15s, border-color 0.15s;
-  margin-bottom: -1px;
-}
-.bp-view-tab:hover { color: rgba(255,255,255,0.65); }
-.bp-view-tab.active { color: var(--flexi-accent); border-bottom-color: var(--flexi-accent); }
-
-.bp-metric-tabs { display: flex; gap: 0; padding: 4px 10px; border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0; }
-.bp-metric-tab {
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.1);
-  color: rgba(255,255,255,0.4);
-  padding: 2px 12px; border-radius: 3px;
-  cursor: pointer; font-size: 10px; font-family: inherit;
-  letter-spacing: 0.06em;
-  transition: all 0.15s; margin-right: 3px;
-}
-.bp-metric-tab:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.08); }
-.bp-metric-tab.active { background: rgba(100,180,255,0.15); border-color: rgba(100,180,255,0.4); color: #64b4ff; }
-
-.bp-waiting { flex: 1; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.25); font-size: 13px; }
-
-.bp-scroll { flex: 1; min-height: 0; overflow: auto; }
-.bp-table { width: 100%; border-collapse: collapse; }
-.bp-table--targets { table-layout: fixed; min-width: 760px; }
-.bp-table thead tr { border-bottom: 1px solid rgba(255,255,255,0.08); position: sticky; top: 0; background: #0d0d10; z-index: 1; }
-.bp-table th { padding: 5px 8px; font-size: 10px; font-weight: 500; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.05em; text-align: right; white-space: nowrap; }
-.bp-table th.col-name { text-align: left; }
-.bp-table th.col-sort { cursor: pointer; user-select: none; }
-.bp-table th.col-sort:hover { color: rgba(255,255,255,0.5); }
-.bp-table th.col-sort.active { color: rgba(255,210,80,0.9); }
-.bp-table tbody tr { border-bottom: 1px solid rgba(255,255,255,0.04); }
-.bp-table tbody tr:hover { background: rgba(255,255,255,0.04); }
-td { padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgba(255,255,255,0.75); }
-td.col-name { text-align: left; position: relative; max-width: 160px; }
-td.col-abilities,
-th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
-.row-fill { position: absolute; inset: 0; right: auto; background: rgba(255,255,255,0.05); pointer-events: none; min-width: 2px; }
-.aname { position: relative; z-index: 1; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-player-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  max-width: 100%;
-}
-.bp-player-cell-icon {
-  flex-shrink: 0;
-}
-.bp-player-cell-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.col-pct { color: rgba(255,210,80,0.9); }
-.target-ability-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  width: 100%;
-  min-width: 0;
-  max-height: 128px;
-  overflow: auto;
-  padding-right: 2px;
-  overscroll-behavior: contain;
-}
-.target-ability-row {
-  display: grid;
-  grid-template-columns: minmax(90px, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.target-ability-meta {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 4px 7px;
-  color: rgba(255,255,255,0.42);
-  font-size: 10px;
-  white-space: nowrap;
-}
-
-.bp-chart-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 8px 10px 4px; gap: 4px; position: relative; }
-.bp-chart-svg { width: 100%; flex: 1; min-height: 0; overflow: visible; }
-.axis-label { font-size: 9px; fill: rgba(255,255,255,0.3); font-family: 'Segoe UI', monospace, sans-serif; }
-
-.bp-tooltip {
-  position: absolute;
-  background: rgba(10,10,16,0.92);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 4px;
-  padding: 6px 9px;
-  pointer-events: none;
-  z-index: 10;
-  min-width: 140px;
-}
-.bp-tooltip-time { font-size: 11px; font-weight: 600; color: #d9bcff; margin-bottom: 4px; }
-.bp-tooltip-row { display: flex; align-items: center; gap: 5px; margin-bottom: 2px; }
-.bp-tooltip-group {
-  display: flex; align-items: center; gap: 5px;
-  margin-top: 4px; padding-top: 4px;
-  border-top: 1px solid rgba(255,255,255,0.1);
-}
-.bp-tooltip-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.bp-tooltip-name { flex: 1; font-size: 10px; color: rgba(255,255,255,0.6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-tooltip-val { font-size: 10px; font-variant-numeric: tabular-nums; color: rgba(255,255,255,0.85); margin-left: auto; }
-.bp-tooltip-adj {
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
-  color: rgba(116,240,195,0.78);
-  white-space: nowrap;
-}
-.bp-tooltip-section {
-  margin-top: 5px;
-  padding-top: 5px;
-  border-top: 1px solid rgba(255,255,255,0.1);
-}
-.bp-tooltip-section-title {
-  margin-bottom: 3px;
-  font-size: 9px;
-  text-transform: uppercase;
-  color: rgba(142,202,230,0.72);
-}
-
-.bp-chart-legend { display: flex; flex-wrap: wrap; gap: 3px 10px; flex-shrink: 0; padding-bottom: 2px; }
-.bp-legend-item { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; transition: opacity 0.15s; }
-.bp-legend-item:hover { opacity: 0.75; }
-.bp-legend-item.hidden { opacity: 0.3; }
-.bp-legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.bp-legend-name { font-size: 11px; color: rgba(255,255,255,0.65); white-space: nowrap; }
-.bp-legend-name--focused { color: #ffd250; font-weight: 700; }
-
-.bp-death-badge {
-  display: inline-block;
-  background: rgba(255,100,100,0.3);
-  color: #ff8080;
-  font-size: 9px; line-height: 1;
-  padding: 1px 4px; border-radius: 8px;
-  margin-left: 4px; vertical-align: middle;
-}
-
-.bp-mode-btn {
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.1);
-  color: rgba(255,255,255,0.4);
-  font-size: 10px; font-family: inherit;
-  padding: 2px 10px; border-radius: 3px; cursor: pointer;
-  letter-spacing: 0.05em; transition: all 0.15s;
-}
-.bp-mode-btn:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.08); }
-.bp-mode-btn.active { background: rgba(100,180,255,0.15); border-color: rgba(100,180,255,0.4); color: #64b4ff; }
-.bp-mode-total { margin-left: auto; font-size: 11px; color: rgba(255,255,255,0.3); font-variant-numeric: tabular-nums; }
-
-.enc-row-fill { background: rgba(220,70,70,0.10); }
-
-.dl-death-row {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 7px 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.dl-death-row:hover  { background: rgba(255,255,255,0.04); }
-.dl-death-row.active { background: rgba(255,100,100,0.08); }
-.dl-death-info { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.dl-death-name { font-size: 12px; color: rgba(255,255,255,0.8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dl-death-time { font-size: 10px; color: rgba(255,100,100,0.7); font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; }
-.dl-spark { display: flex; align-items: center; }
-
-.dl-detail-empty {
-  flex: 1; display: flex; align-items: center; justify-content: center;
-  color: rgba(255,255,255,0.2); font-size: 12px; text-align: center; padding: 16px;
-}
-.dl-detail-header {
-  display: flex; align-items: baseline; gap: 8px;
-  padding: 5px 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
-  flex-shrink: 0;
-}
-.dl-detail-name { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dl-detail-time { font-size: 10px; color: rgba(255,100,100,0.65); font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; }
-.dl-detail-sub  { font-size: 10px; color: rgba(255,255,255,0.25); margin-left: auto; white-space: nowrap; }
-
-.dl-hit-scroll { flex: 1; overflow-y: auto; }
-.dl-hit-table {
-  width: 100%; border-collapse: collapse;
-  font-size: 11px;
-}
-.dl-hit-table thead tr { border-bottom: 1px solid rgba(255,255,255,0.08); position: sticky; top: 0; background: #0d0d10; z-index: 1; }
-.dl-hit-table th {
-  padding: 4px 7px; font-size: 9px; font-weight: 500;
-  color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.05em;
-  text-align: left; white-space: nowrap;
-}
-.dl-hit-table tbody tr { border-bottom: 1px solid rgba(255,255,255,0.03); }
-.dl-hit-table td {
-  padding: 3px 7px; white-space: nowrap;
-  font-variant-numeric: tabular-nums; color: rgba(255,255,255,0.7);
-}
-.dl-row-dmg:hover  { background: rgba(255,255,255,0.03); }
-.dl-row-heal:hover { background: rgba(255,255,255,0.03); }
-
-.dl-badge-dmg,.dl-badge-heal,.dl-badge-death { display: inline-block; width: 14px; height: 14px; border-radius: 3px; font-size: 9px; font-weight: 700; text-align: center; line-height: 14px; }
-.dl-badge-dmg,.dl-badge-death { background: #ff1744; color: #fff; }
-.dl-badge-heal { background: #00e676; color: #000; }
-
-.dl-row-death { background: rgba(255,0,0,0.15) !important; }
-
-.dl-amount-dmg-bold,.dl-amount-heal-bold,.dl-amount-death { text-align: right; }
-.dl-amount-dmg-bold,.dl-amount-death { color: #ff1744 !important; font-weight: 700 !important; }
-.dl-amount-heal-bold { color: #00e676 !important; font-weight: 700 !important; }
-
-.dl-col-time    { width: 36px; color: rgba(255,255,255,0.35) !important; }
-.dl-col-type    { width: 20px; }
-.dl-col-ability { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
-.dl-col-source  { max-width: 100px; overflow: hidden; text-overflow: ellipsis; color: rgba(255,255,255,0.45) !important; }
-.dl-col-hpbefore { width: 138px; color: rgba(255,255,255,0.72) !important; white-space: nowrap; }
-.dl-col-hpbar   { width: 80px; padding: 0 4px !important; }
-.dl-hp-estimate { margin-left: 6px; font-size: 9px; color: rgba(255,215,128,0.85); text-transform: uppercase; letter-spacing: 0.04em; }
-
-.dl-hpbar-container { height: 12px; background: rgba(255,255,255,0.1); border-radius: 2px; position: relative; overflow: hidden; }
-.dl-hpbar-bg { position: absolute; left: 0; top: 0; height: 100%; background: rgba(100,200,100,0.25); border-radius: 2px; }
-.dl-hpbar-change.dl-hpbar-heal { position: absolute; top: 0; height: 100%; background: #00e676; opacity: 0.6; border-radius: 2px; }
-.dl-hpbar-change.dl-hpbar-dmg { position: absolute; top: 0; height: 100%; background: #ff1744; opacity: 0.6; border-radius: 2px; }
-
-.bp-spark-svg { display: block; }
-.bp-spark-none { font-size: 10px; color: rgba(255,255,255,0.2); }
-
-.cast-xiv-tick {
-  position: absolute;
-  top: 5px;
-  transform: translateX(-50%);
-  color: rgba(255,255,255,0.58);
-  font-size: 10px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  background: #0d0d10;
-  padding: 0 4px;
-  border-radius: 3px;
-}
-.cast-analysis-shell {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  background: rgba(0,0,0,0.12);
-}
-.cast-analysis-scroll {
-  width: 100%;
-  height: 100%;
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-.cast-analysis-table {
-  min-width: 100%;
-  display: grid;
-  grid-template-columns: 170px 1fr;
-  align-content: start;
-}
-.cast-analysis-label-head {
-  position: sticky;
-  left: 0;
-  top: 0;
-  z-index: 6;
-  height: 34px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 0 10px;
-  background: #11141b;
-  border-right: 1px solid rgba(255,255,255,0.08);
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-}
-.cast-analysis-label-head span {
-  color: rgba(255,255,255,0.82);
-  font-weight: 600;
-}
-.cast-analysis-label-head small {
-  color: rgba(255,255,255,0.34);
-  font-size: 9px;
-  font-style: italic;
-}
-.cast-analysis-grid {
-  position: relative;
-  min-width: 100%;
-  height: 100%;
-}
-.cast-analysis-grid--head {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  height: 34px;
-  background: #0d0d10;
-}
-.cast-analysis-axis {
-  position: absolute;
-  inset: 0;
-  height: 34px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.015);
-}
-.cast-analysis-gridline {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: rgba(255,255,255,0.13);
-}
-.cast-analysis-section {
-  position: sticky;
-  left: 0;
-  z-index: 4;
-  padding: 5px 10px;
-  min-height: 24px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: rgba(255,255,255,0.48);
-  background: rgba(255,255,255,0.04);
-  border-top: 1px solid rgba(255,255,255,0.07);
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-}
-.cast-analysis-section-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border-right: 0;
-  border-left: 0;
-  cursor: pointer;
-  font-family: inherit;
-  text-align: left;
-}
-.cast-analysis-section-toggle:hover {
-  color: rgba(255,255,255,0.72);
-  background: rgba(255,255,255,0.07);
-}
-.cast-analysis-section-toggle small {
-  margin-left: auto;
-  color: rgba(255,255,255,0.32);
-  font-size: 9px;
-}
-.cast-section-caret {
-  width: 12px;
-  color: rgba(255,255,255,0.42);
-  text-align: center;
-}
-.cast-analysis-section--timeline {
-  position: relative;
-  left: auto;
-  z-index: 1;
-  padding: 0;
-  min-height: 24px;
-  background: rgba(255,255,255,0.025);
-  border-left: 1px solid rgba(255,255,255,0.04);
-}
-.cast-resource-label {
-  cursor: default;
-  background: #10141a;
-}
-.cast-analysis-grid--resource {
-  min-height: 34px;
-  border-bottom: 1px solid rgba(255,255,255,0.055);
-  background:
-    linear-gradient(to bottom, rgba(255,255,255,0.045) 0 1px, transparent 1px 50%, rgba(255,255,255,0.035) 50% calc(50% + 1px), transparent calc(50% + 1px)),
-    rgba(255,255,255,0.014);
-}
-.cast-resource-svg {
-  position: absolute;
-  inset: 4px 0;
-  width: 100%;
-  height: calc(100% - 8px);
-  overflow: visible;
-  pointer-events: none;
-}
-.cast-analysis-label {
-  position: sticky;
-  left: 0;
-  z-index: 3;
-  min-height: 31px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
-  background: #0f1117;
-  border-right: 1px solid rgba(255,255,255,0.08);
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  cursor: pointer;
-}
-.cast-analysis-label.active {
-  background: rgba(116,185,255,0.14);
-}
-.cast-analysis-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: rgba(255,255,255,0.86);
-}
-.cast-ability-icon {
-  width: 22px;
-  height: 22px;
-  flex: 0 0 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  border-radius: 4px;
-  border: 1px solid rgba(255,255,255,0.16);
-  background: linear-gradient(135deg, rgba(255,255,255,0.13), rgba(255,255,255,0.035));
-  color: rgba(255,255,255,0.78);
-  font-size: 8px;
-  font-weight: 800;
-  line-height: 1;
-}
-.cast-ability-icon img,
-.cast-event-icon {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.cast-analysis-meta {
-  color: rgba(255,255,255,0.36);
-  font-size: 10px;
-  white-space: nowrap;
-}
-.cast-analysis-grid--row {
-  min-height: 31px;
-  border-bottom: 1px solid rgba(255,255,255,0.055);
-  background: rgba(255,255,255,0.018);
-  cursor: pointer;
-}
-.cast-analysis-grid--row.active {
-  background: rgba(116,185,255,0.06);
-}
-.cast-analysis-event {
-  position: absolute;
-  top: 4px;
-  width: 22px;
-  height: 22px;
-  transform: translateX(-50%);
-  border: 1px solid rgba(255,255,255,0.22);
-  border-radius: 4px;
-  color: rgba(255,255,255,0.92);
-  font-size: 8px;
-  font-weight: 700;
-  line-height: 18px;
-  cursor: pointer;
-  box-shadow: 0 3px 8px rgba(0,0,0,0.35);
-  overflow: hidden;
-  padding: 0;
-}
-.cast-analysis-event > span {
-  display: block;
-  padding: 0 3px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cast-analysis-event:hover {
-  z-index: 6;
-  filter: brightness(1.25);
-}
-.cast-analysis-event.active {
-  z-index: 7;
-  border-color: rgba(255,255,255,0.86);
-  box-shadow: 0 0 0 2px rgba(116,185,255,0.42), 0 4px 12px rgba(0,0,0,0.42);
-  filter: brightness(1.18);
-}
-.cast-cooldown-window {
-  position: absolute;
-  top: 8px;
-  height: 14px;
-  transform: translateX(-1px);
-  border-radius: 3px;
-  background: repeating-linear-gradient(
-    90deg,
-    rgba(255,255,255,0.045) 0,
-    rgba(255,255,255,0.045) 5px,
-    rgba(255,255,255,0.015) 5px,
-    rgba(255,255,255,0.015) 10px
-  );
-  border: 1px solid rgba(255,255,255,0.055);
-  pointer-events: none;
-}
-.cast-cast-window {
-  position: absolute;
-  top: 12px;
-  height: 6px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(116,185,255,0.08), rgba(116,185,255,0.38));
-  border: 1px solid rgba(116,185,255,0.18);
-  pointer-events: none;
-}
-.cast-analysis-event--cooldowns { background: linear-gradient(135deg, #326ea8, #74b9ff); }
-.cast-analysis-event--mitigations { background: linear-gradient(135deg, #027a45, #00e676); color: #05100a; }
-.cast-analysis-event--dps { background: linear-gradient(135deg, #9a7422, #ffd250); color: #1b1300; }
-.cast-analysis-event--heals { background: linear-gradient(135deg, #a83464, #fd79a8); }
-.cast-analysis-death-line,
-.cast-analysis-raise-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  pointer-events: none;
-}
-.cast-analysis-death-line { background: rgba(255,23,68,0.65); }
-.cast-analysis-raise-line { background: rgba(255,255,255,0.72); }
-
-.cast-target-list {
-  display: grid;
-  gap: 5px;
-  max-height: 220px;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-.cast-target-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 6px;
-  background: rgba(255,255,255,0.045);
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 4px;
-}
-.cast-target-name {
-  overflow: hidden;
-  color: rgba(255,255,255,0.76);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cast-target-detail {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 3px 7px;
-  color: rgba(255,255,255,0.42);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-
-.bp-analysis-header {
-  display: flex;
-  align-items: stretch;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
-  background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
-}
-.bp-analysis-main {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.bp-report-select-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-}
-.bp-analysis-kicker {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: rgba(255,255,255,0.35);
-}
-.bp-analysis-title {
-  font-size: 18px;
-  color: rgba(255,255,255,0.92);
-  font-weight: 600;
-}
-.bp-analysis-stats {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(90px, 1fr));
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-.bp-analysis-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 6px;
-  min-width: 0;
-}
-.bp-analysis-label {
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: rgba(255,255,255,0.35);
-}
-.bp-analysis-value {
-  font-size: 11px;
-  color: rgba(255,255,255,0.82);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.bp-filter-strip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 6px 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
-  background: rgba(255,255,255,0.015);
-}
-.bp-filter-groups,
-.bp-chip-row,
-.bp-toolbar-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.bp-filter-btn,
-.bp-chip {
-  font-size: 10px;
-  border-radius: 999px;
-  padding: 4px 9px;
-  letter-spacing: 0.04em;
-  background: rgba(155,93,229,0.1);
-  border: 1px solid rgba(155,93,229,0.22);
-  color: #d9bcff;
-}
-.bp-filter-btn {
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.1);
-  color: rgba(255,255,255,0.45);
-  cursor: pointer;
-}
-.bp-filter-btn.active {
-  color: #d9bcff;
-  border-color: var(--flexi-accent-border);
-  background: var(--flexi-accent-soft);
-}
-.bp-workspace {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 280px;
-  overflow: hidden;
-}
-.bp-pulls-workspace {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  overflow: hidden;
-}
-.bp-pulls-workspace--scrollable {
-  align-items: start;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-.bp-pulls-workspace--scrollable > .bp-pull-list-panel,
-.bp-pulls-workspace--scrollable > .bp-main {
-  align-self: start;
-  min-height: auto;
-}
-.bp-pull-list-panel {
-  min-height: 0;
-  overflow-y: auto;
-  padding: 12px;
-  border-right: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.015);
-}
-.bp-pulls-workspace--scrollable .bp-pull-list-panel {
-  overflow: visible;
-}
-.bp-pull-row {
-  width: 100%;
-  min-height: 70px;
-  display: grid;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 10px;
-  color: rgba(255,255,255,0.78);
-  text-align: left;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 6px;
-  cursor: pointer;
-  font-family: inherit;
-}
-.bp-pull-row:hover { background: rgba(255,255,255,0.07); }
-.bp-pull-row.active {
-  background: var(--flexi-accent-soft);
-  border-color: var(--flexi-accent-border);
-}
-.bp-pull-encounter-header {
-  margin: -3px -2px 2px;
-  padding-bottom: 6px;
-  color: rgba(255,255,255,0.42);
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0;
-}
-.bp-pull-row-main,
-.bp-pull-row-stats {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  color: rgba(255,255,255,0.48);
-  font-size: 10px;
-}
-.bp-pull-row-main {
-  min-width: 0;
-  flex-direction: column;
-}
-.bp-pull-row-main strong {
-  font-size: 12px;
-  color: rgba(255,255,255,0.9);
-}
-.bp-pull-row-main span {
-  overflow: hidden;
-  color: rgba(255,255,255,0.56);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.bp-pull-row-stats span {
-  padding: 2px 6px;
-  background: rgba(255,255,255,0.055);
-  border-radius: 4px;
-}
-.bp-pull-row-stats .danger { color: rgba(255,150,150,0.95); }
-.bp-pull-row-stats .success,
-.bp-card-detail .success { color: rgba(95,220,150,0.95); }
-.bp-card-detail .danger { color: rgba(255,150,150,0.95); }
-.bp-pulls-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 10px;
-  min-height: 0;
-  overflow: auto;
-}
-.bp-panel--wide { grid-column: 1 / -1; min-height: 360px; }
-.bp-pull-note-list {
-  display: grid;
-  gap: 7px;
-  padding: 10px;
-}
-.bp-pull-note {
-  padding: 8px 10px;
-  color: rgba(255,255,255,0.76);
-  background: rgba(255,255,255,0.045);
-  border-left: 3px solid var(--flexi-accent);
-  border-radius: 5px;
-  font-size: 12px;
-}
-.bp-rail,
-.bp-inspector {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: rgba(255,255,255,0.02);
-  border-left: 1px solid rgba(255,255,255,0.07);
-}
-.bp-rail {
-  border-right: 1px solid rgba(255,255,255,0.07);
-}
-.bp-main {
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.bp-main--pulls-pane {
-  overflow: visible;
-}
-.bp-main--pulls-pane .bp-pulls-grid {
-  overflow: visible;
-}
-.bp-rail-title,
-.bp-inspector-title,
-.bp-panel-title,
-.bp-section-heading {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-.bp-rail-title,
-.bp-inspector-title {
-  padding: 10px 12px 8px;
-  color: rgba(255,255,255,0.35);
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-}
-.bp-job-icon {
-  position: relative;
-  z-index: 1;
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
-  object-fit: contain;
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.65));
-}
-.bp-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
-  gap: 10px;
-  padding: 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-}
-.bp-card {
-  padding: 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(255,255,255,0.06);
-  background: rgba(255,255,255,0.03);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  text-align: left;
-  font-family: inherit;
-  color: inherit;
-}
-.bp-card--button {
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, transform 0.15s;
-}
-.bp-card--button:hover {
-  border-color: var(--flexi-accent-border);
-  background: rgba(155,93,229,0.1);
-  transform: translateY(-1px);
-}
-.bp-card--done { box-shadow: inset 0 0 0 1px rgba(155,93,229,0.12); }
-.bp-card--taken { box-shadow: inset 0 0 0 1px rgba(220,70,70,0.08); }
-.bp-card--deaths { box-shadow: inset 0 0 0 1px rgba(255,80,80,0.08); }
-.bp-card--progress { grid-column: span 2; }
-.bp-card-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: rgba(255,255,255,0.4);
-}
-.bp-card-value {
-  font-size: 22px;
-  color: rgba(255,255,255,0.92);
-  font-weight: 600;
-}
-.bp-card-detail {
-  font-size: 11px;
-  color: rgba(255,255,255,0.5);
-}
-.bp-card-progress-copy {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-.bp-card-value--progress {
-  font-size: 20px;
-  line-height: 1.25;
-}
-.bp-card-detail--progress {
-  font-size: 13px;
-  color: rgba(255,255,255,0.72);
-}
-.bp-card-detail--split {
-  line-height: 1.4;
-}
-.bp-overview-grid {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  padding: 12px;
-  overflow: auto;
-}
-.bp-panel {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: rgba(255,255,255,0.025);
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 8px;
-}
-.bp-panel-title {
-  padding: 10px 12px;
-  color: rgba(255,255,255,0.38);
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-}
-.bp-panel-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-}
-.bp-panel-toolbar--summary {
-  flex-wrap: wrap;
-}
-.bp-toolbar-stat {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.bp-toolbar-stat-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: rgba(255,255,255,0.35);
-}
-.bp-toolbar-stat strong {
-  font-size: 18px;
-  color: rgba(255,255,255,0.92);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.bp-toolbar-context {
-  margin-left: auto;
-  font-size: 11px;
-  color: rgba(255,255,255,0.48);
-}
-.bp-empty-panel,
-.bp-inspector-copy {
-  padding: 12px;
-  color: rgba(255,255,255,0.45);
-  line-height: 1.4;
-}
-.bp-mini-chart-shell {
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.bp-mini-chart {
-  height: 120px;
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  padding: 10px;
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 6px;
-  background: rgba(0,0,0,0.16);
-}
-.bp-mini-chart.empty {
-  align-items: center;
-  justify-content: center;
-  color: rgba(255,255,255,0.36);
-}
-.bp-mini-chart-bar {
-  flex: 1;
-  min-width: 3px;
-  border: none;
-  border-radius: 2px 2px 0 0;
-  background: linear-gradient(180deg, rgba(217,188,255,0.92), rgba(155,93,229,0.34));
-  cursor: pointer;
-  transition: filter 0.15s, transform 0.15s;
-}
-.bp-mini-chart-bar:hover {
-  filter: brightness(1.18);
-  transform: scaleY(1.03);
-}
-.bp-mini-chart-values {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.bp-mini-pill {
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.08);
-  color: rgba(255,255,255,0.68);
-}
-.bp-mini-pill--button {
-  cursor: pointer;
-  font-family: inherit;
-}
-.bp-pull-attribution-chart {
-  position: relative;
-  height: 130px;
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  margin: 12px 12px 0;
-  padding: 12px 10px 18px;
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 6px;
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0) 1px) 0 25% / 100% 25%,
-    rgba(0,0,0,0.16);
-}
-.bp-pull-attribution-chart.empty {
-  align-items: center;
-  justify-content: center;
-  color: rgba(255,255,255,0.36);
-}
-.bp-pull-dps-bar {
-  position: relative;
-  flex: 1;
-  min-width: 4px;
-  border: none;
-  border-radius: 2px 2px 0 0;
-  background: linear-gradient(180deg, rgba(116,185,255,0.94), rgba(116,185,255,0.24));
-  cursor: pointer;
-  transition: filter 0.15s, transform 0.15s;
-}
-.bp-pull-dps-bar:hover {
-  filter: brightness(1.18);
-  transform: scaleY(1.02);
-}
-.bp-pull-marker {
-  position: absolute;
-  left: 50%;
-  width: 2px;
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-.bp-pull-marker--death {
-  top: -12px;
-  height: calc(100% + 16px);
-  background: rgba(255,55,55,0.86);
-}
-.bp-pull-marker--raise {
-  top: -6px;
-  height: 8px;
-  background: rgba(255,166,70,0.92);
-}
-.bp-attribution-table td.col-name {
-  max-width: 240px;
-}
-.bp-attribution-table .danger {
-  color: rgba(255,120,120,0.95);
-}
-.bp-mini-pill--button:hover {
-  color: #d9bcff;
-  border-color: var(--flexi-accent-border);
-  background: var(--flexi-accent-soft);
-}
-.bp-event-item {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  width: 100%;
-  padding: 10px 12px;
-  border: none;
-  border-top: 1px solid rgba(255,255,255,0.05);
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.bp-event-item:hover { background: rgba(255,255,255,0.03); }
-.bp-event-name { color: rgba(255,255,255,0.82); }
-.bp-event-detail { color: rgba(255,255,255,0.48); font-size: 10px; }
-.bp-inspector-block {
-  padding: 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.bp-kv {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.bp-kv span {
-  color: rgba(255,255,255,0.42);
-}
-.bp-kv strong {
-  color: rgba(255,255,255,0.88);
-  text-align: right;
-}
-.bp-inspector-list-item {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 8px 0;
-  border-top: 1px solid rgba(255,255,255,0.05);
-}
-.bp-inspector-list-item:first-of-type { border-top: none; }
-.bp-row-active { background: var(--flexi-accent-soft) !important; }
-.bp-toolbar-group--full {
-  padding: 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-}
-.bp-party-highlight {
-  margin: 0 12px 12px;
-  padding: 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(255,210,80,0.18);
-  background: rgba(255,210,80,0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.bp-action-btn {
-  width: 100%;
-  padding: 7px 9px;
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 4px;
-  background: rgba(255,255,255,0.04);
-  color: rgba(255,255,255,0.72);
-  font-family: inherit;
-  font-size: 11px;
-  text-align: left;
-  cursor: pointer;
-}
-.bp-action-btn:hover:not(:disabled) {
-  color: #d9bcff;
-  border-color: var(--flexi-accent-border);
-  background: var(--flexi-accent-soft);
-}
-.bp-action-btn:disabled {
-  cursor: default;
-  opacity: 0.45;
-}
-.bp-party-label {
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: rgba(255,220,140,0.7);
-}
-.bp-party-highlight strong {
-  color: rgba(255,255,255,0.9);
-}
-
-@media (max-width: 1180px) {
-  .bp-workspace {
-    grid-template-columns: 220px minmax(0, 1fr);
-  }
-  .bp-inspector {
-    display: none;
-  }
-  .bp-analysis-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 820px) {
-  .bp-root {
-    height: 100vh;
-    min-height: 100vh;
-    overflow: hidden;
-  }
-  .bp-analysis-header,
-  .bp-filter-strip {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .bp-card-grid,
-  .bp-overview-grid,
-  .bp-workspace,
-  .bp-pulls-workspace,
-  .bp-pulls-grid {
-    grid-template-columns: 1fr;
-  }
-  .bp-workspace {
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-  .bp-workspace,
-  .bp-pulls-workspace,
-  .bp-main,
-  .bp-pulls-grid,
-  .bp-overview-grid,
-  .bp-panel {
-    min-height: 0;
-    overflow: hidden;
-  }
-  .bp-rail {
-    max-height: 220px;
-  }
-  .bp-pull-list-panel {
-    max-height: 280px;
-    border-right: none;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-  }
-  .bp-panel--wide {
-    min-height: 0;
-  }
-  .bp-scroll {
-    min-height: 0;
-    overflow-x: auto;
-    overflow-y: auto;
-  }
-  .bp-table {
-    min-width: 620px;
-  }
-  .bp-card-grid {
-    border-bottom: none;
-  }
-  .bp-card--progress {
-    grid-column: auto;
-  }
-  .bp-pulls-workspace--scrollable {
-    overflow-y: auto;
-  }
-  .bp-toolbar-context {
-    margin-left: 0;
-  }
-  .bp-pull-attribution-chart {
-    height: 110px;
-  }
-}
-
-@media (max-height: 680px) {
-  .bp-root {
-    height: 100vh;
-    min-height: 100vh;
-    overflow: hidden;
-  }
-  .bp-pulls-workspace,
-  .bp-workspace,
-  .bp-main,
-  .bp-pulls-grid {
-    min-height: 0;
-    overflow: hidden;
-  }
-  .bp-pulls-workspace--scrollable {
-    overflow-y: auto;
-  }
-  .bp-pull-list-panel,
-  .bp-rail,
-  .bp-inspector {
-    max-height: 260px;
-  }
-}
-</style>
+<style src="./AbilityBreakdown/AbilityBreakdownPopout.css"></style>

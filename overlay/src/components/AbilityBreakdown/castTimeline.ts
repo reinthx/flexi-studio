@@ -1,4 +1,4 @@
-import type { CastEvent, CombatantAbilityData, ResourceSample } from '@shared/configSchema'
+import type { CastEvent, CombatantAbilityData, HitRecord, ResourceSample } from '@shared/configSchema'
 import type { CastFilter, ResourceTrackKey } from './types'
 
 export type CastTargetRow = { name: string; id: string; label: string; casts: number; hits: number; damage: number; healing: number; overheal: number }
@@ -6,6 +6,40 @@ export type CastAbilityRow = { name: string; casts: number; avgInterval: string;
 export type CastTimelineRow = CastAbilityRow & { category: CastFilter; events: CastEvent[] }
 export type CastTimelineGroup = { category: CastFilter; label: string; collapsed: boolean; rows: CastTimelineRow[] }
 export type CastResourceTrack = { key: ResourceTrackKey; label: string; value: string; color: string; fill: string }
+export type CastPlayerData = NonNullable<ReturnType<typeof buildCastPlayerData>>
+export type CastTimelineContext = {
+  duration: number
+  timeTicks: number[]
+  rows: CastTimelineRow[]
+  groups: CastTimelineGroup[]
+  pixelWidth: number
+  resourceTracks: CastResourceTrack[]
+}
+export type CastInspectorRow = [string, string]
+export type CastMitigationStackRow = { key: string; name: string; source: string; target?: string; time: string; overlap: string; expected: string; overlapMs: number }
+export type CastMitigationEffectiveness = {
+  expected: string
+  hits: string
+  stackedHits: string
+  soloHits: string
+  mitigated: string
+  withoutThisMit: string
+  scope: 'Selected Cast' | 'All Casts'
+  stackedWith: CastMitigationStackRow[]
+}
+export type CastMitigationEffectivenessInput = {
+  selectedPlayer: string
+  selectedAbility?: CastAbilityRow | null
+  selectedEvents: CastEvent[]
+  selectedEvent?: CastEvent | null
+  allCastData: Record<string, CastEvent[]>
+  hitData: Record<string, HitRecord[]>
+  combatantJobs: Record<string, string>
+  partyNames: string[]
+  combatantIds: Record<string, string>
+  formatNumber: (value: number) => string
+  formatTime: (ms: number) => string
+}
 
 const terms = (value: string) => value.split('|')
 const MITIGATION_TERMS = terms("reprisal|rampart|arms length|arm's length|feint|addle|bloodbath|second wind|sentinel|guardian|hallowed ground|bulwark|sheltron|holy sheltron|intervention|divine veil|passage of arms|cover|vengeance|damnation|bloodwhetting|raw intuition|nascent flash|shake it off|thrill of battle|holmgang|equilibrium|shadow wall|the blackest night|oblation|dark mind|dark missionary|living dead|living shadow|nebula|camouflage|heart of stone|heart of corundum|heart of light|superbolide|great nebula|aurora|temperance|aquaveil|liturgy of the bell|divine benison|divine caress|asylum|plenary indulgence|benediction|tetragrammaton|sacred soil|expedient|seraphism|seraph|protraction|recitation|deployment tactics|emergency tactics|dissipation|fey illumination|excogitation|collective unconscious|exaltation|celestial intersection|neutral sect|macrocosmos|horoscope|synastry|kerachole|taurochole|haima|panhaima|holos|krasis|zoe|soteria|physis|rhizomata|pepsis|philosophia|eukrasian diagnosis|eukrasian prognosis|mantra|riddle of earth|shade shift|arcane crest|crest of time borrowed|third eye|perfect defense|troubadour|tactician|dismantle|shield samba|improvisation|improvised finish|curing waltz|manaward|magick barrier|radiant aegis|everlasting flight|barrier|mitig")
@@ -29,6 +63,153 @@ export function castCategory(event: Pick<CastEvent, 'abilityName'>): CastFilter 
 }
 
 export const isMitigationAbility = (abilityName: string) => abilityMatchesTerms(abilityName, MITIGATION_TERMS)
+
+export function castFilterLabel(filter: CastFilter): string {
+  return CAST_FILTER_LABELS[filter]
+}
+
+export function castMitigationWindow(event: CastEvent): { start: number; end: number } {
+  const durationMs = event.buffDurationMs ?? Math.max(event.durationMs ?? 0, 15_000)
+  return { start: event.t, end: event.t + durationMs }
+}
+
+export function castEventKey(event: CastEvent): string {
+  return `${event.source}|${event.abilityId}|${event.abilityName}|${event.target}|${event.targetId ?? ''}|${event.t}`
+}
+
+export function selectedCastEventsForAbility(ability: CastAbilityRow | null | undefined, selectedEventKey: string | null | undefined): CastEvent[] {
+  if (!ability) return []
+  const selectedEvent = selectedEventKey
+    ? ability.events.find(event => castEventKey(event) === selectedEventKey)
+    : null
+  return selectedEvent ? [selectedEvent] : ability.events
+}
+
+export function singleSelectedCastEvent(events: CastEvent[]): CastEvent | null {
+  return events.length === 1 ? events[0] : null
+}
+
+export function mitigationReductionPercent(abilityName: string): number {
+  const name = abilityName.toLowerCase().replace(/[’']/g, "'")
+  const reductions: Array<[RegExp, number]> = [
+    [/reprisal/, 0.10],
+    [/feint/, 0.10],
+    [/addle/, 0.10],
+    [/rampart/, 0.20],
+    [/sentinel/, 0.30],
+    [/guardian/, 0.40],
+    [/vengeance/, 0.30],
+    [/damnation/, 0.40],
+    [/bloodwhetting/, 0.10],
+    [/raw intuition/, 0.10],
+    [/nascent flash/, 0.10],
+    [/shadow wall/, 0.30],
+    [/dark mind/, 0.20],
+    [/dark missionary/, 0.10],
+    [/oblation/, 0.10],
+    [/nebula/, 0.30],
+    [/great nebula/, 0.40],
+    [/camouflage/, 0.10],
+    [/heart of stone/, 0.15],
+    [/heart of corundum/, 0.15],
+    [/heart of light/, 0.10],
+    [/aquaveil/, 0.15],
+    [/temperance/, 0.10],
+    [/sacred soil/, 0.10],
+    [/expedient/, 0.10],
+    [/exaltation/, 0.10],
+    [/collective unconscious/, 0.10],
+    [/troubadour/, 0.10],
+    [/tactician/, 0.10],
+    [/shield samba/, 0.10],
+    [/dismantle/, 0.10],
+    [/magick barrier/, 0.10],
+  ]
+  return reductions.find(([pattern]) => pattern.test(name))?.[1] ?? 0
+}
+
+export function buildCastMitigationEffectiveness({
+  selectedPlayer,
+  selectedAbility,
+  selectedEvents,
+  selectedEvent,
+  allCastData,
+  hitData,
+  combatantJobs,
+  partyNames,
+  combatantIds,
+  formatNumber,
+  formatTime,
+}: CastMitigationEffectivenessInput): CastMitigationEffectiveness | null {
+  if (!selectedPlayer || !selectedAbility) return null
+  const abilityName = selectedAbility.name
+  if (!isMitigationAbility(abilityName)) return null
+
+  const reductionPct = mitigationReductionPercent(abilityName)
+  const canEstimate = reductionPct > 0 && reductionPct < 1
+  const windows = selectedEvents
+    .map(castMitigationWindow)
+    .filter(window => window.end > window.start)
+  const incomingHits = (hitData[selectedPlayer] ?? [])
+    .filter(hit => hit.type === 'dmg' && hit.amount > 0)
+  const activeHits = incomingHits.filter(hit =>
+    windows.some(window => hit.t >= window.start && hit.t <= window.end),
+  )
+  const selectedEventKeys = new Set(selectedEvents.map(castEventKey))
+  const otherMitigationWindows = Object.values(allCastData)
+    .flatMap(events => events)
+    .filter(event => {
+      if (!isMitigationAbility(event.abilityName)) return false
+      if (!mitigationCouldAffectPlayer(event, selectedPlayer, combatantJobs, partyNames, combatantIds)) return false
+      return !selectedEventKeys.has(castEventKey(event))
+    })
+    .map(event => ({ event, window: castMitigationWindow(event) }))
+    .filter(({ window }) => window.end > window.start)
+  const stackedHits = activeHits.filter(hit =>
+    otherMitigationWindows.some(({ window }) => hit.t >= window.start && hit.t <= window.end),
+  )
+  const soloHits = activeHits.filter(hit => !stackedHits.includes(hit))
+  const stackedWith = otherMitigationWindows
+    .map(({ event, window }) => {
+      const overlaps = windows
+        .map(selectedWindow => ({
+          start: Math.max(selectedWindow.start, window.start),
+          end: Math.min(selectedWindow.end, window.end),
+        }))
+        .filter(overlap => overlap.end > overlap.start)
+      const overlapMs = overlaps.reduce((sum, overlap) => sum + overlap.end - overlap.start, 0)
+      const expectedReduction = mitigationReductionPercent(event.abilityName)
+      return {
+        key: castEventKey(event),
+        name: event.abilityName,
+        source: event.source,
+        target: event.target,
+        time: formatTime(event.t),
+        overlap: `${(overlapMs / 1000).toFixed(overlapMs >= 10_000 ? 0 : 1)}s`,
+        expected: expectedReduction > 0 ? `${(expectedReduction * 100).toFixed(0)}%` : '—',
+        overlapMs,
+      }
+    })
+    .filter(row => row.overlapMs > 0)
+    .sort((a, b) => b.overlapMs - a.overlapMs || a.name.localeCompare(b.name))
+  const estimatedReduced = canEstimate
+    ? activeHits.reduce((sum, hit) => sum + (hit.amount / (1 - reductionPct) - hit.amount), 0)
+    : 0
+  const estimatedWithoutThisMit = activeHits.reduce((sum, hit) =>
+    sum + (canEstimate ? hit.amount / (1 - reductionPct) : hit.amount),
+  0)
+
+  return {
+    expected: canEstimate ? `${(reductionPct * 100).toFixed(0)}%` : '—',
+    hits: `${activeHits.length}`,
+    stackedHits: `${stackedHits.length}`,
+    soloHits: `${soloHits.length}`,
+    mitigated: estimatedReduced > 0 ? formatNumber(Math.round(estimatedReduced)) : '—',
+    withoutThisMit: estimatedWithoutThisMit > 0 ? formatNumber(Math.round(estimatedWithoutThisMit)) : '—',
+    scope: selectedEvent ? 'Selected Cast' : 'All Casts',
+    stackedWith,
+  }
+}
 
 export function buildCastPlayerData(events: CastEvent[], rawData: CombatantAbilityData, healingReceivedData: Record<string, CombatantAbilityData>, selectedPlayer: string) {
   if (events.length === 0) return null
@@ -84,6 +265,31 @@ export function buildCastPlayerData(events: CastEvent[], rawData: CombatantAbili
     return { name, casts: evts.length, avgInterval: (intervals.reduce((a, b) => a + b, 0) / Math.max(intervals.length, 1) / 1000).toFixed(1), topTargets: targets.map(target => [target.label, target.casts || target.hits] as [string, number]).slice(0, 3), targets, events: evts }
   }).sort((a, b) => b.casts - a.casts)
   return { abilities, maxDuration: Math.max(...events.map(event => event.t)), events }
+}
+
+export function buildCastTimelineContext(
+  playerData: CastPlayerData | null,
+  filters: Set<CastFilter>,
+  collapsedGroups: Set<CastFilter>,
+  resourceSamples: ResourceSample[],
+): CastTimelineContext {
+  const duration = playerData ? Math.ceil((playerData.maxDuration / 1000) / 10) * 10 : 0
+  const rows = playerData ? buildCastTimelineRows(playerData.abilities, filters) : []
+  return {
+    duration,
+    timeTicks: buildCastTimeTicks(duration),
+    rows,
+    groups: buildCastTimelineGroups(rows, collapsedGroups),
+    pixelWidth: Math.max(1100, Math.ceil(duration * 14)),
+    resourceTracks: buildCastResourceTracks(resourceSamples, duration),
+  }
+}
+
+export function buildCastTimeTicks(durationSec: number): number[] {
+  if (durationSec <= 0) return []
+  const ticks: number[] = []
+  for (let t = 0; t <= durationSec; t += 30) ticks.push(t)
+  return ticks
 }
 
 export function buildCastTimelineRows(abilities: CastAbilityRow[], filters: Set<CastFilter>): CastTimelineRow[] {
@@ -153,6 +359,38 @@ export function castCooldownWidth(event: CastEvent, durationSec: number, cooldow
   return `${Math.max(0, Math.min((cooldownMs / 1000) / durationSec * 100, 100 - startPct))}%`
 }
 
+export function castCooldownLabel(cooldownMs: number): string {
+  return cooldownMs ? `${Math.round(cooldownMs / 1000)}s cooldown` : ''
+}
+
+export function buildCastInspectorRows(ability: CastAbilityRow | null | undefined): CastInspectorRow[] {
+  return ability ? [
+    ['Ability', ability.name],
+    ['Casts', String(ability.casts)],
+    ['Avg Interval', `${ability.avgInterval}s`],
+    ['Target(s)', String(ability.targets.length)],
+  ] : []
+}
+
+export function buildCastEventInspectorRows(event: CastEvent | null | undefined, formatTime: (ms: number) => string): CastInspectorRow[] {
+  return event ? [
+    ['Time', formatTime(event.t)],
+    ['Target', event.target || '—'],
+    ['Duration', `${((event.buffDurationMs ?? event.durationMs ?? 0) / 1000).toFixed(1)}s`],
+  ] : []
+}
+
+export function buildMitigationInspectorRows(mitigation: CastMitigationEffectiveness | null | undefined): CastInspectorRow[] {
+  return mitigation ? [
+    ['Scope', mitigation.scope],
+    ['Expected Reduction', mitigation.expected],
+    ['Hits in Duration', mitigation.hits],
+    ['Solo / Stacked Hits', `${mitigation.soloHits} / ${mitigation.stackedHits}`],
+    ['Reduced Damage Taken By', mitigation.mitigated],
+    ['Damage Without This Mit', mitigation.withoutThisMit],
+  ] : []
+}
+
 function scoreTarget({ damage, healing, overheal, hits, casts }: CastTargetRow) {
   return damage + healing + overheal + hits + casts
 }
@@ -170,4 +408,22 @@ function labelDuplicateTargets(targets: CastTargetRow[]) {
     seen.set(target.name, nextIndex)
     target.label = `${target.name} #${nextIndex}`
   }
+}
+
+function mitigationCouldAffectPlayer(
+  event: CastEvent,
+  selectedPlayer: string,
+  combatantJobs: Record<string, string>,
+  partyNames: string[],
+  combatantIds: Record<string, string>,
+): boolean {
+  if (event.source === selectedPlayer || event.target === selectedPlayer) return true
+  if (!event.target) return true
+
+  const targetHasJob = Boolean(combatantJobs[event.target])
+  const targetIsParty = partyNames.includes(event.target) || targetHasJob
+  if (targetIsParty) return false
+
+  const targetId = event.targetId || combatantIds[event.target] || ''
+  return targetId.startsWith('4') || !targetHasJob
 }

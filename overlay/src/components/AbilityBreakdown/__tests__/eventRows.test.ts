@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import type { BreakdownEventRow } from '../types'
 import { deathEventsFor } from '../deathTransforms'
 import type { DeathRecord } from '@shared/configSchema'
-import { useEventRows } from '../eventRows'
+import { buildActiveFilterChips, buildEventInspectorRows, useEventRows } from '../eventRows'
 
 const createDeath = (partial: Partial<DeathRecord> = {}): DeathRecord => ({
   targetId: '10',
@@ -133,5 +133,34 @@ describe('useEventRows', () => {
 
     expect(rows.eventRowsRaw.value).toEqual([])
     expect(rows.eventRows.value).toEqual([])
+  })
+})
+
+describe('event display helpers', () => {
+  it('builds active filter chips and inspector rows', () => {
+    expect(buildActiveFilterChips({
+      pullStatusLabel: 'Historical',
+      selectedPlayer: 'Alice',
+      metricLabel: 'rDPS',
+      showEnemies: true,
+      showFriendlyNPCs: true,
+      selectedAbility: 'Fire',
+      eventWindowOnly: true,
+      selectedDeathIndex: 1,
+      hasSelectedDeathWindow: true,
+    })).toEqual(['Pull=Historical', 'Player=Alice', 'Metric=rDPS', 'Show Enemies', 'Show NPCs', 'Ability=Fire', 'Window=Death #2'])
+
+    expect(buildEventInspectorRows({
+      rowCount: 5,
+      actorScope: 'all',
+      selectedAbility: '',
+      eventWindowOnly: false,
+      hasSelectedDeathWindow: false,
+    })).toEqual([
+      ['Rows', '5'],
+      ['Actor Scope', 'All actors'],
+      ['Selected Ability', 'None'],
+      ['Window', 'Whole pull'],
+    ])
   })
 })

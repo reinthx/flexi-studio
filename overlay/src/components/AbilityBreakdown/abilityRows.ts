@@ -1,11 +1,14 @@
 import type { AbilityStats, CastEvent, CombatantAbilityData } from '@shared/configSchema'
-import { pctOf } from './formatters'
+import { hitRange, overhealPct, pctOf, rawHealingAverage } from './formatters'
 
 export type AbilitySortColumn = 'totalDamage' | 'dps' | 'hits' | 'maxHit' | 'critPct' | 'abilityName'
 export type TakenSortColumn = 'totalDamage' | 'hits' | 'maxHit' | 'abilityName'
 export type AbilityBreakdownRow = AbilityStats & { pct: string; avg: number; dps: number; minHit: number; critPct: string; abilityName: string }
 export type DoneTargetAbilityRow = { abilityId: string; abilityName: string; casts: number; damage: number; healing: number; overheal: number; hits: number }
 export type DoneTargetRow = { target: string; casts: number; damage: number; damageHits: number; healing: number; overheal: number; healingHits: number; abilityCount: number; abilities: DoneTargetAbilityRow[]; pct: string }
+export type DoneSourceRow = { name: string; total: number; hits: number; abilityCount: number; dps: number; pct: string }
+export type PartyHighestHit = { actor: string; ability: string; amount: number }
+export type InspectorRow = [string, string]
 
 export function totalAbilityDamage(data: CombatantAbilityData): number {
   return Object.values(data).reduce((sum, ability) => sum + ability.totalDamage, 0)
@@ -70,6 +73,98 @@ export function buildHealingAbilityRows(
 ): AbilityBreakdownRow[] {
   return buildAbilityRows(data, total, durationSec)
     .sort((a, b) => (b.totalDamage + (b.overheal ?? 0)) - (a.totalDamage + (a.overheal ?? 0)))
+}
+
+export function buildDoneInspectorRows(
+  ability: AbilityBreakdownRow | null | undefined,
+  encounterDurationSec: number,
+  format: (value: number) => string,
+): InspectorRow[] {
+  return ability ? [
+    ['Ability', ability.abilityName],
+    ['Total', format(ability.totalDamage)],
+    ['DPS', encounterDurationSec > 0 ? format(ability.dps) : '—'],
+    ['Rate', `${ability.pct}%`],
+    ['Range', `${format(ability.minHit)} - ${format(ability.maxHit)}`],
+    ['Crit %', ability.critPct],
+    ['Crit Range', hitRange(ability.critMinHit, ability.critMaxHit, format)],
+    ['Direct Hit %', pctOf(ability.directHits, ability.hits)],
+    ['Direct Hit Range', hitRange(ability.directMinHit, ability.directMaxHit, format)],
+    ['Crit Direct Hit %', pctOf(ability.critDirectHits, ability.hits)],
+    ['Crit Direct Hit Range', hitRange(ability.critDirectMinHit, ability.critDirectMaxHit, format)],
+  ] : []
+}
+
+export function buildDoneSourceRows(
+  actorNames: string[],
+  allData: Record<string, CombatantAbilityData>,
+  durationSec: number,
+  isEnemy: (name: string) => boolean,
+): DoneSourceRow[] {
+  const rows = actorNames
+    .filter(name => !isEnemy(name))
+    .map(name => {
+      const abilityRows = Object.values(allData[name] ?? {})
+      const total = abilityRows.reduce((sum, ability) => sum + ability.totalDamage, 0)
+      return {
+        name,
+        total,
+        hits: abilityRows.reduce((sum, ability) => sum + ability.hits, 0),
+        abilityCount: abilityRows.length,
+        dps: durationSec > 0 ? Math.round(total / durationSec) : 0,
+      }
+    })
+    .filter(row => row.total > 0)
+  const total = rows.reduce((sum, row) => sum + row.total, 0)
+  return rows
+    .map(row => ({ ...row, pct: total > 0 ? ((row.total / total) * 100).toFixed(1) : '0.0' }))
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
+}
+
+export function partyHighestHit(
+  actorNames: string[],
+  allData: Record<string, CombatantAbilityData>,
+  isEnemy: (name: string) => boolean,
+): PartyHighestHit | null {
+  let best: PartyHighestHit | null = null
+  for (const name of actorNames) {
+    if (isEnemy(name)) continue
+    for (const ability of Object.values(allData[name] ?? {})) {
+      if (!best || ability.maxHit > best.amount) {
+        best = { actor: name, ability: ability.abilityName, amount: ability.maxHit }
+      }
+    }
+  }
+  return best
+}
+
+export function buildTakenInspectorRows(
+  ability: AbilityBreakdownRow | null | undefined,
+  mode: 'damage' | 'healing',
+  nearDeathCounts: Map<string, number>,
+  healingAbilityCounts: Map<string, number>,
+  format: (value: number) => string,
+): InspectorRow[] {
+  if (!ability) return []
+  const rows: InspectorRow[] = [
+    ['Ability', ability.abilityName],
+    [mode === 'healing' ? 'Effective' : 'Total', format(ability.totalDamage)],
+    ['Share', `${ability.pct}%`],
+    [mode === 'healing' ? 'Heals' : 'Hits', String(ability.hits)],
+    ['Average', format(mode === 'healing' ? rawHealingAverage(ability) : ability.avg)],
+    ['Near Deaths', String((mode === 'healing' ? healingAbilityCounts : nearDeathCounts).get(ability.abilityName) ?? 'None tracked')],
+  ]
+  if (mode === 'healing') rows.splice(2, 0, ['Overheal', `${format(ability.overheal ?? 0)} · ${overhealPct(ability)}%`])
+  return rows
+}
+
+export function selectAbilityRow<T extends { abilityName: string }>(rows: T[], selectedAbility: string): T | null {
+  return rows.find(row => row.abilityName === selectedAbility) ?? rows[0] ?? null
+}
+
+export function highestHitAbility<T extends { maxHit: number }>(rows: T[]): T | null {
+  return rows.reduce((best, row) =>
+    !best || row.maxHit > best.maxHit ? row : best, null as T | null)
 }
 
 export function buildDoneTargetRows(

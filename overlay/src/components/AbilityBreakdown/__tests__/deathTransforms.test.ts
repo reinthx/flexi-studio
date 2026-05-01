@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { sortPlayerDeaths, deathEventsFor, formatHpValue, deathHpBars } from '../deathTransforms'
-import type { DeathRecord, HpSample, HitRecord, DeathEvent } from '@shared/configSchema'
+import { castsInDeathWindow, deathEventsFor, deathHealingAbilityCounts, deathHpBars, deathRecapRows, deathRelatedDamage, deathsForActor, deathTimeSecondsForActor, deathWindow, formatHpValue, nearDeathAbilityCounts, overviewDeathEvents, resTimeSecondsForActor, sortPlayerDeaths } from '../deathTransforms'
+import type { CastEvent, DeathRecord, HpSample, HitRecord, DeathEvent } from '@shared/configSchema'
 
 const createDeathRecord = (partial: Partial<DeathRecord> = {}): DeathRecord => ({
   targetId: '10',
@@ -29,6 +29,29 @@ const createHit = (partial: Partial<HitRecord>): HitRecord => ({
   hitType: 'dmg',
   isDeathBlow: false,
   sourceName: 'Monster',
+  ...partial,
+})
+const createDeathEvent = (partial: Partial<DeathEvent>): DeathEvent => ({
+  t: 1000,
+  type: 'dmg',
+  abilityName: 'Attack',
+  sourceName: 'Monster',
+  amount: 5000,
+  hpBefore: 0.8,
+  hpAfter: 0.05,
+  hpBeforeRaw: 8000,
+  hpAfterRaw: 500,
+  maxHp: 10000,
+  isDeathBlow: false,
+  ...partial,
+})
+const createCastEvent = (partial: Partial<CastEvent>): CastEvent => ({
+  t: 1000,
+  abilityId: 'cast',
+  abilityName: 'Cast',
+  source: 'Player',
+  target: 'Boss',
+  type: 'instant',
   ...partial,
 })
 
@@ -157,5 +180,71 @@ describe('deathHpBars', () => {
 
     expect(dmgBars.length).toBeGreaterThan(0)
     expect(healBars.length).toBeGreaterThan(0)
+  })
+})
+
+describe('death context counts', () => {
+  it('filters actor deaths and counts near-death and healing abilities', () => {
+    const deaths = [
+      createDeathRecord({
+        targetName: 'Player',
+        events: [
+          createDeathEvent({ t: 2000, abilityName: 'Tankbuster', type: 'dmg', hpAfter: 0.05 }),
+          createDeathEvent({ t: 20_000, abilityName: 'Late Heal', type: 'heal', hpAfter: 0.4 }),
+        ],
+      }),
+      createDeathRecord({
+        targetName: 'Player',
+        events: [
+          createDeathEvent({ t: 12_000, abilityName: 'Stack Marker', type: 'dmg', hpAfter: 0.08 }),
+          createDeathEvent({ t: 12_500, abilityName: 'Benediction', type: 'heal', hpAfter: 1 }),
+        ],
+      }),
+      createDeathRecord({ targetName: 'Other', events: [createDeathEvent({ abilityName: 'Other Hit' })] }),
+    ]
+
+    const playerDeaths = deathsForActor(deaths, 'Player')
+    expect(playerDeaths).toHaveLength(2)
+    expect(deathTimeSecondsForActor(deaths, 'Player')).toBe(10)
+    expect(resTimeSecondsForActor([createDeathRecord({ targetName: 'Player', resurrectTime: 12_000 })], 'Player')).toBe(12)
+    expect(Array.from(nearDeathAbilityCounts(playerDeaths))).toEqual([['Tankbuster', 1]])
+    expect(Array.from(deathHealingAbilityCounts(playerDeaths))).toEqual([['Late Heal', 1], ['Benediction', 1]])
+  })
+})
+
+describe('death detail transforms', () => {
+  it('builds related damage, windows, recap rows, casts, and overview death events', () => {
+    const death = createDeathRecord({
+      targetName: 'Player',
+      timestamp: 10_000,
+      resurrectTime: 15_000,
+      events: [
+        createDeathEvent({ t: 5000, abilityName: 'Raidwide', amount: 1000 }),
+        createDeathEvent({ t: 7000, abilityName: 'Raidwide', amount: 2000, isEstimated: true }),
+        createDeathEvent({ t: 9000, abilityName: 'Killing Blow', amount: 9000, isDeathBlow: true }),
+      ],
+    })
+    const events = deathEventsFor(death)
+    const window = deathWindow(death, events)
+
+    expect(deathRelatedDamage(events)).toEqual([{ ability: 'Raidwide', amount: 3000 }])
+    expect(window).toEqual({ start: 5000, end: 10_000 })
+    expect(castsInDeathWindow([
+      createCastEvent({ t: 4000, abilityName: 'Early' }),
+      createCastEvent({ t: 6000, abilityName: 'Inside' }),
+      createCastEvent({ t: 12_000, abilityName: 'Late' }),
+    ], window).map(event => event.abilityName)).toEqual(['Inside'])
+    expect(deathRecapRows(death, window, events, ms => `${ms / 1000}s`)).toEqual([
+      ['Time', '10s'],
+      ['Raised', '15s'],
+      ['Window Length', '5s'],
+      ['Estimated', 'Yes'],
+    ])
+    expect(overviewDeathEvents([death], ms => `${ms / 1000}s`)[0]).toMatchObject({
+      key: 'death-0-10000',
+      label: 'Player died',
+      detail: 'at 10s · raised 15s',
+      type: 'death',
+    })
   })
 })

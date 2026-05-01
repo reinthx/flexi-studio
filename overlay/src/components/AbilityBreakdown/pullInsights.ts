@@ -1,7 +1,10 @@
+import type { CastEvent } from '@shared/configSchema'
+import { RAID_BUFFS } from '@shared/raidBuffs'
 import type { PullEntry } from './types'
 import { formatEntryDelta, parseEntryDuration } from './formatters'
 
 type DeathCluster = { start: number; end: number; count: number }
+type PullPartyMember = { name?: string }
 type PullDamageMetricFns = {
   attributionDamageFor: (name: string) => number
   dpsFor: (name: string) => number
@@ -9,6 +12,86 @@ type PullDamageMetricFns = {
   rdpsGivenFor: (name: string) => number
   rdpsTakenFor: (name: string) => number
   deathCountFor: (name: string) => number
+}
+
+export type PullDamageRow = {
+  name: string
+  total: number
+  pct: string
+  width: string
+  dps: number
+  rdps: number
+  given: number
+  taken: number
+  deaths: number
+}
+
+export type PullDashboardContext = {
+  historicalPullEntries: PullEntry[]
+  selectedPullEntry: PullEntry | null
+  selectedEncounterPullEntries: PullEntry[]
+  previousPullEntry: PullEntry | null
+  bestPullEntry: PullEntry | null
+  bestProgressPullEntry: PullEntry | null
+  enemyProgressHeadline: string
+  enemyProgressMeta: string
+  enemyProgressDetail: string
+  pullDashboardNotes: string[]
+}
+
+const RAID_BUFF_JOBS = new Set([
+  'AST', 'BRD', 'DNC', 'DRG', 'MNK', 'NIN', 'PCT', 'RDM', 'RPR', 'SCH', 'SMN',
+])
+const HEALER_JOBS = new Set(['WHM', 'SCH', 'AST', 'SGE'])
+const DIRECT_HEAL_ABILITIES = new Set(['cure', 'cure ii', 'medica', 'benefic', 'diagnosis', 'heal', 'heal ii'])
+
+export function pullHasRaidBuffCredit(rdpsGiven: Record<string, number>): boolean {
+  return Object.values(rdpsGiven).some(value => value > 0)
+}
+
+export function pullHasRaidBuffCast(castData: Record<string, CastEvent[]>): boolean {
+  return Object.values(castData).some(casts =>
+    casts.some(cast => {
+      const abilityKey = cast.abilityName.trim().toLowerCase()
+      const effectKey = cast.effectName?.trim().toLowerCase() ?? ''
+      return !!RAID_BUFFS[abilityKey] || !!RAID_BUFFS[effectKey]
+    }),
+  )
+}
+
+export function partyHasRaidBuffJobs(partyData: PullPartyMember[], visibleCombatants: string[], jobFor: (name: string) => string): boolean {
+  const jobs = new Set<string>()
+  for (const member of partyData) {
+    if (member.name) jobs.add(jobFor(member.name))
+  }
+  for (const name of visibleCombatants) {
+    const job = jobFor(name)
+    if (job) jobs.add(job)
+  }
+  return Array.from(jobs).some(job => RAID_BUFF_JOBS.has(job))
+}
+
+export function pullBuffWarnings(options: {
+  activeView: string
+  selectedName: string
+  castData: Record<string, CastEvent[]>
+  jobFor: (name: string) => string
+  hasRaidBuffJobs: boolean
+  hasRaidBuffCast: boolean
+  hasRaidBuffCredit: boolean
+}): string[] {
+  if (options.activeView !== 'pulls') return []
+  const warnings: string[] = []
+  const job = options.jobFor(options.selectedName)
+  if (HEALER_JOBS.has(job)) {
+    const casts = options.castData[options.selectedName] ?? []
+    const abilityNamesLower = new Set(casts.map(c => c.abilityName.toLowerCase()))
+    if (!Array.from(DIRECT_HEAL_ABILITIES).some(name => abilityNamesLower.has(name))) warnings.push('No direct heals cast')
+  }
+  if (options.hasRaidBuffJobs && !options.hasRaidBuffCast && !options.hasRaidBuffCredit) {
+    warnings.push('No raid buffs detected')
+  }
+  return warnings
 }
 
 export function pullEnemyHpDetail(entry: PullEntry | null | undefined, format: (value: number) => string): string {
@@ -85,7 +168,38 @@ export function pullDashboardNotes(
   return notes.slice(0, 5)
 }
 
-export function buildPullDamageRows(actorNames: string[], metrics: PullDamageMetricFns) {
+export function buildPullDashboardContext(
+  pullList: PullEntry[],
+  activePullIndex: number | null,
+  clusters: DeathCluster[],
+  formatNumber: (value: number) => string,
+  formatSeconds: (value: number) => string,
+  formatTime: (ms: number) => string,
+): PullDashboardContext {
+  const historicalPullEntries = pullList.filter(entry => entry.index !== null)
+  const selectedPullEntry = pullList.find(entry => entry.index === activePullIndex) ?? pullList[0] ?? null
+  const selectedEncounter = selectedPullEntry?.encounterId
+  const selectedEncounterPullEntries = selectedEncounter
+    ? historicalPullEntries.filter(entry => entry.encounterId === selectedEncounter)
+    : historicalPullEntries
+  const previous = previousPullEntry(selectedPullEntry, selectedEncounterPullEntries)
+  const best = bestPullEntry(selectedEncounterPullEntries)
+  const bestProgress = bestProgressPullEntry(selectedEncounterPullEntries)
+  return {
+    historicalPullEntries,
+    selectedPullEntry,
+    selectedEncounterPullEntries,
+    previousPullEntry: previous,
+    bestPullEntry: best,
+    bestProgressPullEntry: bestProgress,
+    enemyProgressHeadline: enemyProgressHeadline(selectedPullEntry),
+    enemyProgressMeta: enemyProgressMeta(selectedPullEntry),
+    enemyProgressDetail: enemyProgressDetail(selectedPullEntry, bestProgress, formatNumber),
+    pullDashboardNotes: pullDashboardNotes(selectedPullEntry, selectedEncounterPullEntries, previous, best, bestProgress, clusters, formatNumber, formatSeconds, formatTime),
+  }
+}
+
+export function buildPullDamageRows(actorNames: string[], metrics: PullDamageMetricFns): PullDamageRow[] {
   const totalDamage = actorNames.reduce((sum, name) => sum + metrics.attributionDamageFor(name), 0)
   return actorNames
     .map(name => {

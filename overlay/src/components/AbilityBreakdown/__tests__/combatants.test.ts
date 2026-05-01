@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { groupCombatants, isEnemyId, isNpcId } from '../combatants'
+import { actorJobFor, blurTextStyle, groupCombatants, isEnemyId, isNpcId, nameStyleFor, resolveSelectedCombatant, visibleCombatantNames } from '../combatants'
 import type { PartyMemberData } from '../types'
 
 const partyMember = (name: string, partyType: string | undefined, job = 'WAR'): PartyMemberData => ({ id: 1, name, inParty: true, partyType, job })
@@ -19,4 +19,31 @@ it('keeps the self alliance first and collapses other alliance groups', () => {
 
 it('uses the party group when names have no party labels', () => {
   expect(groupCombatants(['Solo'], [], '')).toEqual([{ label: 'Party', names: ['Solo'], collapsed: false }])
+})
+
+it('filters visible combatants and resolves the selected actor', () => {
+  const visible = visibleCombatantNames(['Player', 'Enemy', 'NPC'], false, false, name => name === 'Enemy', name => name === 'NPC')
+  expect(visible).toEqual(['Player'])
+  expect(resolveSelectedCombatant({
+    selected: 'Enemy',
+    initName: 'Player',
+    selfName: 'Self',
+    allData: { Player: {}, Self: {}, Enemy: {} },
+    visibleCombatants: visible,
+  })).toBe('Player')
+  expect(resolveSelectedCombatant({
+    selected: '',
+    initName: '',
+    selfName: 'Self',
+    allData: { Self: {} },
+    visibleCombatants: ['Player'],
+  })).toBe('Self')
+})
+
+it('resolves actor jobs and blur name styles', () => {
+  expect(actorJobFor('Alice', { Alice: 'paladin' }, [], job => job.toUpperCase())).toBe('PALADIN')
+  expect(actorJobFor('Bob', {}, [partyMember('Bob', 'Party', 'whm')], job => job.toUpperCase())).toBe('WHM')
+  expect(nameStyleFor('Other', true, 'Self')).toBe(blurTextStyle)
+  expect(nameStyleFor('Self', true, 'Self')).toBeUndefined()
+  expect(nameStyleFor('Other', false, 'Self')).toBeUndefined()
 })
