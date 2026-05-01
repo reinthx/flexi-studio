@@ -1140,7 +1140,7 @@ describe('overlay liveData store', () => {
     store.stop()
   })
 
-  it('excludes known friendly duty NPCs when add-combatant hints were missed', async () => {
+  it('uses player damage to identify objectives when add-combatant hints were missed', async () => {
     const store = await createStore()
     store.start()
 

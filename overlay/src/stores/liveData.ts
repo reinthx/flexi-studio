@@ -295,15 +295,22 @@ export const useLiveDataStore = defineStore('liveData', () => {
     pullOutcomeLabel?: string
   } {
     const enemyCandidates = new Map<string, { name: string; id: string }>()
+    const playerDamagedEnemyKeys = new Set<string>()
+    const playerDamagedEnemyNames = new Set<string>()
+    const enemyKey = (name: string, id = '') => id ? `${name}|${id}` : name
+    const addPlayerDamagedEnemy = (name: string, id = '') => {
+      if (!name || !id || !isObjectiveEnemy(name, id)) return
+      playerDamagedEnemyKeys.add(enemyKey(name, id))
+      playerDamagedEnemyNames.add(name)
+    }
     const addEnemyCandidate = (name: string, id = '') => {
       if (!name) return
       if (id && !id.startsWith('40')) return
-      if (isFriendlyNpcName(name)) return
       const knownId = id || ids[name] || ''
       if (knownId && !knownId.startsWith('40')) return
       if (knownId && !isObjectiveEnemy(name, knownId)) return
       if (!knownId && ids[name] && !ids[name].startsWith('40')) return
-      const key = knownId ? `${name}|${knownId}` : name
+      const key = enemyKey(name, knownId)
       enemyCandidates.set(key, { name, id: knownId })
     }
     const parseEnemyKey = (key: string) => {
@@ -324,24 +331,36 @@ export const useLiveDataStore = defineStore('liveData', () => {
       if (exactEnemyDeathKeys.has(`${name}|${id}`)) return true
       return hasLiveNameSample(name)
     }
+    for (const [sourceName, abilities] of Object.entries(abilityData)) {
+      const sourceId = ids[sourceName] ?? ''
+      const playerSideSource = !sourceId || !isEnemyId(sourceId)
+      for (const ability of Object.values(abilities)) {
+        for (const instance of Object.values(ability.targetInstances ?? {})) {
+          if (playerSideSource) addPlayerDamagedEnemy(instance.name, instance.id)
+        }
+      }
+    }
     for (const [name, samples] of Object.entries(resources)) {
       const id = ids[name]
       if (!id?.startsWith('40')) continue
       const latest = samples.at(-1)
       const latestHasHp = latest !== undefined && latest.maxHp > 0 && latest.currentHp > 0 && latest.hp > 0
       if (!shouldAddEvidencedCandidate(name, id) && !latestHasHp) continue
+      if (playerDamagedEnemyKeys.size > 0 && !playerDamagedEnemyKeys.has(enemyKey(name, id))) continue
       addEnemyCandidate(name, id)
     }
     for (const key of Object.keys(enemyDeaths)) {
       const { name, id } = parseEnemyKey(key)
       if (!id && exactEnemyDeathNames.has(name)) continue
+      if (playerDamagedEnemyKeys.size > 0 && !playerDamagedEnemyKeys.has(enemyKey(name, id)) && !playerDamagedEnemyNames.has(name)) continue
       addEnemyCandidate(name, id)
     }
+    const evidencedEnemyKeys = new Set(enemyCandidates.keys())
     const evidencedEnemyNames = new Set(Array.from(enemyCandidates.values()).map(candidate => candidate.name))
     for (const abilities of Object.values(abilityData)) {
       for (const ability of Object.values(abilities)) {
         for (const instance of Object.values(ability.targetInstances ?? {})) {
-          if (!evidencedEnemyNames.has(instance.name)) continue
+          if (!evidencedEnemyKeys.has(enemyKey(instance.name, instance.id)) && !evidencedEnemyNames.has(instance.name)) continue
           if (!shouldAddEvidencedCandidate(instance.name, instance.id)) continue
           addEnemyCandidate(instance.name, instance.id)
         }
@@ -760,16 +779,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return id.startsWith('40')
   }
 
-  function isFriendlyNpcName(name: string): boolean {
-    const normalized = name.trim().toLowerCase()
-    return /'s avatar$/.test(normalized) || normalized === 'treno citizen'
-  }
-
   function isObjectiveEnemy(name: string, id: string): boolean {
     if (!isEnemyId(id)) return false
     if (nonObjectiveNpcIds.has(id)) return false
     if (nonObjectiveNpcNames.has(name)) return false
-    return !isFriendlyNpcName(name)
+    return true
   }
 
   function recordNpcObjectiveHint(name: string, id: string, jobOrClass: string): void {
