@@ -379,7 +379,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const latest = samples.at(-1)
         const duplicateName = (candidateNameCounts.get(name) ?? 0) > 1
         const killed = enemyDeaths[key] !== undefined ||
-          (!duplicateName && (enemyDeaths[name] !== undefined || samples.some(sample => sample.currentHp <= 1 || sample.hp <= 0)))
+          (!duplicateName && (enemyDeaths[name] !== undefined || samples.some(sample => sample.currentHp <= 0 || sample.hp <= 0)))
         const maxHp = latest?.maxHp ?? 0
         const currentHp = latest && maxHp > 0
           ? (killed ? 0 : Math.max(0, Math.min(latest.currentHp, maxHp)))
@@ -387,8 +387,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const percent = latest && maxHp > 0
           ? (killed ? 0 : Math.max(0, Math.min(100, latest.hp * 100)))
           : undefined
-        return { key, name, id, percent, currentHp, maxHp, killed }
+        const ignored = !killed && currentHp === 1
+        return { key, name, id, percent, currentHp, maxHp, killed, ignored }
       })
+      .filter(enemy => !enemy.ignored)
       .sort((a, b) => b.maxHp - a.maxHp || a.name.localeCompare(b.name))
 
     if (enemies.length === 0) {

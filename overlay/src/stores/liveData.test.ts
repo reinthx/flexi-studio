@@ -970,7 +970,7 @@ describe('overlay liveData store', () => {
     store.stop()
   })
 
-  it('treats one HP objective enemies as defeated when no death line arrives', async () => {
+  it('ignores one HP objective candidates when no death line arrives', async () => {
     const store = await createStore()
     store.start()
 
@@ -1001,13 +1001,12 @@ describe('overlay liveData store', () => {
     const historicalPull = payload.pullList.find((entry: { index: number | null }) => entry.index === 0)
 
     expect(historicalPull).toMatchObject({
-      pullOutcome: 'clear',
-      pullOutcomeLabel: 'Clear',
-      bossKilled: true,
-      enemyCount: 1,
-      defeatedEnemyCount: 1,
+      pullOutcome: 'unknown',
+      pullOutcomeLabel: 'Unknown',
     })
-    expect(historicalPull.bossPercentLabel).toBe('Defeated')
+    expect(historicalPull.enemyCount).toBeUndefined()
+    expect(historicalPull.defeatedEnemyCount).toBeUndefined()
+    expect(historicalPull.bossPercentLabel).toBeUndefined()
 
     store.stop()
   })
