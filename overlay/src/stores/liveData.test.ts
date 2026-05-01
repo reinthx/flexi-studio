@@ -102,9 +102,24 @@ vi.mock('@shared', () => {
     }),
     startEvents: vi.fn(),
     callHandler: mocks.callHandler,
-    resolvePets: vi.fn((combatants: Record<string, Record<string, string>>) => ({
-      combatants: Object.values(combatants),
-    })),
+    resolvePets: vi.fn((combatants: Record<string, Record<string, string>>, opts?: { show?: boolean; mergeWithOwner?: boolean }) => {
+      const values = Object.values(combatants)
+      const isPet = (name: string) => /\(.+\)$/.test(name)
+      if (opts?.mergeWithOwner) {
+        const merged = values.filter(c => !isPet(c.name)).map(c => ({ ...c }))
+        for (const pet of values.filter(c => isPet(c.name))) {
+          const ownerName = pet.name.match(/\((.+)\)$/)?.[1]
+          const owner = merged.find(c => c.name === ownerName)
+          if (!owner) continue
+          owner.damage = String((parseFloat(owner.damage ?? '0') || 0) + (parseFloat(pet.damage ?? '0') || 0))
+          owner.encdps = String((parseFloat(owner.encdps ?? '0') || 0) + (parseFloat(pet.encdps ?? '0') || 0))
+        }
+        return { combatants: merged }
+      }
+      return {
+        combatants: opts?.show ? values : values.filter(c => !isPet(c.name)),
+      }
+    }),
     TransitionEngine,
     DEFAULT_PROFILE,
     deepClone,
@@ -385,6 +400,126 @@ describe('overlay liveData store', () => {
     })
 
     expect(store.sessionPulls[0].combatants[0].rdps).toBe('100')
+
+    store.stop()
+  })
+
+  it('keeps unmerged pet combatants available for historical breakdown metrics', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData({
+      ...combatData(false, {
+        Alice: { name: 'Alice', Job: 'SMN', encdps: '1000', damage: '60000', damageperc: '92', deaths: '0' },
+        'Carbuncle(Alice)': { name: 'Carbuncle(Alice)', Job: '', encdps: '100', damage: '6000', damageperc: '8', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(false, {}).Encounter,
+        duration: '01:00',
+        DURATION: '60',
+      },
+    })
+
+    store.viewPull(0)
+    store.broadcastForCombatant('Alice')
+    const payload = JSON.parse(localStorage.getItem('flexi-breakdown-snapshot') ?? '{}')
+
+    expect(payload.damageByCombatant).toMatchObject({
+      Alice: 60000,
+      'Carbuncle(Alice)': 6000,
+    })
+
+    store.stop()
+  })
+
+  it('starts a fresh enemy snapshot when logs for a different encounter arrive after a stashed pull', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        title: 'Mistwake Rock',
+        duration: '00:44',
+        DURATION: '44',
+      },
+    })
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      1: '2026-05-01T12:00:00.0000000-06:00',
+      2: '10AAAAAA',
+      3: 'Alice',
+      4: '0001',
+      5: 'Heavy Swing',
+      6: '40000001',
+      7: 'Thancres Avatar',
+      8: '03',
+      9: '27100000',
+      24: '0',
+      25: '1000000',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '25',
+      1: '2026-05-01T12:00:01.0000000-06:00',
+      2: '40000001',
+      3: 'Thancres Avatar',
+    }))
+    mocks.listeners.CombatData({
+      ...combatData(false, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(false, {}).Encounter,
+        title: 'Mistwake Rock',
+        duration: '00:44',
+        DURATION: '44',
+      },
+    })
+
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      1: '2026-05-01T12:01:00.0000000-06:00',
+      2: '10AAAAAA',
+      3: 'Alice',
+      4: '0001',
+      5: 'Heavy Swing',
+      6: '40000002',
+      7: 'Amdusias',
+      8: '03',
+      9: '27100000',
+      24: '0',
+      25: '1000000',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '25',
+      1: '2026-05-01T12:01:01.0000000-06:00',
+      2: '40000002',
+      3: 'Amdusias',
+    }))
+    mocks.listeners.CombatData({
+      ...combatData(false, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(false, {}).Encounter,
+        title: 'Amdusias',
+        duration: '02:38',
+        DURATION: '158',
+      },
+    })
+
+    store.broadcastForCombatant('Alice')
+    const payload = JSON.parse(localStorage.getItem('flexi-breakdown-snapshot') ?? '{}')
+    const amdusias = payload.pullList.find((entry: { encounterName: string }) => entry.encounterName === 'Amdusias')
+
+    expect(amdusias).toMatchObject({
+      primaryEnemyName: 'Amdusias',
+      enemyCount: 1,
+      defeatedEnemyCount: 1,
+    })
 
     store.stop()
   })
@@ -831,6 +966,176 @@ describe('overlay liveData store', () => {
     })
     expect(historicalPull.bossPercentLabel).toContain('Cleared')
     expect(historicalPull.bossPercentLabel).toContain('4/4 defeated')
+
+    store.stop()
+  })
+
+  it('excludes Trust avatars from defeated enemy objective counts', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      "Thancred's Avatar": { name: "Thancred's Avatar", Job: '', encdps: '100', damage: '3000', damageperc: '10', deaths: '0' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      2: '40000AAA',
+      3: 'Training Add',
+      4: '0001',
+      5: 'attack',
+      6: '40000BAD',
+      7: "Thancred's Avatar",
+      8: '03',
+      9: '03E80000',
+      24: '90000',
+      25: '100000',
+      34: '10000',
+      35: '10000',
+    }))
+
+    for (const id of ['40000001', '40000002', '40000003', '40000004']) {
+      mocks.listeners.LogLine(logLine({
+        0: '21',
+        2: '10AAAAAA',
+        3: 'Alice',
+        4: '0002',
+        5: 'Tomahawk',
+        6: id,
+        7: 'Training Add',
+        8: '03',
+        9: '03E80000',
+        24: '0',
+        25: '10000',
+      }))
+      mocks.listeners.LogLine(logLine({
+        0: '25',
+        2: id,
+        3: 'Training Add',
+        4: '10AAAAAA',
+        5: 'Alice',
+      }))
+    }
+
+    mocks.listeners.CombatData(combatData(false, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      "Thancred's Avatar": { name: "Thancred's Avatar", Job: '', encdps: '100', damage: '3000', damageperc: '10', deaths: '0' },
+    }))
+
+    store.broadcastForCombatant('Alice')
+    const payload = JSON.parse(localStorage.getItem('flexi-breakdown-snapshot') ?? '{}')
+    const historicalPull = payload.pullList.find((entry: { index: number | null }) => entry.index === 0)
+
+    expect(historicalPull).toMatchObject({
+      pullOutcome: 'clear',
+      pullOutcomeLabel: 'Clear',
+      bossKilled: true,
+      enemyCount: 4,
+      defeatedEnemyCount: 4,
+    })
+    expect(historicalPull.bossPercentLabel).toContain('4/4 defeated')
+    expect(historicalPull.primaryEnemyName).toBe('Training Add')
+
+    store.stop()
+  })
+
+  it('excludes friendly duty NPCs from defeated enemy objective counts', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      'Treno Citizen': { name: 'Treno Citizen', Job: '', encdps: '100', damage: '3000', damageperc: '10', deaths: '0' },
+    }))
+
+    for (const [id, name, job] of [
+      ['40010001', 'Mistwake Jabberwock', '00'],
+      ['40010002', 'Mistwake Jabberwock', '00'],
+      ['40010003', 'Mistwake Spirit', '00'],
+      ['40010004', 'Treno Citizen', '04'],
+      ['40010005', 'Treno Citizen', '1A'],
+      ['40010006', 'Treno Citizen', '04'],
+      ['40010007', "Thancred's Avatar", '25'],
+    ]) {
+      mocks.listeners.LogLine(logLine({
+        0: '03',
+        2: id,
+        3: name,
+        4: job,
+      }))
+    }
+
+    for (const [sourceId, sourceName, targetId, targetName] of [
+      ['40010004', 'Treno Citizen', '40010001', 'Mistwake Jabberwock'],
+      ['40010005', 'Treno Citizen', '40010002', 'Mistwake Jabberwock'],
+      ['40010006', 'Treno Citizen', '40010003', 'Mistwake Spirit'],
+      ['40010001', 'Mistwake Jabberwock', '40010004', 'Treno Citizen'],
+      ['40010002', 'Mistwake Jabberwock', '40010005', 'Treno Citizen'],
+      ['40010003', 'Mistwake Spirit', '40010006', 'Treno Citizen'],
+    ]) {
+      mocks.listeners.LogLine(logLine({
+        0: '21',
+        2: sourceId,
+        3: sourceName,
+        4: '0001',
+        5: 'attack',
+        6: targetId,
+        7: targetName,
+        8: '03',
+        9: '03E80000',
+        24: targetName === 'Treno Citizen' ? '90000' : '5000',
+        25: targetName === 'Treno Citizen' ? '100000' : '10000',
+        34: sourceName === 'Treno Citizen' ? '90000' : '5000',
+        35: sourceName === 'Treno Citizen' ? '100000' : '10000',
+      }))
+    }
+
+    for (const [id, name] of [
+      ['40010001', 'Mistwake Jabberwock'],
+      ['40010002', 'Mistwake Jabberwock'],
+      ['40010003', 'Mistwake Spirit'],
+    ]) {
+      mocks.listeners.LogLine(logLine({
+        0: '21',
+        2: '10AAAAAA',
+        3: 'Alice',
+        4: '0002',
+        5: 'Tomahawk',
+        6: id,
+        7: name,
+        8: '03',
+        9: '03E80000',
+        24: '0',
+        25: '10000',
+      }))
+      mocks.listeners.LogLine(logLine({
+        0: '25',
+        2: id,
+        3: name,
+        4: '10AAAAAA',
+        5: 'Alice',
+      }))
+    }
+
+    mocks.listeners.CombatData(combatData(false, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      'Treno Citizen': { name: 'Treno Citizen', Job: '', encdps: '100', damage: '3000', damageperc: '10', deaths: '0' },
+    }))
+
+    store.broadcastForCombatant('Alice')
+    const payload = JSON.parse(localStorage.getItem('flexi-breakdown-snapshot') ?? '{}')
+    const historicalPull = payload.pullList.find((entry: { index: number | null }) => entry.index === 0)
+
+    expect(historicalPull).toMatchObject({
+      pullOutcome: 'clear',
+      pullOutcomeLabel: 'Clear',
+      bossKilled: true,
+      enemyCount: 3,
+      defeatedEnemyCount: 3,
+    })
+    expect(historicalPull.bossPercentLabel).toContain('3/3 defeated')
+    expect(historicalPull.primaryEnemyName).not.toBe('Treno Citizen')
 
     store.stop()
   })

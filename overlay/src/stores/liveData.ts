@@ -92,6 +92,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
   // Death events recorded from type-25 lines.
   const currentDeaths = ref<DeathRecord[]>([])
   const currentEnemyDeaths = ref<Record<string, number>>({})
+  const nonObjectiveNpcIds = new Set<string>()
+  const nonObjectiveNpcNames = new Set<string>()
   // Rolling HP% sample buffer per combatant (plain Map — not reactive, large throughput).
   const hpSampleBuffer = new Map<string, HpSample[]>()
   // Rolling hit/heal event buffer per target (max 800 entries; snapshotted on death).
@@ -169,6 +171,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
   let cachedPullListKey = ''
   let cachedHistoricalPullEntries: PullListEntry[] = []
+  let pendingStashedEncounterTitle = ''
 
   function isMeterActorName(name: string): boolean {
     const id = currentCombatantIds.value[name]
@@ -295,8 +298,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const addEnemyCandidate = (name: string, id = '') => {
       if (!name) return
       if (id && !id.startsWith('40')) return
+      if (isFriendlyNpcName(name)) return
       const knownId = id || ids[name] || ''
       if (knownId && !knownId.startsWith('40')) return
+      if (knownId && !isObjectiveEnemy(name, knownId)) return
       if (!knownId && ids[name] && !ids[name].startsWith('40')) return
       const key = knownId ? `${name}|${knownId}` : name
       enemyCandidates.set(key, { name, id: knownId })
@@ -440,15 +445,16 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const damageTakenData = pullIndex === null ? deepClone(currentDtakenData.value)       : deepClone(pull?.damageTakenData  ?? {})
     const healingReceivedData = pullIndex === null ? deepClone(currentHealingReceivedData.value) : deepClone(pull?.healingReceivedData ?? {})
     const hitData = pullIndex === null ? snapshotHitData() : deepClone(pull?.hitData ?? {})
+    const historicalCombatants = pull?.rawCombatants ?? pull?.combatants ?? []
     const rdpsByCombatant = pullIndex === null
       ? deepClone(currentRdpsByCombatant.value)
-      : Object.fromEntries((pull?.combatants ?? []).map(c => [c.name, parseFloat(c.rdps ?? '0') || 0]))
+      : Object.fromEntries(historicalCombatants.map(c => [c.name, parseFloat(c.rdps ?? '0') || 0]))
     const dpsByCombatant = pullIndex === null
       ? deepClone(currentDpsByCombatant.value)
-      : Object.fromEntries((pull?.combatants ?? []).map(c => [c.name, parseFloat(c.encdps ?? '0') || 0]))
+      : Object.fromEntries(historicalCombatants.map(c => [c.name, parseFloat(c.encdps ?? '0') || 0]))
     const damageByCombatant = pullIndex === null
       ? deepClone(currentDamageByCombatant.value)
-      : Object.fromEntries((pull?.combatants ?? []).map(c => [c.name, parseFloat(c.damage ?? '0') || 0]))
+      : Object.fromEntries(historicalCombatants.map(c => [c.name, parseFloat(c.damage ?? '0') || 0]))
     const liveDuration = parseDurationToSec(frame.value?.encounterDuration ?? '')
     const rdpsGiven = pullIndex === null
       ? mapToRateRecord(rDpsContributed, liveDuration)
@@ -754,6 +760,25 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return id.startsWith('40')
   }
 
+  function isFriendlyNpcName(name: string): boolean {
+    return /'s Avatar$/i.test(name.trim())
+  }
+
+  function isObjectiveEnemy(name: string, id: string): boolean {
+    if (!isEnemyId(id)) return false
+    if (nonObjectiveNpcIds.has(id)) return false
+    if (nonObjectiveNpcNames.has(name)) return false
+    return !isFriendlyNpcName(name)
+  }
+
+  function recordNpcObjectiveHint(name: string, id: string, jobOrClass: string): void {
+    if (!name || !isEnemyId(id)) return
+    if (jobOrClass && jobOrClass !== '00') {
+      nonObjectiveNpcIds.add(id)
+      nonObjectiveNpcNames.add(name)
+    }
+  }
+
   function currentPullOffsetMs(): number {
     if (currentLogTime !== null) {
       if (pullStartLogTime <= 0) pullStartLogTime = currentLogTime
@@ -762,8 +787,35 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return pullStartTime > 0 ? Date.now() - pullStartTime : 0
   }
 
+  function logLineEnemyNames(parts: string[], lineType: string): string[] {
+    const candidates: Array<[string, string]> = []
+    if (lineType === '20') {
+      candidates.push([parts[3], parts[2]], [parts[7], parts[6]])
+    } else if (lineType === '21' || lineType === '22') {
+      candidates.push([parts[3], parts[2]], [parts[7], parts[6]])
+    } else if (lineType === '24') {
+      candidates.push([parts[3], parts[2]], [parts[18], parts[17]])
+    } else if (lineType === '25') {
+      candidates.push([parts[3], parts[2]])
+    }
+    return candidates
+      .filter(([name, id]) => !!name && isObjectiveEnemy(name, id))
+      .map(([name]) => name)
+  }
+
+  function maybeResetAfterStashedEncounter(parts: string[], lineType: string): void {
+    if (!pendingStashedEncounterTitle) return
+    const enemyNames = logLineEnemyNames(parts, lineType)
+    if (enemyNames.length === 0) return
+
+    const pendingTitle = pendingStashedEncounterTitle.trim().toLowerCase()
+    const sameEncounter = enemyNames.some(name => name.trim().toLowerCase() === pendingTitle)
+    if (!sameEncounter) resetAbilityData()
+    pendingStashedEncounterTitle = ''
+  }
+
   function recordNetworkEnemyInstance(name: string, id: string, maxHp: number): void {
-    if (!name || !isEnemyId(id) || currentLogTime === null) return
+    if (!name || !isObjectiveEnemy(name, id) || currentLogTime === null) return
     if (!Number.isFinite(maxHp) || maxHp < NETWORK_PULL_BOUNDARY_MIN_HP) return
     networkEnemyInstances.set(name, { id, lastSeen: currentLogTime, maxHp })
   }
@@ -1215,7 +1267,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   function recordEnemyResourceSample(name: string, id: string, currentHp: number, maxHp: number): void {
-    if (!isEnemyId(id)) return
+    if (!isObjectiveEnemy(name, id)) return
     appendResourceSample(name, currentHp, maxHp, false)
   }
 
@@ -1326,8 +1378,18 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const lineType = parts[0]
     const parsedLogTime = Date.parse(parts[1] ?? '')
     currentLogTime = Number.isFinite(parsedLogTime) ? parsedLogTime : null
+    maybeResetAfterStashedEncounter(parts, lineType)
 
-    if (lineType === '20') {
+    if (lineType === '03') {
+      // AddCombatant: NPCs with a non-zero job/class are friendly duty actors
+      // such as Trust avatars or Treno Citizens, not pull objectives.
+      const id = parts[2]
+      const name = parts[3]
+      const jobOrClass = parts[4]
+      recordCombatantId(name, id)
+      recordNpcObjectiveHint(name, id, jobOrClass)
+
+    } else if (lineType === '20') {
       // NetworkStartsCasting
       // parts: [0]=type [1]=ts [2]=srcId [3]=srcName [4]=abilId [5]=abilName
       //        [6]=tgtId [7]=tgtName [8]=castTimeSec
@@ -1496,7 +1558,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const targetName = parts[3]
       if (!targetId || !targetName) return
       const t = currentPullOffsetMs()
-      if (targetId.startsWith('40')) {
+      if (isObjectiveEnemy(targetName, targetId)) {
         recordCombatantId(targetName, targetId)
         currentEnemyDeaths.value[targetId ? `${targetName}|${targetId}` : targetName] = t
         currentEnemyDeaths.value[targetName] = t
@@ -1622,6 +1684,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
     currentCombatantJobs.value = {}
     currentDeaths.value = []
     currentEnemyDeaths.value = {}
+    nonObjectiveNpcIds.clear()
+    nonObjectiveNpcNames.clear()
     hpSampleBuffer.clear()
     hitEventBuffer.clear()
     lastKnownHp.clear()
@@ -1657,6 +1721,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       resetAbilityData()
     }
 
+    if (title) pendingStashedEncounterTitle = ''
     if (title) lastEncounterTitle = title
     lastEncounterStart = String(duration)
   }
@@ -1665,6 +1730,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const title = event.Encounter['title'] ?? ''
     if (!title) return
 
+    const rawCombatants = Object.values(event.Combatant).map(c => ({ ...c, name: c.name ?? '' })) as PullRecord['combatants']
     const { combatants } = resolvePets(event.Combatant, profile.value.global.pets)
     const stashDuration = encounterDurationSec(event.Encounter) || 1
     for (const c of combatants) {
@@ -1681,6 +1747,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       zone: zone.value,
       duration: event.Encounter['duration'] ?? '',
       combatants,
+      rawCombatants,
       encounter: event.Encounter as PullRecord['encounter'],
       abilityData:      deepClone(currentAbilityData.value),
       dpsTimeline:      deepClone(currentTimeline.value),
@@ -1705,6 +1772,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (last?.encounterName === record.encounterName && last?.duration === record.duration) return
 
     sessionPulls.value = [record, ...sessionPulls.value].slice(0, 15)
+    pendingStashedEncounterTitle = title
     persistPulls()
   }
 
