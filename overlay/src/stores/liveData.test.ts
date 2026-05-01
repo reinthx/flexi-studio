@@ -246,6 +246,149 @@ describe('overlay liveData store', () => {
     store.stop()
   })
 
+  it('does not reset log-derived data for transient zero-duration active packets in the same pull', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '300000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        duration: '05:00',
+        DURATION: '300',
+      },
+    })
+
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      2: '10AAAAAA',
+      3: 'Alice',
+      4: '0001',
+      5: 'Heavy Swing',
+      6: '40000001',
+      7: 'Training Boss',
+      8: '03',
+      9: '27100000',
+      24: '75000',
+      25: '100000',
+    }))
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '950', damage: '300000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        duration: '',
+        DURATION: '0',
+      },
+    })
+
+    mocks.listeners.CombatData({
+      ...combatData(false, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '950', damage: '315000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(false, {}).Encounter,
+        duration: '05:15',
+        DURATION: '315',
+      },
+    })
+
+    expect(store.sessionPulls[0].abilityData?.Alice?.['0001']).toMatchObject({
+      abilityName: 'Heavy Swing',
+      totalDamage: 10000,
+    })
+
+    store.stop()
+  })
+
+  it('keeps the same pull when Enuo reappears with a new network id after downtime', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '300000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        duration: '02:00',
+        DURATION: '120',
+      },
+    })
+
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      1: '2026-05-01T12:00:00.0000000-06:00',
+      2: '10AAAAAA',
+      3: 'Alice',
+      4: '0001',
+      5: 'Heavy Swing',
+      6: '400043AE',
+      7: 'Enuo',
+      8: '03',
+      9: '27100000',
+      24: '88831771',
+      25: '107935443',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      1: '2026-05-01T12:00:20.4990000-06:00',
+      2: '10AAAAAA',
+      3: 'Alice',
+      4: '0001',
+      5: 'Heavy Swing',
+      6: '4000485D',
+      7: 'Enuo',
+      8: '03',
+      9: '27100000',
+      24: '107935443',
+      25: '107935443',
+    }))
+
+    mocks.listeners.CombatData({
+      ...combatData(false, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '300000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(false, {}).Encounter,
+        duration: '02:30',
+        DURATION: '150',
+      },
+    })
+
+    expect(store.sessionPulls[0].abilityData?.Alice?.['0001']).toMatchObject({
+      abilityName: 'Heavy Swing',
+      totalDamage: 20000,
+      hits: 2,
+    })
+
+    store.stop()
+  })
+
+  it('parses formatted encounter durations when calculating historical rdps', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData({
+      ...combatData(false, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '100', damage: '360000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(false, {}).Encounter,
+        duration: '01:00:00',
+        DURATION: '01:00:00',
+      },
+    })
+
+    expect(store.sessionPulls[0].combatants[0].rdps).toBe('100')
+
+    store.stop()
+  })
+
   it('counts first-seen self heals in healing received even when the heal tops the player', async () => {
     const store = await createStore()
     store.start()
