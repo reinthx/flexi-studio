@@ -761,7 +761,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   function isFriendlyNpcName(name: string): boolean {
-    return /'s Avatar$/i.test(name.trim())
+    const normalized = name.trim().toLowerCase()
+    return /'s avatar$/.test(normalized) || normalized === 'treno citizen'
   }
 
   function isObjectiveEnemy(name: string, id: string): boolean {

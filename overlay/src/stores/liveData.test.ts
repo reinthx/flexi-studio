@@ -1139,4 +1139,87 @@ describe('overlay liveData store', () => {
 
     store.stop()
   })
+
+  it('excludes known friendly duty NPCs when add-combatant hints were missed', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      'Treno Citizen': { name: 'Treno Citizen', Job: '', encdps: '100', damage: '3000', damageperc: '10', deaths: '0' },
+    }))
+
+    for (const [sourceId, sourceName, targetId, targetName] of [
+      ['40010004', 'Treno Citizen', '40010001', 'Mistwake Jabberwock'],
+      ['40010005', 'Treno Citizen', '40010002', 'Mistwake Jabberwock'],
+      ['40010006', 'Treno Citizen', '40010003', 'Mistwake Spirit'],
+      ['40010001', 'Mistwake Jabberwock', '40010004', 'Treno Citizen'],
+      ['40010002', 'Mistwake Jabberwock', '40010005', 'Treno Citizen'],
+      ['40010003', 'Mistwake Spirit', '40010006', 'Treno Citizen'],
+    ]) {
+      mocks.listeners.LogLine(logLine({
+        0: '21',
+        2: sourceId,
+        3: sourceName,
+        4: '0001',
+        5: 'attack',
+        6: targetId,
+        7: targetName,
+        8: '03',
+        9: '03E80000',
+        24: targetName === 'Treno Citizen' ? '90000' : '5000',
+        25: targetName === 'Treno Citizen' ? '100000' : '10000',
+        34: sourceName === 'Treno Citizen' ? '90000' : '5000',
+        35: sourceName === 'Treno Citizen' ? '100000' : '10000',
+      }))
+    }
+
+    for (const [id, name] of [
+      ['40010001', 'Mistwake Jabberwock'],
+      ['40010002', 'Mistwake Jabberwock'],
+      ['40010003', 'Mistwake Spirit'],
+    ]) {
+      mocks.listeners.LogLine(logLine({
+        0: '21',
+        2: '10AAAAAA',
+        3: 'Alice',
+        4: '0002',
+        5: 'Tomahawk',
+        6: id,
+        7: name,
+        8: '03',
+        9: '03E80000',
+        24: '0',
+        25: '10000',
+      }))
+      mocks.listeners.LogLine(logLine({
+        0: '25',
+        2: id,
+        3: name,
+        4: '10AAAAAA',
+        5: 'Alice',
+      }))
+    }
+
+    mocks.listeners.CombatData(combatData(false, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+      'Treno Citizen': { name: 'Treno Citizen', Job: '', encdps: '100', damage: '3000', damageperc: '10', deaths: '0' },
+    }))
+
+    store.broadcastForCombatant('Alice')
+    const payload = JSON.parse(localStorage.getItem('flexi-breakdown-snapshot') ?? '{}')
+    const historicalPull = payload.pullList.find((entry: { index: number | null }) => entry.index === 0)
+
+    expect(historicalPull).toMatchObject({
+      pullOutcome: 'clear',
+      pullOutcomeLabel: 'Clear',
+      bossKilled: true,
+      enemyCount: 3,
+      defeatedEnemyCount: 3,
+    })
+    expect(historicalPull.bossPercentLabel).toContain('3/3 defeated')
+    expect(historicalPull.primaryEnemyName).not.toBe('Treno Citizen')
+
+    store.stop()
+  })
 })
