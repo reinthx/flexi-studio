@@ -897,7 +897,6 @@ export const useLiveDataStore = defineStore('liveData', () => {
   function recordNetworkEnemyInstance(name: string, id: string, maxHp: number): void {
     if (!name || !isObjectiveEnemy(name, id) || currentLogTime === null) return
     if (!Number.isFinite(maxHp) || maxHp < NETWORK_PULL_BOUNDARY_MIN_HP) return
-
     // Bosses can become untargetable and return with a new network object id
     // during intermissions. ACT/kagerou keep those as one pull, so Flexi should
     // not use enemy id churn as an independent pull boundary.
