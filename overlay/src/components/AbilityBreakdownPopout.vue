@@ -1439,7 +1439,7 @@ onUnmounted(() => {
             heading="Window Events"
             empty-text="Hover the chart to correlate deaths, raises, and casts in the same time bucket."
             :rows="[
-              ...timelineInspectorDeaths.map(death => ({ key: `ins-death-${death.timestamp}`, title: death.targetName, detail: `Death @ ${fmtTime(death.timestamp)}` })),
+              ...timelineInspectorDeaths.map(death => ({ key: `ins-death-${death.timestamp}`, title: death.targetName, titleStyle: nameStyle(death.targetName), detail: `Death @ ${fmtTime(death.timestamp)}` })),
               ...timelineInspectorCasts.map(cast => ({ key: `ins-cast-${cast.t}-${cast.abilityName}`, title: cast.abilityName, detail: cast.target ? `→ ${cast.target}` : 'cast' })),
             ]"
           />

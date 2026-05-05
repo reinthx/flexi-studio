@@ -609,6 +609,7 @@ export interface PullRecord {
   zone: string
   duration: string
   combatants: CombatantSnapshot[]
+  rawCombatants?: CombatantSnapshot[]
   encounter: EncounterSnapshot
   // Populated from LogLine parsing. Optional: absent on records loaded from older sessions.
   abilityData?: Record<string, CombatantAbilityData>
