@@ -121,6 +121,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     SAM: { DoT: 'Higanbana' },
     GNB: { DoT: 'Sonic Break' },
   }
+  const RAISE_EFFECTS = new Set(['raise', 'angel whisper', 'resurrection', 'life ascension', 'reraise iii'])
 
   // Track resurrection events: player name -> resurrection timestamp (ms since pull start)
   const resurrectTimes = ref<Record<string, number>>({})
@@ -188,6 +189,15 @@ export const useLiveDataStore = defineStore('liveData', () => {
       .reduce((sum, [, buckets]) => sum + buckets.reduce((s, value) => s + value, 0), 0) / duration
   }
 
+  function abilityDataTotal(data: Record<string, CombatantAbilityData>): number {
+    return Object.values(data).reduce((sum, abilities) =>
+      sum + Object.values(abilities).reduce((s, ability) => s + ability.totalDamage, 0), 0)
+  }
+
+  function combatantTotal(combatants: Record<string, string>[], key: string): number {
+    return combatants.reduce((sum, c) => sum + combatantNumber(c, key), 0)
+  }
+
   function liveRdpsTotal(): number {
     return Object.entries(currentRdpsByCombatant.value)
       .filter(([name]) => isMeterActorName(name))
@@ -198,6 +208,40 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return Object.entries(currentDpsByCombatant.value)
       .filter(([name]) => isMeterActorName(name))
       .reduce((sum, [, value]) => sum + value, 0)
+  }
+
+  function partyGroupFor(name: string, members: PartyMember[]): string {
+    const member = members.find(p => p.name === name)
+    const partyType = member?.partyType
+    if ((!partyType || partyType === 'Solo' || partyType === 'Party') && members.length > 8) {
+      const partyIdx = members.findIndex(p => p.name === name)
+      return partyIdx >= 0 ? (['Alliance A', 'Alliance B', 'Alliance C'][Math.floor(partyIdx / 8)] ?? 'Party') : 'Party'
+    }
+    return partyType ? partyType.replace(/^Alliance/, 'Alliance ') : 'Party'
+  }
+
+  function partyNameSet(members: PartyMember[]): Set<string> {
+    return new Set(members.filter(p => p.inParty).map(p => p.name))
+  }
+
+  function ownPartyNameSet(members: PartyMember[]): Set<string> | null {
+    if (members.length <= 8) return partyNameSet(members)
+    const selfIdx = members.findIndex(p => p.name === selfName.value)
+    return selfIdx >= 0 ? new Set(members.slice(Math.floor(selfIdx / 8) * 8, Math.floor(selfIdx / 8) * 8 + 8).map(p => p.name)) : null
+  }
+
+  function filterCombatantsForMeter(combatants: Record<string, string>[], filter: string): Record<string, string>[] {
+    const meterCombatants = combatants.filter(c => isMeterActorName(c.name))
+    if (filter === 'self') return meterCombatants.filter(c => c.name === selfName.value || c.name === 'YOU')
+    if (filter === 'alliance' && partyData.value.length > 0) {
+      const names = partyNameSet(partyData.value)
+      return meterCombatants.filter(c => names.has(c.name) || c.name === 'YOU')
+    }
+    if (filter === 'party' && partyData.value.length > 0) {
+      const names = ownPartyNameSet(partyData.value)
+      return names ? meterCombatants.filter(c => names.has(c.name) || c.name === 'YOU') : meterCombatants
+    }
+    return meterCombatants
   }
 
   function buildPullList() {
@@ -216,8 +260,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         hps: timelineRateTotal(currentHealTimeline.value, liveDuration),
         dtps: timelineRateTotal(currentDtakenTimeline.value, liveDuration),
         deaths: currentDeaths.value.length,
-        damageTaken: Object.values(currentDtakenData.value).reduce((sum, abilities) =>
-          sum + Object.values(abilities).reduce((s, ability) => s + ability.totalDamage, 0), 0),
+        damageTaken: abilityDataTotal(currentDtakenData.value),
         ...estimateBossPercent(currentResourceData.value, currentCombatantIds.value, currentEnemyDeaths.value, false, currentAbilityData.value),
       },
     ]
@@ -243,8 +286,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
       seenByEncounter.set(encounterId, seen)
       const total = totalsByEncounter.get(encounterId) ?? seen
       const duration = encounterDurationSec(p.encounter ?? {}) || 1
-      const damageTaken = p.combatants.reduce((sum, c) => sum + parseFloat(c.damagetaken ?? '0'), 0)
-      const rdps = p.combatants.reduce((sum, c) => sum + parseFloat(c.rdps ?? '0'), 0)
+      const damageTaken = combatantTotal(p.combatants, 'damagetaken')
+      const rdps = combatantTotal(p.combatants, 'rdps')
       cachedHistoricalPullEntries.push({
         index: i,
         encounterId,
@@ -257,7 +300,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         rdps,
         hps: parseFloat(p.encounter?.ENCHPS ?? '0'),
         dtps: parseFloat(p.encounter?.DTRPS ?? '0') || damageTaken / duration,
-        deaths: p.deaths?.length ?? p.combatants.reduce((sum, c) => sum + parseFloat(c.deaths ?? '0'), 0),
+        deaths: p.deaths?.length ?? combatantTotal(p.combatants, 'deaths'),
         damageTaken,
         ...estimateBossPercent(p.resourceData ?? {}, p.combatantIds ?? {}, p.enemyDeaths ?? {}, true, p.abilityData ?? {}),
       })
@@ -456,54 +499,151 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return deepClone(Object.fromEntries(hitEventBuffer.entries()))
   }
 
+  function combatantNumber(c: Record<string, string>, key: string): number {
+    return parseFloat(c[key] ?? '0') || 0
+  }
+
+  function combatantMetricRecord(combatants: Record<string, string>[], key: string): Record<string, number> {
+    return Object.fromEntries(combatants.map(c => [c.name, combatantNumber(c, key)]))
+  }
+
+  function rdpsMetricRecordFromRates(
+    dpsByCombatant: Record<string, number>,
+    damageByCombatant: Record<string, number>,
+    given: Record<string, number>,
+    taken: Record<string, number>,
+    durationSec: number,
+  ): Record<string, number> {
+    const duration = Math.max(1, durationSec)
+    const canonicalName = (name: string): string => name === 'YOU' && selfName.value ? selfName.value : name
+    const canonicalizeRates = (record: Record<string, number>): Record<string, number> => {
+      const result: Record<string, number> = {}
+      for (const [name, value] of Object.entries(record)) {
+        const key = canonicalName(name)
+        result[key] = Math.max(result[key] ?? 0, value)
+      }
+      return result
+    }
+    const canonicalDps = canonicalizeRates(dpsByCombatant)
+    const canonicalDamage = canonicalizeRates(damageByCombatant)
+    const canonicalGiven = canonicalizeRates(given)
+    const canonicalTaken = canonicalizeRates(taken)
+    const names = new Set([
+      ...Object.keys(canonicalDps),
+      ...Object.keys(canonicalDamage),
+      ...Object.keys(canonicalGiven),
+      ...Object.keys(canonicalTaken),
+    ])
+    return Object.fromEntries(Array.from(names).map(name => [
+      name,
+      Math.max(0, (canonicalDps[name] ?? ((canonicalDamage[name] ?? 0) / duration)) + (canonicalGiven[name] ?? 0) - (canonicalTaken[name] ?? 0)),
+    ]))
+  }
+
+  function historicalRdpsMetricRecord(pull: PullRecord | null | undefined, combatants: Record<string, string>[]): Record<string, number> {
+    const durationSec = encounterDurationSec(pull?.encounter ?? {}) || parseDurationToSec(pull?.duration ?? '') || 1
+    return rdpsMetricRecordFromRates(
+      combatantMetricRecord(combatants, 'encdps'),
+      combatantMetricRecord(combatants, 'damage'),
+      pull?.rdpsGiven ?? {},
+      pull?.rdpsTaken ?? {},
+      durationSec,
+    )
+  }
+
+  function combatantDtps(c: Record<string, string>): number {
+    const dt = parseFloat(c['damagetaken'] ?? '0')
+    const dur = parseFloat(c['DURATION'] ?? '0')
+    return dur > 0 ? dt / dur : 0
+  }
+
+  function combatantRdps(c: Record<string, string>, durationSec: number): number {
+    const duration = Math.max(1, durationSec)
+    const baseDps = combatantNumber(c, 'encdps') || (combatantNumber(c, 'damage') / duration)
+    return Math.max(0, baseDps + ((rDpsContributed.get(c.name) ?? 0) / duration) - ((rDpsReceived.get(c.name) ?? 0) / duration))
+  }
+
+  function injectCombatantRdps(c: Record<string, string>, durationSec: number): number {
+    const rdps = Math.round(combatantRdps(c, durationSec))
+    c['rdps'] = String(rdps)
+    return rdps
+  }
+
+  function refreshLiveCombatantMetrics(combatants: Record<string, string>[], durationSec: number): void {
+    currentDamageByCombatant.value = combatantMetricRecord(combatants, 'damage')
+    currentDpsByCombatant.value = combatantMetricRecord(combatants, 'encdps')
+    currentRdpsByCombatant.value = Object.fromEntries(combatants.map(c => [c.name, injectCombatantRdps(c, durationSec)]))
+  }
+
+  function snapshotEncounterData(durationSec: number) {
+    return {
+      abilityData: deepClone(currentAbilityData.value),
+      dpsTimeline: deepClone(currentTimeline.value),
+      hpsTimeline: deepClone(currentHealTimeline.value),
+      dtakenTimeline: deepClone(currentDtakenTimeline.value),
+      damageTakenData: deepClone(currentDtakenData.value),
+      healingReceivedData: deepClone(currentHealingReceivedData.value),
+      hitData: snapshotHitData(),
+      rdpsGiven: mapToRateRecord(rDpsContributed, durationSec),
+      rdpsTaken: mapToRateRecord(rDpsReceived, durationSec),
+      deaths: deepClone(currentDeaths.value),
+      combatantIds: deepClone(currentCombatantIds.value),
+      combatantJobs: deepClone(currentCombatantJobs.value),
+      castData: deepClone(currentCastData.value),
+      resourceData: deepClone(currentResourceData.value),
+      partyData: deepClone(partyData.value),
+    }
+  }
+
+  const PULL_DATA_KEYS = [
+    'abilityData', 'dpsTimeline', 'hpsTimeline', 'dtakenTimeline',
+    'damageTakenData', 'healingReceivedData', 'hitData',
+    'rdpsGiven', 'rdpsTaken', 'combatantIds', 'combatantJobs',
+    'castData', 'resourceData',
+  ] as const
+
+  function snapshotHistoricalEncounterData(pull?: PullRecord | null) {
+    return {
+      ...Object.fromEntries(PULL_DATA_KEYS.map(key => [key, deepClone(pull?.[key] ?? {})])),
+      deaths: deepClone(pull?.deaths ?? []),
+      partyData: deepClone(pull?.partyData ?? []),
+    }
+  }
+
   function buildBreakdownPayload(selectedCombatant?: string, requestedPullIndex = viewingPull.value) {
     const pullIndex = requestedPullIndex
     const pull = pullIndex === null ? null : sessionPulls.value[pullIndex]
-    const abilityData    = pullIndex === null ? deepClone(currentAbilityData.value)      : deepClone(pull?.abilityData      ?? {})
-    const dpsTimeline    = pullIndex === null ? deepClone(currentTimeline.value)          : deepClone(pull?.dpsTimeline      ?? {})
-    const hpsTimeline    = pullIndex === null ? deepClone(currentHealTimeline.value)      : deepClone(pull?.hpsTimeline      ?? {})
-    const dtakenTimeline = pullIndex === null ? deepClone(currentDtakenTimeline.value)    : deepClone(pull?.dtakenTimeline   ?? {})
-    const damageTakenData = pullIndex === null ? deepClone(currentDtakenData.value)       : deepClone(pull?.damageTakenData  ?? {})
-    const healingReceivedData = pullIndex === null ? deepClone(currentHealingReceivedData.value) : deepClone(pull?.healingReceivedData ?? {})
-    const hitData = pullIndex === null ? snapshotHitData() : deepClone(pull?.hitData ?? {})
-    const historicalCombatants = pull?.rawCombatants ?? pull?.combatants ?? []
-    const rdpsByCombatant = pullIndex === null
-      ? deepClone(currentRdpsByCombatant.value)
-      : Object.fromEntries(historicalCombatants.map(c => [c.name, parseFloat(c.rdps ?? '0') || 0]))
-    const dpsByCombatant = pullIndex === null
-      ? deepClone(currentDpsByCombatant.value)
-      : Object.fromEntries(historicalCombatants.map(c => [c.name, parseFloat(c.encdps ?? '0') || 0]))
-    const damageByCombatant = pullIndex === null
-      ? deepClone(currentDamageByCombatant.value)
-      : Object.fromEntries(historicalCombatants.map(c => [c.name, parseFloat(c.damage ?? '0') || 0]))
     const liveDuration = parseDurationToSec(frame.value?.encounterDuration ?? '')
-    const rdpsGiven = pullIndex === null
-      ? mapToRateRecord(rDpsContributed, liveDuration)
-      : deepClone(pull?.rdpsGiven ?? {})
-    const rdpsTaken = pullIndex === null
-      ? mapToRateRecord(rDpsReceived, liveDuration)
-      : deepClone(pull?.rdpsTaken ?? {})
-    const deaths         = pullIndex === null ? deepClone(currentDeaths.value)            : deepClone(pull?.deaths           ?? [])
-    const combatantIds   = pullIndex === null ? deepClone(currentCombatantIds.value)      : deepClone(pull?.combatantIds     ?? {})
-    const combatantJobs  = pullIndex === null ? deepClone(currentCombatantJobs.value)     : deepClone(pull?.combatantJobs    ?? {})
-    const castData       = pullIndex === null ? deepClone(currentCastData.value)         : deepClone(pull?.castData         ?? {})
-    const resourceData   = pullIndex === null ? deepClone(currentResourceData.value)     : deepClone(pull?.resourceData     ?? {})
-    const partyDataHistorical = pullIndex === null ? partyData.value : (pull?.partyData ?? [])
-    const partyNamesHistorical = pullIndex === null ? partyNames.value : new Set((pull?.partyData ?? []).map(p => p.name))
-    const payloadDurationSec = pullIndex === null
-      ? parseDurationToSec(frame.value?.encounterDuration ?? '')
-      : encounterDurationSec(pull?.encounter ?? {})
+    const historicalCombatants = pull?.rawCombatants ?? pull?.combatants ?? []
+    const liveSnapshot = pullIndex === null ? snapshotEncounterData(liveDuration) : null
+    const payloadData = pullIndex === null ? {
+      ...liveSnapshot,
+      rdpsByCombatant: rdpsMetricRecordFromRates(
+        currentDpsByCombatant.value,
+        currentDamageByCombatant.value,
+        liveSnapshot?.rdpsGiven ?? {},
+        liveSnapshot?.rdpsTaken ?? {},
+        liveDuration,
+      ),
+      dpsByCombatant: deepClone(currentDpsByCombatant.value),
+      damageByCombatant: deepClone(currentDamageByCombatant.value),
+    } : {
+      ...snapshotHistoricalEncounterData(pull),
+      rdpsByCombatant: historicalRdpsMetricRecord(pull, historicalCombatants),
+      dpsByCombatant: combatantMetricRecord(historicalCombatants, 'encdps'),
+      damageByCombatant: combatantMetricRecord(historicalCombatants, 'damage'),
+    }
+    const payloadDurationSec = pullIndex === null ? liveDuration : encounterDurationSec(pull?.encounter ?? {})
+    const payloadPartyData = payloadData.partyData ?? []
     const timestamp = Date.now()
     return {
       type: 'encounterData',
       timestamp,
-      abilityData,
-      dpsTimeline, hpsTimeline, dtakenTimeline,
-      damageTakenData, healingReceivedData, hitData, dpsByCombatant, damageByCombatant, rdpsByCombatant, rdpsGiven, rdpsTaken, deaths, combatantIds, combatantJobs, castData, resourceData,
+      ...payloadData,
       selfName: selfName.value,
       blurNames: profile.value.global.blurNames ?? false,
-      partyNames: Array.from(partyNamesHistorical),
-      partyData: partyDataHistorical.map(p => ({ id: p.id, name: p.name, inParty: p.inParty, partyType: p.partyType, job: p.job })),
+      partyNames: Array.from(pullIndex === null ? partyNames.value : new Set(payloadPartyData.map(p => p.name))),
+      partyData: payloadPartyData.map(p => ({ id: p.id, name: p.name, inParty: p.inParty, partyType: p.partyType, job: p.job })),
       encounterDurationSec: payloadDurationSec,
       pullIndex,
       selectedCombatant,
@@ -588,6 +728,48 @@ export const useLiveDataStore = defineStore('liveData', () => {
     }
   }
 
+  function buildCombatantBar(
+    c: Record<string, string>,
+    rank: number,
+    rawVal: number,
+    maxVal: number,
+    metricFractionContext: ReturnType<typeof createMetricFractionContext>,
+    party: typeof partyData.value,
+  ): BarFrame {
+    const valueFormat = profile.value.global.valueFormat
+    return {
+      name: c.name,
+      job: normalizeJob(c['Job'] ?? ''),
+      partyGroup: partyGroupFor(c.name, party),
+      fillFraction: rawVal / (maxVal || 1),
+      displayValue: formatValue(rawVal, valueFormat),
+      displayPct: c['damage%'] ?? '0',
+      deaths: c.deaths ?? '0',
+      crithit: c['crithit%'] ?? '---',
+      directhit: c['DirectHitPct'] ?? '---',
+      tohit: c.tohit ?? '---',
+      enchps: formatValue(combatantNumber(c, 'enchps'), valueFormat),
+      rdps: formatValue(combatantNumber(c, 'rdps'), valueFormat),
+      rawValue: rawVal,
+      rawEnchps: combatantNumber(c, 'enchps'),
+      rawRdps: combatantNumber(c, 'rdps'),
+      maxHit: (c.maxhit ?? '---').replace('-', ' '),
+      metricFractions: buildMetricFractions(metricFractionContext, c),
+      alpha: 1,
+      rank,
+    }
+  }
+
+  function combatantMetricValue(c: Record<string, string>, metric: string): number {
+    return metric === 'dtps' ? combatantDtps(c) : combatantNumber(c, metric)
+  }
+
+  function buildCombatantBars(combatants: Record<string, string>[], metric: string, party: PartyMember[]): BarFrame[] {
+    const maxVal = Math.max(...combatants.map(c => combatantMetricValue(c, metric)), 1)
+    const metricFractionContext = createMetricFractionContext(combatants)
+    return combatants.map((c, i) => buildCombatantBar(c, i + 1, combatantMetricValue(c, metric), maxVal, metricFractionContext, party))
+  }
+
   function pushFrame(event: CombatDataEvent): void {
     const g = profile.value.global
 
@@ -603,71 +785,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
       recordResourceSample(c)
     }
 
-    // Inject synthetic rdps field: (personal damage + contributions given − boosts received) / duration
-    const rDpsDuration = encounterDurationSec(event.Encounter) || 1
-    const nextDamageByCombatant: Record<string, number> = {}
-    const nextDpsByCombatant: Record<string, number> = {}
-    const nextRdpsByCombatant: Record<string, number> = {}
-    for (const c of combatants) {
-      const baseDamage  = parseFloat(c['damage'] ?? '0')
-      const dps = parseFloat(c['encdps'] ?? '0') || 0
-      const contributed = rDpsContributed.get(c.name) ?? 0
-      const received    = rDpsReceived.get(c.name) ?? 0
-      const rdps = Math.max(0, (baseDamage + contributed - received) / rDpsDuration)
-      nextDamageByCombatant[c.name] = baseDamage
-      nextDpsByCombatant[c.name] = dps
-      c['rdps'] = String(Math.round(rdps))
-      nextRdpsByCombatant[c.name] = Math.round(rdps)
-    }
-    currentDamageByCombatant.value = nextDamageByCombatant
-    currentDpsByCombatant.value = nextDpsByCombatant
-    currentRdpsByCombatant.value = nextRdpsByCombatant
+    refreshLiveCombatantMetrics(combatants, encounterDurationSec(event.Encounter) || 1)
 
     // Use combatantFilter if set, otherwise fall back to legacy selfOnly/partyOnly
     const filter = g.combatantFilter ?? (g.selfOnly ? 'self' : g.partyOnly ? 'party' : 'all')
 
-    let filtered = combatants
-
-    // Helper to identify enemies/NPCs using FFXIV object IDs (if available)
-    const isEnemyOrNpc = (name: string): boolean => {
-      const id = currentCombatantIds.value[name]
-      if (!id) return false
-      // Enemy IDs start with 40, NPCs don't start with 10 (players) or 40
-      if (id.startsWith('40')) return true
-      if (!id.startsWith('10') && !id.startsWith('40') && !id.startsWith('00')) return true
-      return false
-    }
-
-    // Remove enemies and NPCs from meters (always filter them out)
-    filtered = filtered.filter(c => !isEnemyOrNpc(c.name))
-
-    if (filter === 'self') {
-      filtered = filtered.filter(c => c.name === selfName.value || c.name === 'YOU')
-    } else if (filter === 'alliance' && partyData.value.length > 0) {
-      // Show entire alliance (all combatants with inParty: true)
-      const allianceSet = new Set(partyData.value.filter(p => p.inParty).map(p => p.name))
-      filtered = filtered.filter(c => allianceSet.has(c.name) || c.name === 'YOU')
-    } else if (filter === 'party' && partyData.value.length > 0) {
-      // For party filter: show only your actual party group (8 people in your party)
-      const isAlliance = partyData.value.length > 8
-      if (isAlliance) {
-        // Alliance: find self's party group and show only that party
-        const selfIdx = partyData.value.findIndex(p => p.name === selfName.value)
-        if (selfIdx >= 0) {
-          const selfPartyNum = Math.floor(selfIdx / 8)
-          const partyStart = selfPartyNum * 8
-          const partyEnd = partyStart + 8
-          const partySet = new Set(partyData.value.slice(partyStart, partyEnd).map(p => p.name))
-          filtered = filtered.filter(c => partySet.has(c.name) || c.name === 'YOU')
-        }
-      } else {
-        // Normal party: show all with inParty: true
-        const partySet = new Set(partyData.value.filter(p => p.inParty).map(p => p.name))
-        filtered = filtered.filter(c => partySet.has(c.name) || c.name === 'YOU')
-      }
-    }
-
-    filtered = [...filtered]
+    const filtered = filterCombatantsForMeter(combatants, filter)
       .sort((a, b) => {
         if (g.sortBy === 'role') {
           const roleOrder: Record<string, number> = { tank: 0, healer: 1, melee: 2, ranged: 3, caster: 4, unknown: 5 }
@@ -682,67 +805,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       .slice(0, g.maxCombatants)
 
     const effectiveDpsType = ((g.dpsType as any) === 'role' ? 'encdps' : g.dpsType)
-    const maxVal = parseFloat(filtered[0]?.[effectiveDpsType] ?? '1') || 1
-    const metricFractionContext = createMetricFractionContext(filtered)
-
-    // For DTPS, we need to calculate from damagetaken / DURATION (integer seconds from ACT)
-    const getDtpsValue = (c: Record<string, string>) => {
-      if (effectiveDpsType !== 'dtps') return 0
-      const dt = parseFloat(c['damagetaken'] ?? '0')
-      const dur = parseFloat(c['DURATION'] ?? '0')
-      return dur > 0 ? dt / dur : 0
-    }
-
-    // Determine party groups for alliance raids
-    const isAlliance = partyData.value.length > 8
-    const nameToPartyIdx = new Map(partyData.value.map((p, i) => [p.name, i]))
-
-    const bars: BarFrame[] = filtered.map((c, i) => {
-      let rawVal: number
-      if (effectiveDpsType === 'dtps') {
-        rawVal = getDtpsValue(c)
-      } else {
-        rawVal = parseFloat(c[effectiveDpsType] ?? '0')
-      }
-
-      // Calculate party group from partyType if available, fallback to position-based
-      let partyGroup = 'Party'
-      const partyMember = partyData.value.find(p => p.name === c.name)
-      const pt = partyMember?.partyType
-
-      // If ACT says Solo/Party but we have >8 members, use position-based for alliance
-      if ((!pt || pt === 'Solo' || pt === 'Party') && isAlliance) {
-        const partyIdx = nameToPartyIdx.get(c.name)
-        if (partyIdx !== undefined) {
-          const allianceParty = Math.floor(partyIdx / 8)
-          partyGroup = ['Alliance A', 'Alliance B', 'Alliance C'][allianceParty] ?? 'Party'
-        }
-      } else if (pt) {
-        partyGroup = pt.replace(/^Alliance/, 'Alliance ')
-      }
-
-      return {
-        name: c.name,
-        job: normalizeJob(c['Job'] ?? ''),
-        partyGroup,
-        fillFraction: rawVal / maxVal,
-        displayValue: formatValue(rawVal, g.valueFormat),
-        displayPct: c['damage%'] ?? '0',
-        deaths: c.deaths ?? '0',
-        crithit: c['crithit%'] ?? '---',
-        directhit: c['DirectHitPct'] ?? '---',
-        tohit: c.tohit ?? '---',
-        enchps: formatValue(parseFloat(c.enchps ?? '0'), g.valueFormat),
-        rdps: formatValue(parseFloat(c['rdps'] ?? '0'), g.valueFormat),
-        rawValue: rawVal,
-        rawEnchps: parseFloat(c.enchps ?? '0'),
-        rawRdps: parseFloat(c['rdps'] ?? '0'),
-        maxHit: (c.maxhit ?? '---').replace('-', ' '),
-        metricFractions: buildMetricFractions(metricFractionContext, c),
-        alpha: 1,
-        rank: i + 1,
-      }
-    })
+    const bars = buildCombatantBars(filtered, effectiveDpsType, partyData.value)
 
     const newFrame: Frame = {
       bars,
@@ -752,7 +815,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       totalHps: formatValue(parseFloat(event.Encounter['ENCHPS'] ?? '0'), g.valueFormat),
       totalDtps: formatValue(parseFloat(event.Encounter['DTRPS'] ?? event.Encounter['damagetaken'] ?? '0') / (encounterDurationSec(event.Encounter) || 1), g.valueFormat),
       totalRdps: formatValue(
-        filtered.reduce((s: number, c: Record<string, string>) => s + parseFloat(c['rdps'] ?? '0'), 0),
+        combatantTotal(filtered, 'rdps'),
         g.valueFormat,
       ),
       isActive: event.isActive === 'true',
@@ -834,6 +897,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
   function recordNetworkEnemyInstance(name: string, id: string, maxHp: number): void {
     if (!name || !isObjectiveEnemy(name, id) || currentLogTime === null) return
     if (!Number.isFinite(maxHp) || maxHp < NETWORK_PULL_BOUNDARY_MIN_HP) return
+    // Bosses can become untargetable and return with a new network object id
+    // during intermissions. ACT/kagerou keep those as one pull, so Flexi should
+    // not use enemy id churn as an independent pull boundary.
     networkEnemyInstances.set(name, { id, lastSeen: currentLogTime, maxHp })
   }
 
@@ -871,6 +937,31 @@ export const useLiveDataStore = defineStore('liveData', () => {
       )
       rDpsReceived.set(dealerName, (rDpsReceived.get(dealerName) ?? 0) + allocation.amount)
     }
+  }
+
+  function recordRaidBuffWindow(sourceId: string, sourceName: string, targetName: string, effectName: string, durationSec: number): void {
+    if (!isPlayerId(sourceId) || !sourceName || !targetName || sourceName === targetName) return
+    const buffKey = effectName?.trim().toLowerCase()
+    const buff = buffKey ? RAID_BUFFS[buffKey] : undefined
+    if (!buff) return
+    const windows = activeRaidBuffs.get(targetName) ?? []
+    const durationMs = Number.isFinite(durationSec) ? Math.max(0, durationSec * 1000) : 0
+    const nextWindow = { sourceName, effectName, multiplier: buff.multiplier, expiresAt: currentPullOffsetMs() + durationMs }
+    const existingIndex = windows.findIndex(window => window.sourceName === sourceName && window.effectName === effectName)
+    if (existingIndex === -1) windows.push(nextWindow)
+    else windows[existingIndex] = nextWindow
+    activeRaidBuffs.set(targetName, windows)
+  }
+
+  function removeRaidBuffWindow(sourceName: string, targetName: string, effectName: string): void {
+    if (!RAID_BUFFS[effectName.trim().toLowerCase()]) return
+    const windows = activeRaidBuffs.get(targetName)
+    if (!windows) return
+    let idx = -1
+    for (let i = windows.length - 1; i >= 0; i--) {
+      if (windows[i].sourceName === sourceName && windows[i].effectName === effectName) { idx = i; break }
+    }
+    if (idx !== -1) windows.splice(idx, 1)
   }
 
   function decodeLogDamage(hex: string): number {
@@ -916,12 +1007,23 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return `${sourceId || ''}|${targetId || ''}`
   }
 
+  function setActiveEffects(map: Map<string, ActiveTickEffect[]>, key: string, effects: ActiveTickEffect[]): void {
+    if (effects.length > 0) map.set(key, effects)
+    else map.delete(key)
+  }
+
+  function activeEffectsFor(map: Map<string, ActiveTickEffect[]>, key: string): ActiveTickEffect[] {
+    const active = (map.get(key) ?? []).filter(effect => effect.expiresAt > currentPullOffsetMs())
+    setActiveEffects(map, key, active)
+    return active
+  }
+
   function recordActiveTickEffect(sourceId: string, targetId: string, effectId: string, effectName: string, durationSec: number): void {
     const name = effectName?.trim()
     if (!sourceId || !targetId || !name || !Number.isFinite(durationSec) || durationSec <= 0) return
     const key = tickEffectKey(sourceId, targetId)
     const nowMs = currentPullOffsetMs()
-    const effects = (activeTickEffects.get(key) ?? []).filter(effect => effect.expiresAt > nowMs)
+    const effects = activeEffectsFor(activeTickEffects, key)
     effects.push({
       effectId: normalizeEffectId(effectId),
       effectName: name,
@@ -932,14 +1034,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   function activeTickEffectName(sourceId: string, targetId: string): string | undefined {
     const key = tickEffectKey(sourceId, targetId)
-    const effects = activeTickEffects.get(key)
-    if (!effects || effects.length === 0) return undefined
-    const nowMs = currentPullOffsetMs()
-    const active = effects.filter(effect => effect.expiresAt > nowMs)
-    if (active.length !== effects.length) {
-      if (active.length > 0) activeTickEffects.set(key, active)
-      else activeTickEffects.delete(key)
-    }
+    const active = activeEffectsFor(activeTickEffects, key)
+    if (active.length === 0) return undefined
     const names = [...new Set(active.map(effect => effect.effectName))]
     return names.length === 1 ? names[0] : undefined
   }
@@ -958,8 +1054,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const next = effects.filter(effect =>
       effect.effectId !== normalizedId || effect.effectName !== effectName,
     )
-    if (next.length > 0) activeTickEffects.set(key, next)
-    else activeTickEffects.delete(key)
+    setActiveEffects(activeTickEffects, key, next)
   }
 
   function tickAbilityName(kind: 'DoT' | 'HoT', effectId: string, sourceId: string, sourceName: string, targetId: string): string {
@@ -970,6 +1065,9 @@ export const useLiveDataStore = defineStore('liveData', () => {
       ?? `${kind} (${effectId || 'unknown'})`
   }
 
+  function ensureAbilityStats(combatant: CombatantAbilityData, abilityId: string, abilityName: string): AbilityStats {
+    return combatant[abilityId] ??= { abilityId, abilityName, totalDamage: 0, hits: 0, maxHit: 0, minHit: Infinity }
+  }
 
   function recordAbilityHit(
     effectiveName: string,
@@ -984,20 +1082,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       currentAbilityData.value[effectiveName] = {}
     }
     const combatant = currentAbilityData.value[effectiveName]
-    if (!combatant[abilityId]) {
-      combatant[abilityId] = {
-        abilityId,
-        abilityName,
-        totalDamage: 0,
-        hits: 0,
-        maxHit: 0,
-        minHit: Infinity,
-        critHits: 0,
-        directHits: 0,
-        critDirectHits: 0,
-      }
-    }
-    const stats: AbilityStats = combatant[abilityId]
+    const stats = ensureAbilityStats(combatant, abilityId, abilityName)
     stats.totalDamage += damage
     stats.hits += 1
     if (damage > stats.maxHit) stats.maxHit = damage
@@ -1053,7 +1138,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (name.toLowerCase() !== 'bloodwhetting') return
 
     const nowMs = currentPullOffsetMs()
-    const effects = (activeSelfHealingEffects.get(targetId) ?? []).filter(effect => effect.expiresAt > nowMs)
+    const effects = activeEffectsFor(activeSelfHealingEffects, targetId)
     effects.push({
       effectId: normalizeEffectId(effectId),
       effectName: name,
@@ -1072,17 +1157,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
       if (key && effect.effectId) return effect.effectId !== key
       return effect.effectName !== name
     })
-    if (effects.length > 0) activeSelfHealingEffects.set(targetId, effects)
-    else activeSelfHealingEffects.delete(targetId)
+    setActiveEffects(activeSelfHealingEffects, targetId, effects)
   }
 
   function activeSelfHealingEffect(targetId: string): ActiveTickEffect | undefined {
     if (!targetId) return undefined
-    const nowMs = currentPullOffsetMs()
-    const effects = (activeSelfHealingEffects.get(targetId) ?? []).filter(effect => effect.expiresAt > nowMs)
-    if (effects.length > 0) activeSelfHealingEffects.set(targetId, effects)
-    else activeSelfHealingEffects.delete(targetId)
-    return effects.at(-1)
+    return activeEffectsFor(activeSelfHealingEffects, targetId).at(-1)
   }
 
   // Check if combatant is the player's own chocobo (should exclude from casts)
@@ -1332,17 +1412,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       currentDtakenData.value[targetName] = {}
     }
     const combatant = currentDtakenData.value[targetName]
-    if (!combatant[abilityId]) {
-      combatant[abilityId] = {
-        abilityId,
-        abilityName,
-        totalDamage: 0,
-        hits: 0,
-        maxHit: 0,
-        minHit: Infinity,
-      }
-    }
-    const stats: AbilityStats = combatant[abilityId]
+    const stats = ensureAbilityStats(combatant, abilityId, abilityName)
     stats.totalDamage += damage
     stats.hits++
     if (damage > stats.maxHit) stats.maxHit = damage
@@ -1363,17 +1433,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       currentHealingReceivedData.value[targetName] = {}
     }
     const combatant = currentHealingReceivedData.value[targetName]
-    if (!combatant[abilityId]) {
-      combatant[abilityId] = {
-        abilityId,
-        abilityName,
-        totalDamage: 0,
-        hits: 0,
-        maxHit: 0,
-        minHit: Infinity,
-      }
-    }
-    const stats: AbilityStats = combatant[abilityId]
+    const stats = ensureAbilityStats(combatant, abilityId, abilityName)
     stats.totalDamage += healing
     stats.overheal = (stats.overheal ?? 0) + overheal
     stats.hits++
@@ -1388,6 +1448,29 @@ export const useLiveDataStore = defineStore('liveData', () => {
       sourceStats.hits += 1
       stats.sources[sourceName] = sourceStats
     }
+  }
+
+  function recordIncomingDamage(targetName: string, targetId: string, abilityId: string, abilityName: string, sourceName: string, sourceId: string, damage: number, currentHp: number, maxHp: number): void {
+    recordDamageTaken(targetName, abilityId, abilityName, damage)
+    recordTimelineBucket(currentDtakenTimeline.value, targetName, damage)
+    recordEnemyResourceSample(targetName, targetId, currentHp, maxHp)
+    recordHitEvent(targetName, 'dmg', abilityName, sourceName, damage, currentHp, maxHp)
+    attributeRaidBuffContribution(sourceName, sourceId, targetName, targetId, damage)
+    recordHpSample(targetName, currentHp, maxHp)
+    recordKnownHp(targetName, currentHp, maxHp)
+  }
+
+  function recordIncomingHealing(targetName: string, abilityId: string, abilityName: string, sourceName: string, heal: number, currentHp: number, maxHp: number): boolean {
+    if (!sourceName || heal <= 0) return false
+    const { effective: appliedHeal, overheal } = healingAmounts(targetName, heal, currentHp, maxHp)
+    if (appliedHeal > 0) recordTimelineBucket(currentHealTimeline.value, sourceName, appliedHeal)
+    if (targetName) {
+      if (abilityId && (appliedHeal > 0 || overheal > 0)) recordHealingReceived(targetName, abilityId, abilityName, appliedHeal, sourceName, overheal)
+      if (appliedHeal > 0) recordHitEvent(targetName, 'heal', abilityName, sourceName, appliedHeal, currentHp, maxHp)
+      recordHpSample(targetName, currentHp, maxHp)
+      recordKnownHp(targetName, currentHp, maxHp)
+    }
+    return appliedHeal > 0 || overheal > 0
   }
 
   function onLogLine(event: LogLineEvent): void {
@@ -1461,27 +1544,14 @@ export const useLiveDataStore = defineStore('liveData', () => {
           didRecord = true
         }
         if (damage > 0 && targetName) {
-          recordDamageTaken(targetName, abilityId, abilityName, damage)
-          recordTimelineBucket(currentDtakenTimeline.value, targetName, damage)
-          recordEnemyResourceSample(targetName, targetId, tgtCurrentHp, tgtMaxHp)
-          recordHitEvent(targetName, 'dmg', abilityName, effectiveName, damage, tgtCurrentHp, tgtMaxHp)
-          attributeRaidBuffContribution(effectiveName, petOwnerName ? parts[47] : sourceId, targetName, targetId, damage)
-          recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
-          recordKnownHp(targetName, tgtCurrentHp, tgtMaxHp)
+          recordIncomingDamage(targetName, targetId, abilityId, abilityName, effectiveName, petOwnerName ? parts[47] : sourceId, damage, tgtCurrentHp, tgtMaxHp)
         }
       } else if (flagByte === 0x04) {
         // Heal hit — attribute to source for HPS, to target for incoming heals
         const heal = decodeLogDamage(damageHex)
-        if (heal > 0 && effectiveName) {
-          const { effective: appliedHeal, overheal } = healingAmounts(targetName, heal, tgtCurrentHp, tgtMaxHp)
-          if (appliedHeal > 0) recordTimelineBucket(currentHealTimeline.value, effectiveName, appliedHeal)
-          if (targetName) {
-            if (abilityId && (appliedHeal > 0 || overheal > 0)) recordHealingReceived(targetName, abilityId, abilityName, appliedHeal, effectiveName, overheal)
-            if (appliedHeal > 0) recordHitEvent(targetName, 'heal', abilityName, effectiveName, appliedHeal, tgtCurrentHp, tgtMaxHp)
-          }
-          didRecord = didRecord || appliedHeal > 0 || overheal > 0
-        }
-        if (targetName) {
+        const recordedHeal = recordIncomingHealing(targetName, abilityId, abilityName, effectiveName, heal, tgtCurrentHp, tgtMaxHp)
+        didRecord = didRecord || recordedHeal
+        if (targetName && !recordedHeal) {
           recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
           recordKnownHp(targetName, tgtCurrentHp, tgtMaxHp)
         }
@@ -1502,14 +1572,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const healAbilityName = selfHealingEffect ? selfHealingEffect.effectName : abilityName
         if (!healTargetName || !healAbilityId) continue
 
-        const { effective: appliedHeal, overheal } = healingAmounts(healTargetName, heal, healTargetCurrentHp, healTargetMaxHp)
-        if (appliedHeal <= 0 && overheal <= 0) continue
-
-        if (appliedHeal > 0) recordTimelineBucket(currentHealTimeline.value, effectiveName, appliedHeal)
-        recordHealingReceived(healTargetName, healAbilityId, healAbilityName, appliedHeal, effectiveName, overheal)
-        if (appliedHeal > 0) recordHitEvent(healTargetName, 'heal', healAbilityName, effectiveName, appliedHeal, healTargetCurrentHp, healTargetMaxHp)
-        recordHpSample(healTargetName, healTargetCurrentHp, healTargetMaxHp)
-        recordKnownHp(healTargetName, healTargetCurrentHp, healTargetMaxHp)
+        if (!recordIncomingHealing(healTargetName, healAbilityId, healAbilityName, effectiveName, heal, healTargetCurrentHp, healTargetMaxHp)) continue
         didRecord = true
       }
 
@@ -1542,13 +1605,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         recordAbilityHit(sourceName, `dot:${effectId}`, abilityName, damage, targetName, targetId)
         recordCastEvent(sourceName, `dot:${effectId}`, abilityName, targetName, targetId, 'tick')
         if (targetName) {
-          recordDamageTaken(targetName, `dot:${effectId}`, abilityName, damage)
-          recordTimelineBucket(currentDtakenTimeline.value, targetName, damage)
-          recordEnemyResourceSample(targetName, targetId, tgtCurrentHp, tgtMaxHp)
-          recordHitEvent(targetName, 'dmg', abilityName, sourceName, damage, tgtCurrentHp, tgtMaxHp)
-          attributeRaidBuffContribution(sourceName, sourceId, targetName, targetId, damage)
-          recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
-          recordKnownHp(targetName, tgtCurrentHp, tgtMaxHp)
+          recordIncomingDamage(targetName, targetId, `dot:${effectId}`, abilityName, sourceName, sourceId, damage, tgtCurrentHp, tgtMaxHp)
         }
         scheduleBroadcast()
       } else if (dotType === 'HoT') {
@@ -1556,15 +1613,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const abilityName = tickAbilityName('HoT', effectId, sourceId, sourceName, targetId)
         const heal = decodeTickAmount(damageHex, tgtMaxHp)
         if (heal === 0) return
-        const { effective: appliedHeal, overheal } = healingAmounts(targetName, heal, tgtCurrentHp, tgtMaxHp)
-        if (appliedHeal > 0) recordTimelineBucket(currentHealTimeline.value, sourceName, appliedHeal)
         recordCastEvent(sourceName, `hot:${effectId}`, abilityName, targetName, targetId, 'tick')
-        if (targetName) {
-          if (appliedHeal > 0 || overheal > 0) recordHealingReceived(targetName, `hot:${effectId}`, abilityName, appliedHeal, sourceName, overheal)
-          if (appliedHeal > 0) recordHitEvent(targetName, 'heal', abilityName, sourceName, appliedHeal, tgtCurrentHp, tgtMaxHp)
-          recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
-          recordKnownHp(targetName, tgtCurrentHp, tgtMaxHp)
-        }
+        recordIncomingHealing(targetName, `hot:${effectId}`, abilityName, sourceName, heal, tgtCurrentHp, tgtMaxHp)
         scheduleBroadcast()
       }
 
@@ -1621,35 +1671,13 @@ export const useLiveDataStore = defineStore('liveData', () => {
       recordActiveTickEffect(sourceId, targetId, effectId, effectName, durationSec)
       recordActiveSelfHealingEffect(sourceId, targetId, effectId, effectName, durationSec)
       attachBuffDuration(sourceName, targetName, effectName, Math.round(durationSec * 1000))
-
-      // rDPS: track raid buff windows (source must differ from target)
-      if (isPlayerId(sourceId) && sourceName && targetName && sourceName !== targetName) {
-        const buffKey = effectName?.trim().toLowerCase()
-        const buff = buffKey ? RAID_BUFFS[buffKey] : undefined
-        if (buff) {
-          const windows = activeRaidBuffs.get(targetName) ?? []
-          const durationMs = Number.isFinite(durationSec) ? Math.max(0, durationSec * 1000) : 0
-          const nextWindow = {
-            sourceName,
-            effectName,
-            multiplier: buff.multiplier,
-            expiresAt: currentPullOffsetMs() + durationMs,
-          }
-          const existingIndex = windows.findIndex(window =>
-            window.sourceName === sourceName && window.effectName === effectName,
-          )
-          if (existingIndex === -1) windows.push(nextWindow)
-          else windows[existingIndex] = nextWindow
-          activeRaidBuffs.set(targetName, windows)
-        }
-      }
+      recordRaidBuffWindow(sourceId, sourceName, targetName, effectName, durationSec)
 
       // Only track player resurrections
       if (!targetId.startsWith('10')) return
       // Match known resurrection effects exactly so unrelated buffs don't count as raises.
       const normalizedEffectName = effectName?.trim().toLowerCase()
-      const raiseEffects = new Set(['raise', 'angel whisper', 'resurrection', 'life ascension', 'reraise iii'])
-      const isRaise = normalizedEffectName ? raiseEffects.has(normalizedEffectName) : false
+      const isRaise = normalizedEffectName ? RAISE_EFFECTS.has(normalizedEffectName) : false
       if (isRaise) {
         const rTime = currentPullOffsetMs()
         resurrectTimes.value[targetName] = rTime
@@ -1675,15 +1703,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       if (!effectName || !sourceName || !targetName) return
       removeActiveTickEffect(sourceId, targetId, effectId, effectName)
       removeActiveSelfHealingEffect(sourceId, targetId, effectId, effectName)
-      const buffKey = effectName.trim().toLowerCase()
-      if (!RAID_BUFFS[buffKey]) return
-      const windows = activeRaidBuffs.get(targetName)
-      if (!windows) return
-      let idx = -1
-      for (let i = windows.length - 1; i >= 0; i--) {
-        if (windows[i].sourceName === sourceName && windows[i].effectName === effectName) { idx = i; break }
-      }
-      if (idx !== -1) windows.splice(idx, 1)
+      removeRaidBuffWindow(sourceName, targetName, effectName)
     }
   }
 
@@ -1750,13 +1770,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const rawCombatants = Object.values(event.Combatant).map(c => ({ ...c, name: c.name ?? '' })) as PullRecord['combatants']
     const { combatants } = resolvePets(event.Combatant, profile.value.global.pets)
     const stashDuration = encounterDurationSec(event.Encounter) || 1
-    for (const c of combatants) {
-      const baseDamage  = parseFloat(c['damage'] ?? '0')
-      const contributed = rDpsContributed.get(c.name) ?? 0
-      const received    = rDpsReceived.get(c.name) ?? 0
-      const rdps = Math.max(0, (baseDamage + contributed - received) / stashDuration)
-      c['rdps'] = String(Math.round(rdps))
-    }
+    for (const c of combatants) injectCombatantRdps(c, stashDuration)
     const record: PullRecord = {
       id: `${Date.now()}`,
       timestamp: Date.now(),
@@ -1766,22 +1780,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
       combatants,
       rawCombatants,
       encounter: event.Encounter as PullRecord['encounter'],
-      abilityData:      deepClone(currentAbilityData.value),
-      dpsTimeline:      deepClone(currentTimeline.value),
-      hpsTimeline:      deepClone(currentHealTimeline.value),
-      dtakenTimeline:   deepClone(currentDtakenTimeline.value),
-      damageTakenData:  deepClone(currentDtakenData.value),
-      healingReceivedData: deepClone(currentHealingReceivedData.value),
-      hitData:          snapshotHitData(),
-      rdpsGiven:        mapToRateRecord(rDpsContributed, stashDuration),
-      rdpsTaken:        mapToRateRecord(rDpsReceived, stashDuration),
-      deaths:           deepClone(currentDeaths.value),
-      enemyDeaths:      deepClone(currentEnemyDeaths.value),
-      combatantIds:     deepClone(currentCombatantIds.value),
-      combatantJobs:    deepClone(currentCombatantJobs.value),
-      castData:         deepClone(currentCastData.value),
-      resourceData:     deepClone(currentResourceData.value),
-      partyData:        deepClone(partyData.value),
+      ...snapshotEncounterData(stashDuration),
+      enemyDeaths: deepClone(currentEnemyDeaths.value),
     }
 
     // Avoid duplicate stashes for same pull
@@ -1987,13 +1987,14 @@ export const useLiveDataStore = defineStore('liveData', () => {
   let lastLiveFrame: Frame | null = null
 
   function viewPull(index: number | null): void {
+    const g = profile.value.global
     if (index === null) {
       // Back to live — restore the last live frame
       viewingPull.value = null
       if (lastLiveFrame) {
         engine.push(lastLiveFrame)
       }
-      document.documentElement.style.opacity = String(profile.value.global.opacity)
+      document.documentElement.style.opacity = String(g.opacity)
       scheduleBroadcast()
       return
     }
@@ -2006,79 +2007,23 @@ export const useLiveDataStore = defineStore('liveData', () => {
     }
 
     // Force full opacity when viewing history — no out-of-combat dimming
-    document.documentElement.style.opacity = String(profile.value.global.opacity)
+    document.documentElement.style.opacity = String(g.opacity)
 
     const pull = sessionPulls.value[index]
     if (!pull) return
     
-    const getDtpsValue = (c: Record<string, string>) => {
-      const dt = parseFloat(c['damagetaken'] ?? '0')
-      const dur = parseFloat(c['DURATION'] ?? '0')
-      return dur > 0 ? dt / dur : 0
-    }
-    const maxVal = profile.value.global.dpsType === 'dtps'
-      ? Math.max(...pull.combatants.map(c => getDtpsValue(c)))
-      : Math.max(...pull.combatants.map(c => parseFloat(c[profile.value.global.dpsType] ?? '0')))
-
-    // Use historical partyData for party grouping
-    const historicalParty = pull.partyData ?? []
-    const historicalIsAlliance = historicalParty.length > 8
-    const historicalNameToIdx = new Map(historicalParty.map((p, i) => [p.name, i]))
-    const metricFractionContext = createMetricFractionContext(pull.combatants)
-
-    const bars: BarFrame[] = pull.combatants.map((c, i) => {
-      const rawVal = profile.value.global.dpsType === 'dtps'
-        ? getDtpsValue(c)
-        : parseFloat(c[profile.value.global.dpsType] ?? '0')
-
-      // Determine party group from historical partyData
-      let partyGroup = 'Party'
-      const partyMember = historicalParty.find(p => p.name === c.name)
-      const pt = partyMember?.partyType
-
-      if ((!pt || pt === 'Solo' || pt === 'Party') && historicalIsAlliance) {
-        const partyIdx = historicalNameToIdx.get(c.name)
-        if (partyIdx !== undefined) {
-          const allianceParty = Math.floor(partyIdx / 8)
-          partyGroup = ['Alliance A', 'Alliance B', 'Alliance C'][allianceParty] ?? 'Party'
-        }
-      } else if (pt) {
-        partyGroup = pt.replace(/^Alliance/, 'Alliance ')
-      }
-
-      return {
-        name: c.name,
-        job: normalizeJob(c['Job'] ?? ''),
-        partyGroup,
-        fillFraction: rawVal / (maxVal || 1),
-        displayValue: formatValue(rawVal, profile.value.global.valueFormat),
-        displayPct: c['damage%'] ?? '0',
-        deaths: c.deaths ?? '0',
-        crithit: c['crithit%'] ?? '---',
-        directhit: c['DirectHitPct'] ?? '---',
-        tohit: c.tohit ?? '---',
-        enchps: formatValue(parseFloat(c.enchps ?? '0'), profile.value.global.valueFormat),
-        rdps: formatValue(parseFloat(c['rdps'] ?? '0'), profile.value.global.valueFormat),
-        rawValue: rawVal,
-        rawEnchps: parseFloat(c.enchps ?? '0'),
-        rawRdps: parseFloat(c['rdps'] ?? '0'),
-        maxHit: (c.maxhit ?? '---').replace('-', ' '),
-        metricFractions: buildMetricFractions(metricFractionContext, c),
-        alpha: 1,
-        rank: i + 1,
-      }
-    })
+    const bars = buildCombatantBars(pull.combatants, g.dpsType, pull.partyData ?? [])
 
     engine.push({
       bars,
       encounterTitle: pull.encounterName,
       encounterDuration: pull.duration,
-      totalDps: formatValue(parseFloat(pull.encounter['ENCDPS'] ?? '0'), profile.value.global.valueFormat),
-      totalHps: formatValue(parseFloat(pull.encounter['ENCHPS'] ?? '0'), profile.value.global.valueFormat),
-      totalDtps: formatValue(parseFloat(pull.encounter['damagetaken'] ?? '0') / (encounterDurationSec(pull.encounter) || 1), profile.value.global.valueFormat),
+      totalDps: formatValue(parseFloat(pull.encounter['ENCDPS'] ?? '0'), g.valueFormat),
+      totalHps: formatValue(parseFloat(pull.encounter['ENCHPS'] ?? '0'), g.valueFormat),
+      totalDtps: formatValue(parseFloat(pull.encounter['damagetaken'] ?? '0') / (encounterDurationSec(pull.encounter) || 1), g.valueFormat),
       totalRdps: formatValue(
         bars.reduce((s, b) => s + parseFloat(b.rdps ?? '0'), 0),
-        profile.value.global.valueFormat,
+        g.valueFormat,
       ),
       isActive: true,
     })

@@ -3,6 +3,8 @@ import type { CastEvent, DeathRecord } from '@shared/configSchema'
 import type { BreakdownEventRow, EventActorScope, EventFilter } from './types'
 import { deathEventsFor, formatHpBefore, formatHpValue } from './deathTransforms'
 
+export type EventInspectorRow = [string, string]
+
 interface EventRowSources {
   eventActorScope: Ref<EventActorScope>
   visibleCombatants: ComputedRef<string[]>
@@ -91,4 +93,38 @@ export function useEventRows(sources: EventRowSources) {
   })
 
   return { eventRowCountFor, eventRowsRaw, eventRows }
+}
+
+export function buildActiveFilterChips(options: {
+  pullStatusLabel: string
+  selectedPlayer: string
+  metricLabel: string
+  showEnemies: boolean
+  showFriendlyNPCs: boolean
+  selectedAbility: string
+  eventWindowOnly: boolean
+  selectedDeathIndex: number | null
+  hasSelectedDeathWindow: boolean
+}): string[] {
+  const chips = [`Pull=${options.pullStatusLabel}`, `Player=${options.selectedPlayer || 'None'}`, `Metric=${options.metricLabel}`]
+  if (options.showEnemies) chips.push('Show Enemies')
+  if (options.showFriendlyNPCs) chips.push('Show NPCs')
+  if (options.selectedAbility) chips.push(`Ability=${options.selectedAbility}`)
+  if (options.eventWindowOnly && options.hasSelectedDeathWindow) chips.push(`Window=Death #${(options.selectedDeathIndex ?? 0) + 1}`)
+  return chips
+}
+
+export function buildEventInspectorRows(options: {
+  rowCount: number
+  actorScope: EventActorScope
+  selectedAbility: string
+  eventWindowOnly: boolean
+  hasSelectedDeathWindow: boolean
+}): EventInspectorRow[] {
+  return [
+    ['Rows', String(options.rowCount)],
+    ['Actor Scope', options.actorScope === 'all' ? 'All actors' : 'Selected actor'],
+    ['Selected Ability', options.selectedAbility || 'None'],
+    ['Window', options.eventWindowOnly && options.hasSelectedDeathWindow ? 'Selected death' : 'Whole pull'],
+  ]
 }

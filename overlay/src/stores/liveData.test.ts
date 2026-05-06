@@ -432,6 +432,63 @@ describe('overlay liveData store', () => {
     store.stop()
   })
 
+  it('rebuilds historical breakdown rdps from saved contribution metrics', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData({
+      ...combatData(false, {
+        Alice: { name: 'Alice', Job: 'BRD', encdps: '1000', damage: '60000', damageperc: '60', deaths: '0' },
+        Bob: { name: 'Bob', Job: 'DRG', encdps: '800', damage: '120000', damageperc: '40', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(false, {}).Encounter,
+        duration: '01:00',
+        DURATION: '60',
+      },
+    })
+
+    store.sessionPulls[0].rdpsGiven = { Alice: 120 }
+    store.sessionPulls[0].rdpsTaken = { Bob: 80 }
+    store.viewPull(0)
+    store.broadcastForCombatant('Alice')
+    const payload = JSON.parse(localStorage.getItem('flexi-breakdown-snapshot') ?? '{}')
+
+    expect(payload.rdpsByCombatant).toMatchObject({
+      Alice: 1120,
+      Bob: 720,
+    })
+
+    store.stop()
+  })
+
+  it('merges YOU with the primary player when rebuilding historical rdps', async () => {
+    const store = await createStore()
+    store.start()
+    mocks.listeners.ChangePrimaryPlayer({ type: 'ChangePrimaryPlayer', charName: 'Alice' })
+
+    mocks.listeners.CombatData({
+      ...combatData(false, {
+        YOU: { name: 'YOU', Job: 'BRD', encdps: '1000', damage: '60000', damageperc: '100', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(false, {}).Encounter,
+        duration: '01:00',
+        DURATION: '60',
+      },
+    })
+
+    store.sessionPulls[0].rdpsTaken = { Alice: 250 }
+    store.viewPull(0)
+    store.broadcastForCombatant('Alice')
+    const payload = JSON.parse(localStorage.getItem('flexi-breakdown-snapshot') ?? '{}')
+
+    expect(payload.rdpsByCombatant).toMatchObject({ Alice: 750 })
+    expect(payload.rdpsByCombatant.YOU).toBeUndefined()
+
+    store.stop()
+  })
+
   it('starts a fresh enemy snapshot when logs for a different encounter arrive after a stashed pull', async () => {
     const store = await createStore()
     store.start()

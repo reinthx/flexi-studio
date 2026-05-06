@@ -12,10 +12,11 @@ withDefaults(defineProps<{
   actorJob: (name: string) => string
   actorJobIcon: (name: string) => string
   nameStyle: NameStyleFn
-  tabLabel: (name: string) => string
+  tabLabel?: (name: string) => string
 }>(), {
   title: 'Actors',
   fillClass: '',
+  tabLabel: (name: string) => name,
 })
 
 defineEmits<{
