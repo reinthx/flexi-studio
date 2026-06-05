@@ -62,9 +62,11 @@ export interface BarData {
   deaths: string
   crithit: string
   directhit: string
+  dps: string
   enchps: string
   rdps: string
   rawValue?: number
+  rawDps?: number
   rawEnchps?: number
   rawRdps?: number
   maxHit: string

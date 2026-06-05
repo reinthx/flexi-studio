@@ -23,9 +23,11 @@ export interface BarFrame {
   crithit: string
   directhit: string
   tohit: string
+  dps: string
   enchps: string
   rdps: string
   rawValue: number
+  rawDps: number
   rawEnchps: number
   rawRdps: number
   maxHit: string
@@ -150,9 +152,11 @@ export class TransitionEngine {
           crithit: n.crithit,
           directhit: n.directhit,
           tohit: n.tohit,
+          dps: n.dps,
           enchps: n.enchps,
           rdps: n.rdps,
           rawValue: lerp(p.rawValue, n.rawValue, et),
+          rawDps: lerp(p.rawDps, n.rawDps, et),
           rawEnchps: lerp(p.rawEnchps, n.rawEnchps, et),
           rawRdps: lerp(p.rawRdps, n.rawRdps, et),
           maxHit: n.maxHit,

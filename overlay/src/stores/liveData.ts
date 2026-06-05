@@ -53,9 +53,14 @@ import { buildMetricFractions, createMetricFractionContext } from '@shared/metri
 import { normalizeJob } from '@shared/jobMap'
 import { useOverlayConfig } from './overlayConfig'
 
+declare const __FLEXI_LITE__: boolean | undefined
+
 // Poll config from localStorage every 500ms as fallback
 // (storage events don't fire on same-origin in some browsers)
 const CONFIG_POLL_INTERVAL_MS = 500
+const BREAKDOWN_ENABLED = !(typeof __FLEXI_LITE__ !== 'undefined' && __FLEXI_LITE__ === true)
+const FULL_HISTORY_LIMIT = 15
+const LITE_HISTORY_LIMIT = 5
 
 export const useLiveDataStore = defineStore('liveData', () => {
   // ─── State ───────────────────────────────────────────────────────────────────
@@ -503,6 +508,17 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return parseFloat(c[key] ?? '0') || 0
   }
 
+  function combatantNameAliases(name: string): string[] {
+    const aliases = [name]
+    if (name === 'YOU' && selfName.value) aliases.push(selfName.value)
+    if (selfName.value && name === selfName.value) aliases.push('YOU')
+    return Array.from(new Set(aliases.filter(Boolean)))
+  }
+
+  function mapTotalForCombatant(map: Map<string, number>, name: string): number {
+    return combatantNameAliases(name).reduce((sum, alias) => sum + (map.get(alias) ?? 0), 0)
+  }
+
   function combatantMetricRecord(combatants: Record<string, string>[], key: string): Record<string, number> {
     return Object.fromEntries(combatants.map(c => [c.name, combatantNumber(c, key)]))
   }
@@ -558,9 +574,13 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   function combatantRdps(c: Record<string, string>, durationSec: number): number {
+    if (!BREAKDOWN_ENABLED) {
+      const nativeRdps = combatantNumber(c, 'rdps') || combatantNumber(c, 'RDPS')
+      if (nativeRdps > 0) return nativeRdps
+    }
     const duration = Math.max(1, durationSec)
     const baseDps = combatantNumber(c, 'encdps') || (combatantNumber(c, 'damage') / duration)
-    return Math.max(0, baseDps + ((rDpsContributed.get(c.name) ?? 0) / duration) - ((rDpsReceived.get(c.name) ?? 0) / duration))
+    return Math.max(0, baseDps + (mapTotalForCombatant(rDpsContributed, c.name) / duration) - (mapTotalForCombatant(rDpsReceived, c.name) / duration))
   }
 
   function injectCombatantRdps(c: Record<string, string>, durationSec: number): number {
@@ -661,6 +681,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   function broadcastEncounterData(selectedCombatant?: string): void {
+    if (!BREAKDOWN_ENABLED) return
     const payload = buildBreakdownPayload(selectedCombatant)
     persistBreakdownPayload(payload)
     breakdownChannel?.postMessage(payload)
@@ -668,6 +689,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   // Debounced — LogLine events fire per-hit; we don't need a broadcast per hit.
   function scheduleBroadcast(): void {
+    if (!BREAKDOWN_ENABLED) return
     if (broadcastTimer) return
     broadcastTimer = setTimeout(() => {
       broadcastTimer = null
@@ -677,6 +699,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   // Called from MeterView on bar click — sends encounter-aware data with combatant hint
   function broadcastForCombatant(name: string): void {
+    if (!BREAKDOWN_ENABLED) return
     broadcastEncounterData(name)
   }
 
@@ -748,9 +771,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
       crithit: c['crithit%'] ?? '---',
       directhit: c['DirectHitPct'] ?? '---',
       tohit: c.tohit ?? '---',
+      dps: formatValue(combatantNumber(c, 'encdps'), valueFormat),
       enchps: formatValue(combatantNumber(c, 'enchps'), valueFormat),
       rdps: formatValue(combatantNumber(c, 'rdps'), valueFormat),
       rawValue: rawVal,
+      rawDps: combatantNumber(c, 'encdps'),
       rawEnchps: combatantNumber(c, 'enchps'),
       rawRdps: combatantNumber(c, 'rdps'),
       maxHit: (c.maxhit ?? '---').replace('-', ' '),
@@ -782,7 +807,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     for (const c of combatants) {
       const job = normalizeJob(c['Job'] ?? '')
       if (c.name && job) currentCombatantJobs.value[c.name] = job
-      recordResourceSample(c)
+      if (BREAKDOWN_ENABLED) recordResourceSample(c)
     }
 
     refreshLiveCombatantMetrics(combatants, encounterDurationSec(event.Encounter) || 1)
@@ -888,9 +913,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const enemyNames = logLineEnemyNames(parts, lineType)
     if (enemyNames.length === 0) return
 
-    const pendingTitle = pendingStashedEncounterTitle.trim().toLowerCase()
-    const sameEncounter = enemyNames.some(name => name.trim().toLowerCase() === pendingTitle)
-    if (!sameEncounter) resetAbilityData()
+    resetAbilityData(true)
     pendingStashedEncounterTitle = ''
   }
 
@@ -926,8 +949,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
     const nowMs = currentPullOffsetMs()
     const windows = [
-      ...activeBuffWindowsFor(dealerName, nowMs),
-      ...activeBuffWindowsFor(targetName, nowMs),
+      ...combatantNameAliases(dealerName).flatMap(alias => activeBuffWindowsFor(alias, nowMs)),
+      ...combatantNameAliases(targetName).flatMap(alias => activeBuffWindowsFor(alias, nowMs)),
     ].filter(window => window.sourceName !== dealerName)
     const allocations = allocatePercentageBuffDamage(damage, windows)
     for (const allocation of allocations) {
@@ -1474,6 +1497,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   function onLogLine(event: LogLineEvent): void {
+    if (!BREAKDOWN_ENABLED) {
+      onLiteLogLine(event)
+      return
+    }
+
     const parts = event.rawLine.split('|')
     const lineType = parts[0]
     const parsedLogTime = Date.parse(parts[1] ?? '')
@@ -1707,7 +1735,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     }
   }
 
-  function resetAbilityData(): void {
+  function resetAbilityData(preserveCurrentLogTime = false): void {
     currentAbilityData.value = {}
     currentTimeline.value = {}
     currentHealTimeline.value = {}
@@ -1725,6 +1753,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     nonObjectiveNpcNames.clear()
     hpSampleBuffer.clear()
     hitEventBuffer.clear()
+    lastHpSampleTime.clear()
     lastKnownHp.clear()
     currentCastData.value = {}
     currentResourceData.value = {}
@@ -1740,6 +1769,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     networkEnemyInstances.clear()
     pullStartTime = Date.now()
     pullStartLogTime = 0
+    if (!preserveCurrentLogTime) currentLogTime = null
     broadcastEncounterData()
   }
 
@@ -1754,7 +1784,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const titleChanged = !!title && title !== lastEncounterTitle
     const durationRewound = !!title && title === lastEncounterTitle && lastDuration > 0 && duration > 0 && duration + 2 < lastDuration
 
-    if (titleChanged || durationRewound) {
+    if (pendingStashedEncounterTitle || titleChanged || durationRewound) {
       resetAbilityData()
     }
 
@@ -1767,30 +1797,33 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const title = event.Encounter['title'] ?? ''
     if (!title) return
 
-    const rawCombatants = Object.values(event.Combatant).map(c => ({ ...c, name: c.name ?? '' })) as PullRecord['combatants']
     const { combatants } = resolvePets(event.Combatant, profile.value.global.pets)
     const stashDuration = encounterDurationSec(event.Encounter) || 1
     for (const c of combatants) injectCombatantRdps(c, stashDuration)
-    const record: PullRecord = {
+    const recordBase = {
       id: `${Date.now()}`,
       timestamp: Date.now(),
       encounterName: title,
       zone: zone.value,
       duration: event.Encounter['duration'] ?? '',
       combatants,
-      rawCombatants,
       encounter: event.Encounter as PullRecord['encounter'],
+      partyData: partyData.value,
+    }
+    const record: PullRecord = BREAKDOWN_ENABLED ? {
+      ...recordBase,
+      rawCombatants: Object.values(event.Combatant).map(c => ({ ...c, name: c.name ?? '' })) as PullRecord['combatants'],
       ...snapshotEncounterData(stashDuration),
       enemyDeaths: deepClone(currentEnemyDeaths.value),
-    }
+    } : recordBase
 
     // Avoid duplicate stashes for same pull
     const last = sessionPulls.value[0]
     if (last?.encounterName === record.encounterName && last?.duration === record.duration) return
 
-    sessionPulls.value = [record, ...sessionPulls.value].slice(0, 15)
+    sessionPulls.value = [record, ...sessionPulls.value].slice(0, BREAKDOWN_ENABLED ? FULL_HISTORY_LIMIT : LITE_HISTORY_LIMIT)
     pendingStashedEncounterTitle = title
-    persistPulls()
+    if (BREAKDOWN_ENABLED) persistPulls()
   }
 
   async function persistPulls(): Promise<void> {
@@ -1894,7 +1927,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       }
     } catch { /* corrupt — DEFAULT_PROFILE stays */ }
 
-    if (typeof BroadcastChannel !== 'undefined') {
+    if (BREAKDOWN_ENABLED && typeof BroadcastChannel !== 'undefined') {
       breakdownChannel = new BroadcastChannel('flexi-breakdown')
       breakdownChannel.onmessage = (e) => {
         if (e.data?.type === 'request') {
@@ -1971,12 +2004,49 @@ export const useLiveDataStore = defineStore('liveData', () => {
       applyConfig(overlayConfig.profile)
     }
 
-    try {
-      const pullResult = await callHandler({ call: 'loadData', key: 'act-flexi-pulls' }) as { data?: string }
-      if (pullResult?.data) {
-        try { sessionPulls.value = JSON.parse(pullResult.data) } catch { /* corrupt */ }
-      }
-    } catch { /* OverlayPlugin not available */ }
+    if (BREAKDOWN_ENABLED) {
+      try {
+        const pullResult = await callHandler({ call: 'loadData', key: 'act-flexi-pulls' }) as { data?: string }
+        if (pullResult?.data) {
+          try { sessionPulls.value = JSON.parse(pullResult.data) } catch { /* corrupt */ }
+        }
+      } catch { /* OverlayPlugin not available */ }
+    }
+  }
+
+  function onLiteLogLine(event: LogLineEvent): void {
+    const parts = event.rawLine.split('|')
+    const lineType = parts[0]
+    const parsedLogTime = Date.parse(parts[1] ?? '')
+    currentLogTime = Number.isFinite(parsedLogTime) ? parsedLogTime : null
+
+    if (lineType === '21' || lineType === '22') {
+      const sourceId     = parts[2]
+      const sourceName   = parts[3]
+      const targetId     = parts[6]
+      const targetName   = parts[7]
+      const flags        = parts[8]
+      const damageHex    = parts[9]
+      const petOwnerId   = parts[47]
+      const petOwnerName = parts[48]
+      if (actionEffectKind(flags) !== 0x03) return
+      const damage = decodeLogDamage(damageHex)
+      if (damage <= 0) return
+      attributeRaidBuffContribution(petOwnerName || sourceName, petOwnerName ? petOwnerId : sourceId, targetName, targetId, damage)
+    } else if (lineType === '26') {
+      const effectName = parts[3]
+      const durationSec = parseFloat(parts[4])
+      const sourceId = parts[5]
+      const sourceName = parts[6]
+      const targetName = parts[8]
+      recordRaidBuffWindow(sourceId, sourceName, targetName, effectName, durationSec)
+    } else if (lineType === '30') {
+      const effectName = parts[3]
+      const sourceName = parts[6]
+      const targetName = parts[8]
+      if (!effectName || !sourceName || !targetName) return
+      removeRaidBuffWindow(sourceName, targetName, effectName)
+    }
   }
 
   function clearHoldTimer(): void {
@@ -2031,16 +2101,17 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   // ─── Store exports ───────────────────────────────────────────────────────────
 
-  // Track last 15 unique encounters (by title+duration combo)
+  // Track recent unique encounters (by title+duration combo)
   const recentEncounters = computed(() => {
     const seen = new Set<string>()
     const encounters: PullRecord[] = []
+    const limit = BREAKDOWN_ENABLED ? FULL_HISTORY_LIMIT : LITE_HISTORY_LIMIT
     for (const pull of sessionPulls.value) {
       const key = `${pull.encounterName}::${pull.duration}`
       if (!seen.has(key)) {
         seen.add(key)
         encounters.push(pull)
-        if (encounters.length >= 15) break
+        if (encounters.length >= limit) break
       }
     }
     return encounters

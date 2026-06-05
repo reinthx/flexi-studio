@@ -12,6 +12,7 @@
     "build:github": "node scripts/build-github.js",
     "build:editor": "pnpm --filter editor build",
     "build:overlay": "pnpm --filter overlay build",
+    "build:overlay:lite": "pnpm --filter overlay build:lite",
     "update-assets": "node scripts/update-assets.js",
     "preview": "cd dist/editor && npx http-server -p 3000",
     "preview:overlay": "cd dist/overlay && npx http-server -p 3001",

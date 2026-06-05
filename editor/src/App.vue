@@ -24,6 +24,7 @@ function resolveRoute(): Route {
 }
 
 const currentRoute = ref<Route>(resolveRoute())
+const isLiteEditor = new URLSearchParams(window.location.search).get('lite') === '1'
 
 // Keep overlay mode alias for all existing v-if/v-else references
 const isOverlayMode = computed(() => currentRoute.value === 'overlay')
@@ -127,7 +128,7 @@ const saveStateLabel = computed(() => applySuccess.value ? 'Live overlay updated
         <span class="save-state" :class="{ dirty: config.dirty, success: applySuccess }">{{ saveStateLabel }}</span>
       </div>
       <div class="top-bar-right">
-        <button class="utility-btn" @click="openBreakdown">Open Breakdown</button>
+        <button v-if="!isLiteEditor" class="utility-btn" @click="openBreakdown">Open Breakdown</button>
         <button class="apply-btn" :class="{ success: applySuccess }" @click="applyLive">
           {{ applySuccess ? '✓ Applied' : 'Apply Changes' }}
         </button>

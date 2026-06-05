@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 
 const EDITOR_URL = 'http://127.0.0.1:4173'
 const OVERLAY_URL = 'http://127.0.0.1:4174'
+const LITE_OVERLAY_URL = 'http://127.0.0.1:4175'
 
 function breakdownSnapshot() {
   const now = Date.now()
@@ -202,6 +203,12 @@ async function installOverlayPluginMock(page: Page) {
   }, combatDataEvent())
 }
 
+async function blockOverlayPluginCommon(page: Page) {
+  await page.route('https://overlayplugin.github.io/OverlayPlugin/assets/shared/common.min.js', route => {
+    route.fulfill({ status: 200, contentType: 'application/javascript', body: '' })
+  })
+}
+
 async function expectNoConsoleErrors(page: Page) {
   const errors: string[] = []
   page.on('console', msg => {
@@ -240,6 +247,19 @@ test('overlay renders the standalone shell', async ({ page }) => {
   await page.goto(OVERLAY_URL)
   await expect(page.locator('.meter-root')).toBeVisible()
   await expect(page.locator('.meter-root')).toContainText('Waiting for combat data')
+  await expectNonEmptyScreenshot(page.locator('.meter-root'))
+  expect(errors).toEqual([])
+})
+
+test('lite overlay renders the meter without Breakout actions', async ({ page }) => {
+  const errors = await expectNoConsoleErrors(page)
+  await blockOverlayPluginCommon(page)
+
+  await page.goto(LITE_OVERLAY_URL)
+  await expect(page.locator('.meter-root')).toBeVisible()
+  await dispatchOverlayData(page)
+  await expect(page.getByText('Tester McTestface').first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Pulls' })).toHaveCount(0)
   await expectNonEmptyScreenshot(page.locator('.meter-root'))
   expect(errors).toEqual([])
 })

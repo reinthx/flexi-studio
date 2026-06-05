@@ -12,6 +12,9 @@ run('pnpm exec vite build', 'editor')
 console.log('\n── Building overlay ──')
 run('pnpm exec vite build', 'overlay')
 
+console.log('\n── Building overlay lite ──')
+run('pnpm exec vite build --mode lite', 'overlay')
+
 // Job icons are inlined in shared/src/jobIcons.ts — no asset copy needed
 
-console.log('\n✓ Build complete → dist/editor/  dist/overlay/')
+console.log('\n✓ Build complete → dist/editor/  dist/overlay/  dist/overlay-lite/')

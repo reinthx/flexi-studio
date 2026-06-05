@@ -99,15 +99,29 @@ const blurStyle = computed(() => {
 
 const tokens = computed(() => buildFlexiBarTokens(props.bar, props.showRank, props.valueFormat ?? 'abbreviated'))
 
+function metricAwareValue(field: { template: string }, fmt: ValueFormat): string | undefined {
+  const template = field.template.toLowerCase()
+  if (!field.template.includes('{value}')) return undefined
+  if (template.includes('rdps')) return formatValue(props.bar.rawRdps ?? props.bar.rawValue ?? 0, fmt)
+  if (template.includes('dps') && !template.includes('rdps')) return formatValue(props.bar.rawDps ?? props.bar.rawValue ?? 0, fmt)
+  return undefined
+}
+
 function fieldText(field: { template: string; valueFormat?: string }): string {
   const tpl = field.template.replace('{icon}', '').trim()
   const fmt = field.valueFormat as ValueFormat
+  const metricValue = metricAwareValue(field, fmt || props.valueFormat || 'abbreviated')
   if (fmt && fmt !== props.valueFormat) {
     const nextTokens = { ...tokens.value }
-    nextTokens.value = formatValue(props.bar.rawValue ?? 0, fmt)
+    nextTokens.value = metricValue ?? formatValue(props.bar.rawValue ?? 0, fmt)
+    nextTokens.dps = formatValue(props.bar.rawDps ?? 0, fmt)
+    nextTokens.encdps = nextTokens.dps
     nextTokens.enchps = formatValue(props.bar.rawEnchps ?? 0, fmt)
     nextTokens.rdps = formatValue(props.bar.rawRdps ?? 0, fmt)
     return renderTemplate(tpl, nextTokens)
+  }
+  if (metricValue !== undefined) {
+    return renderTemplate(tpl, { ...tokens.value, value: metricValue })
   }
   return renderTemplate(tpl, tokens.value)
 }

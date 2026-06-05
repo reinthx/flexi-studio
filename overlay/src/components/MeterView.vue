@@ -9,14 +9,32 @@ import { buildFillCss } from '@shared/cssBuilder'
 import { loadCustomFont } from '@shared/googleFonts'
 import ScrollableBarsWrapper from '@shared/components/ScrollableBarsWrapper.vue'
 
+const props = withDefaults(defineProps<{
+  breakdownEnabled?: boolean
+}>(), {
+  breakdownEnabled: true,
+})
+
 const store = useLiveDataStore()
 const g = computed(() => store.profile.global)
 const frame = computed(() => store.frame)
+const canUseBreakdown = computed(() => props.breakdownEnabled)
+
+function editorUrl(): string {
+  const url = new URL(window.location.href)
+  const liteIndex = url.pathname.toLowerCase().indexOf('/lite/')
+  if (liteIndex >= 0) {
+    url.pathname = url.pathname.slice(0, liteIndex + 1)
+    url.searchParams.set('lite', '1')
+  } else {
+    url.search = ''
+  }
+  url.hash = '/editor'
+  return url.toString()
+}
 
 const openEditor = () => {
-  const url = new URL(window.location.href)
-  url.hash = '/editor'
-  window.open(url.toString(), 'act-flexi-editor', 'width=1300,height=840')
+  window.open(editorUrl(), 'act-flexi-editor', 'width=1300,height=840')
 }
 
 interface ResolvedBar {
@@ -29,11 +47,13 @@ interface ResolvedBar {
   crithit: string
   directhit: string
   tohit: string
+  dps: string
   enchps: string
   rdps: string
   maxHit: string
   alpha: number
   rank: number
+  rawDps: number
   barIndex: number
   style: BarStyle & { rank1HeightIncrease?: number }
   isSelf: boolean
@@ -78,6 +98,7 @@ function toggleMergePets() {
 const selectedCombatant = ref<string | null>(null)
 
 function openPullDashboard() {
+  if (!canUseBreakdown.value) return
   localStorage.removeItem('flexi-breakdown-view')
   localStorage.removeItem('flexi-breakdown-init')
   const url = new URL(window.location.href)
@@ -88,6 +109,7 @@ function openPullDashboard() {
 }
 
 function openAbilityBreakdown(name?: string) {
+  if (!canUseBreakdown.value) return
   localStorage.removeItem('flexi-breakdown-view')
   const initialName = name ?? store.selfName ?? bars.value[0]?.name ?? ''
   if (initialName) localStorage.setItem('flexi-breakdown-init', initialName)
@@ -238,7 +260,7 @@ const showResizeCorner = computed(() => g.value.header?.pinned === true)
       :global="g"
       :show-settings="true"
       :on-settings="openEditor"
-      :on-breakdown="openPullDashboard"
+      :on-breakdown="canUseBreakdown ? openPullDashboard : undefined"
       :on-set-combatant-filter="setCombatantFilter"
       :on-toggle-blur-names="toggleBlurNames"
       :on-toggle-pin="togglePin"
@@ -264,7 +286,7 @@ const showResizeCorner = computed(() => g.value.header?.pinned === true)
           :bar-index="bar.barIndex"
           :rank1-config="bar.isRank1 && g.rankIndicator?.rank1Enabled ? g.rankIndicator : undefined"
           :color-overrides="store.profile.overrides"
-          @click="openAbilityBreakdown(bar.name)"
+          @click="canUseBreakdown ? openAbilityBreakdown(bar.name) : undefined"
         />
       </ScrollableBarsWrapper>
     </div>
@@ -296,9 +318,8 @@ const showResizeCorner = computed(() => g.value.header?.pinned === true)
   min-height: 80px;
   display: flex;
   flex-direction: column;
-  overflow: auto;
+  overflow: hidden;
   position: relative;
-  resize: both;
 }
 .meter-root.is-horizontal {
   min-height: 1px;
