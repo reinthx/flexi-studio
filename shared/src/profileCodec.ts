@@ -345,211 +345,200 @@ const DEFAULT_GLOBAL: GlobalConfig = {
 
 const DEFAULT_HORIZONTAL_HEIGHT = 72
 
-function cleanProfile(profile: Profile): Profile {
-  const cleaned = JSON.parse(JSON.stringify(profile))
+type MutableRecord = Record<string, any>
 
-  // Strip dead label fields
-  if (cleaned.default?.label) {
-    for (const field of DEAD_LABEL_FIELDS) {
-      delete cleaned.default.label[field]
+function migrateLabelFields(fields: Partial<LabelField>[]): void {
+  for (const f of fields) {
+    const anyF = f as unknown as MutableRecord
+    delete anyF.selfColor
+    if (anyF.colorMode === 'self') {
+      f.selfMode = true
+      delete anyF.colorMode
     }
   }
+}
 
-  // Migrate label fields: colorMode 'self' → selfMode:true, strip dead selfColor
-  function migrateLabelFields(fields: Partial<LabelField>[]) {
-    for (const f of fields) {
-      const anyF = f as Record<string, unknown>
-      delete anyF.selfColor
-      if ((anyF.colorMode as string) === 'self') {
-        f.selfMode = true
-        delete f.colorMode
-      }
-    }
+function cleanProfileLabelFields(cleaned: any): void {
+  const label = cleaned.default?.label as MutableRecord | undefined
+  if (label) {
+    for (const field of DEAD_LABEL_FIELDS) delete label[field]
   }
-  if (Array.isArray(cleaned.default?.label?.fields)) {
-    migrateLabelFields(cleaned.default.label.fields)
-  }
-  // Also migrate tab labelConfig fields
+  if (Array.isArray(cleaned.default?.label?.fields)) migrateLabelFields(cleaned.default.label.fields)
   if (Array.isArray(cleaned.global?.tabs)) {
     for (const tab of cleaned.global.tabs) {
       if (Array.isArray(tab.labelConfig?.fields)) migrateLabelFields(tab.labelConfig.fields)
     }
   }
-  // Also migrate rank1Style label fields if present
   if (Array.isArray(cleaned.global?.rankIndicator?.rank1Style?.label?.fields)) {
     migrateLabelFields(cleaned.global.rankIndicator.rank1Style.label.fields)
   }
+}
 
-  // Clean gradientColor - strip if fill.type is not gradient
-  if (cleaned.default?.fill?.type !== 'gradient') delete cleaned.default.gradientColor
-  if (cleaned.default?.bg?.type !== 'gradient') delete cleaned.default.bg.gradientColor
-  if (cleaned.global?.windowBackground?.type !== 'gradient') delete cleaned.global.windowBackground.gradientColor
+function cleanGradientColors(cleaned: any): void {
+  const def = cleaned.default as MutableRecord | undefined
+  if (def?.fill?.type !== 'gradient') delete def?.gradientColor
+  if (def?.bg?.type !== 'gradient') delete def?.bg?.gradientColor
+  if (cleaned.global?.windowBackground?.type !== 'gradient') delete cleaned.global?.windowBackground?.gradientColor
+}
 
-  // Strip "enabled: false" blocks that match defaults
-  // label.shadow
-  if (cleaned.default?.label?.shadow?.enabled === false && 
-      JSON.stringify(cleaned.default.label.shadow).length < 80) {
-    delete cleaned.default.label.shadow
+function stripDisabledDefaultBlocks(cleaned: any): void {
+  const label = cleaned.default?.label as MutableRecord | undefined
+  if (label?.shadow?.enabled === false && JSON.stringify(label.shadow).length < 80) {
+    delete label.shadow
   }
-  // label.outline with enabled: false
-  if (cleaned.default?.label?.outline?.enabled === false) {
-    delete cleaned.default.label.outline
+  if (label?.outline?.enabled === false) delete label.outline
+  const iconConfig = label?.iconConfig as MutableRecord | undefined
+  if (iconConfig?.shadow?.enabled === false) delete iconConfig.shadow
+  if (iconConfig?.outline?.enabled === false) delete iconConfig.outline
+  if (iconConfig?.classOutline?.enabled === false) delete iconConfig.classOutline
+  if (iconConfig && 'mode' in iconConfig) {
+    delete iconConfig.mode
   }
-  // iconConfig.shadow enabled: false
-  if (cleaned.default?.label?.iconConfig?.shadow?.enabled === false) {
-    delete cleaned.default.label.iconConfig.shadow
+  const shape = cleaned.default?.shape as MutableRecord | undefined
+  if (shape?.fillShadow?.enabled === false && JSON.stringify(shape.fillShadow).length < 60) {
+    delete shape.fillShadow
   }
-  // iconConfig.outline enabled: false
-  if (cleaned.default?.label?.iconConfig?.outline?.enabled === false) {
-    delete cleaned.default.label.iconConfig.outline
-  }
-  // iconConfig.classOutline enabled: false
-  if (cleaned.default?.label?.iconConfig?.classOutline?.enabled === false) {
-    delete cleaned.default.label.iconConfig.classOutline
-  }
-  if (cleaned.default?.label?.iconConfig && 'mode' in cleaned.default.label.iconConfig) {
-    delete (cleaned.default.label.iconConfig as unknown as Record<string, unknown>).mode
-  }
-  // shape.fillShadow enabled: false
-  if (cleaned.default?.shape?.fillShadow?.enabled === false && 
-      JSON.stringify(cleaned.default.shape.fillShadow).length < 60) {
-    delete cleaned.default.shape.fillShadow
-  }
+}
 
-  // Strip shape fields matching defaults
-  if (cleaned.default?.shape) {
-    const shape = cleaned.default.shape as unknown as Record<string, unknown>
-    for (const [key, value] of Object.entries(DEFAULT_SHAPE)) {
-      if (JSON.stringify(shape[key]) === JSON.stringify(value)) {
-        delete shape[key]
-      }
-    }
-    if (Object.keys(cleaned.default.shape).length === 0) delete cleaned.default.shape
+function stripShapeDefaults(cleaned: any): void {
+  if (!cleaned.default?.shape) return
+  const shape = cleaned.default.shape as MutableRecord
+  const shapeDefaults = DEFAULT_SHAPE as unknown as MutableRecord
+  for (const [key, value] of Object.entries(shapeDefaults)) {
+    if (JSON.stringify(shape[key]) === JSON.stringify(value)) delete shape[key]
   }
+  if (Object.keys(cleaned.default.shape).length === 0) delete cleaned.default.shape
+}
 
-  // Strip label fields matching defaults
-  if (cleaned.default?.label) {
-    const labelDefaults = ['font', 'size', 'color', 'textTransform', 'padding', 'gap', 'gradient', 'separateRowDeaths', 'deathOffsetX', 'deathOffsetY', 'deathSize', 'deathOpacity']
-    for (const key of labelDefaults) {
-      if (cleaned.default.label[key] === (DEFAULT_LABEL as unknown as Record<string, unknown>)[key]) delete cleaned.default.label[key]
-    }
-    if (cleaned.default.label.fields) {
-      const defFields = DEFAULT_LABEL.fields
-      const fields = cleaned.default.label.fields.filter((f: any, i: number) => {
-        if (!defFields[i]) return true
-        return JSON.stringify(f) !== JSON.stringify(defFields[i])
-      })
-      cleaned.default.label.fields = fields.length > 0 ? fields : undefined
-      if (!cleaned.default.label.fields) delete cleaned.default.label.fields
-    }
-    if (cleaned.default.label.shadow) {
-      const match = JSON.stringify(cleaned.default.label.shadow) === JSON.stringify(DEFAULT_LABEL.shadow)
-      if (match) delete cleaned.default.label.shadow
-    }
-    if (cleaned.default.label.outline) {
-      const match = JSON.stringify(cleaned.default.label.outline) === JSON.stringify(DEFAULT_LABEL.outline)
-      if (match) delete cleaned.default.label.outline
-    }
-    if (cleaned.default.label.iconConfig) {
-      const match = JSON.stringify(cleaned.default.label.iconConfig) === JSON.stringify(DEFAULT_LABEL.iconConfig)
-      if (match) delete cleaned.default.label.iconConfig
+function stripLabelDefaults(cleaned: any): void {
+  if (!cleaned.default?.label) return
+  const label = cleaned.default.label as MutableRecord
+  const labelDefaults = ['font', 'size', 'color', 'textTransform', 'padding', 'gap', 'gradient', 'separateRowDeaths', 'deathOffsetX', 'deathOffsetY', 'deathSize', 'deathOpacity']
+  const defaultsRec = DEFAULT_LABEL as unknown as MutableRecord
+  for (const key of labelDefaults) {
+    if (label[key] === defaultsRec[key]) delete label[key]
+  }
+  if (label.fields) {
+    const fields = (label.fields as any[]).filter((f: any, i: number) => {
+      if (!DEFAULT_LABEL.fields[i]) return true
+      return JSON.stringify(f) !== JSON.stringify(DEFAULT_LABEL.fields[i])
+    })
+    if (fields.length > 0) {
+      label.fields = fields
+    } else {
+      delete label.fields
     }
   }
+  if (label.shadow && JSON.stringify(label.shadow) === JSON.stringify(DEFAULT_LABEL.shadow)) {
+    delete label.shadow
+  }
+  if (label.outline && JSON.stringify(label.outline) === JSON.stringify(DEFAULT_LABEL.outline)) {
+    delete label.outline
+  }
+  if (label.iconConfig && JSON.stringify(label.iconConfig) === JSON.stringify(DEFAULT_LABEL.iconConfig)) {
+    delete label.iconConfig
+  }
+}
 
-  // Strip global fields matching defaults
-  if (cleaned.global) {
-    const globalScalarDefaults: Record<string, any> = {
-      dpsType: 'encdps', sortBy: 'encdps', maxCombatants: 72, showHeader: true,
-      transitionDuration: 800, holdDuration: 12000, orientation: 'vertical', opacity: 1,
-      outOfCombat: 'dim', outOfCombatOpacity: 0.4, valueFormat: 'abbreviated',
-      combatantFilter: 'all', partyOnly: false, selfOnly: false, blurNames: false,
-      windowOpacity: 1, windowBg: 'transparent', mergePets: true,
-      header: { show: true, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
-      footer: { show: false, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
-      rankIndicator: { rank1Enabled: false, showNumbers: false, rank1HeightIncrease: 0, rank1ShowCrown: false, rank1Crown: { enabled: false, icon: '👑', imageUrl: '$CRW:cute', size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' }, rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
-      rank1NameStyle: { enabled: false }, },
-      pets: { show: false, mergeWithOwner: true },
-    }
-    for (const [key, value] of Object.entries(globalScalarDefaults)) {
-      if (cleaned.global[key] === value) delete cleaned.global[key]
-    }
-    if (cleaned.global.windowBorder?.enabled === false) {
-      delete cleaned.global.windowBorder
-    }
-    if (cleaned.global.windowShadow?.enabled === false) {
-      delete cleaned.global.windowShadow
-    }
-    if (cleaned.global.windowBackground?.type === 'solid' && cleaned.global.windowBackground.color === 'transparent') {
-      delete cleaned.global.windowBackground
-    }
-    if (cleaned.global.header?.template === '{encounter}  {duration}' && cleaned.global.header.font === 'Segoe UI' && cleaned.global.header.size === 11 && cleaned.global.header.color === '#cccccc') {
-      delete cleaned.global.header
-    }
-    if (cleaned.global.footer?.show === false) {
-      delete cleaned.global.footer
-    }
-    if (cleaned.global.rankIndicator) {
-      const ri = cleaned.global.rankIndicator
-      // Strip rank1Style if empty
-      if (ri.rank1Style && Object.keys(ri.rank1Style).length === 0) delete ri.rank1Style
-      // Strip rank1NameStyle.glow (removed from schema — migrate out)
-      if (ri.rank1NameStyle?.glow !== undefined) delete ri.rank1NameStyle.glow
-      // Strip rank1NameStyle if default { enabled: false }
-      if (ri.rank1NameStyle?.enabled === false && !ri.rank1NameStyle.gradient) {
-        delete ri.rank1NameStyle
-      }
-      // Strip rank1IconStyle if disabled (default absent)
-      if (ri.rank1IconStyle?.enabled === false) delete ri.rank1IconStyle
-      // Strip whole rankIndicator if only default-off fields remain
-      if (ri.rank1Enabled === false && !ri.rank1Style && !ri.rank1NameStyle && !ri.rank1IconStyle &&
-          ri.showNumbers === false && !ri.rank1HeightIncrease &&
-          !ri.rank1ShowCrown && ri.rank1Crown?.enabled === false && ri.rank1Glow?.enabled === false) {
-        delete cleaned.global.rankIndicator
-      }
-    }
-    if (cleaned.global.pets?.show === false && cleaned.global.pets?.mergeWithOwner === true && Object.keys(cleaned.global.pets).length <= 2) {
-      delete cleaned.global.pets
+function stripRankIndicatorDefaults(global: any): void {
+  if (!global?.rankIndicator) return
+  const ri = global.rankIndicator as MutableRecord
+  if (ri.rank1Style && Object.keys(ri.rank1Style).length === 0) delete ri.rank1Style
+  if (ri.rank1NameStyle?.glow !== undefined) delete ri.rank1NameStyle.glow
+  if (ri.rank1NameStyle?.enabled === false && !ri.rank1NameStyle.gradient) delete ri.rank1NameStyle
+  if (ri.rank1IconStyle?.enabled === false) delete ri.rank1IconStyle
+  if (ri.rank1Enabled === false && !ri.rank1Style && !ri.rank1NameStyle && !ri.rank1IconStyle &&
+      ri.showNumbers === false && !ri.rank1HeightIncrease &&
+      !ri.rank1ShowCrown && ri.rank1Crown?.enabled === false && ri.rank1Glow?.enabled === false) {
+    delete global.rankIndicator
+  }
+}
+
+function stripGlobalDefaults(cleaned: any): void {
+  if (!cleaned.global) return
+  const global = cleaned.global as MutableRecord
+  const globalScalarDefaults: Record<string, any> = {
+    dpsType: 'encdps', sortBy: 'encdps', maxCombatants: 72, showHeader: true,
+    transitionDuration: 800, holdDuration: 12000, orientation: 'vertical', opacity: 1,
+    outOfCombat: 'dim', outOfCombatOpacity: 0.4, valueFormat: 'abbreviated',
+    combatantFilter: 'all', partyOnly: false, selfOnly: false, blurNames: false,
+    windowOpacity: 1, windowBg: 'transparent', mergePets: true,
+    header: { show: true, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
+    footer: { show: false, background: { type: 'solid', color: '#0d0d1a' }, borderRadius: 4, pinned: true },
+    rankIndicator: { rank1Enabled: false, showNumbers: false, rank1HeightIncrease: 0, rank1ShowCrown: false, rank1Crown: { enabled: false, icon: '👑', imageUrl: '$CRW:cute', size: 20, offsetX: 2, offsetY: 0, rotation: 0, hAnchor: 'left', vAnchor: 'middle' }, rank1Glow: { enabled: false, color: '#FFD700', blur: 8 },
+    rank1NameStyle: { enabled: false }, },
+    pets: { show: false, mergeWithOwner: true },
+  }
+  for (const [key, value] of Object.entries(globalScalarDefaults)) {
+    if (global[key] === value) delete global[key]
+  }
+  if (cleaned.global.windowBorder?.enabled === false) delete cleaned.global.windowBorder
+  if (cleaned.global.windowShadow?.enabled === false) delete cleaned.global.windowShadow
+  if (cleaned.global.windowBackground?.type === 'solid' && cleaned.global.windowBackground.color === 'transparent') delete cleaned.global.windowBackground
+  if (cleaned.global.header?.template === '{encounter}  {duration}' && cleaned.global.header.font === 'Segoe UI' && cleaned.global.header.size === 11 && cleaned.global.header.color === '#cccccc') delete cleaned.global.header
+  if (cleaned.global.footer?.show === false) delete cleaned.global.footer
+  stripRankIndicatorDefaults(cleaned.global)
+  if (cleaned.global.pets?.show === false && cleaned.global.pets?.mergeWithOwner === true && Object.keys(cleaned.global.pets).length <= 2) {
+    delete cleaned.global.pets
+  }
+}
+
+function compactEnabledOverrides(overrides: MutableRecord | undefined): void {
+  if (!overrides) return
+  for (const [key, enabled] of Object.entries(overrides)) {
+    if (enabled === true) delete overrides[key]
+  }
+}
+
+function compactColorOverrides(
+  overrides: MutableRecord | undefined,
+  defaultColors: Record<string, string>,
+): MutableRecord | undefined {
+  if (!overrides) return undefined
+  const compact: MutableRecord = {}
+  for (const [key, config] of Object.entries(overrides)) {
+    const c = config as MutableRecord
+    const color = c?.fill?.color
+    if (color !== defaultColors[key] || c?.gradientColor) {
+      const entry: MutableRecord = { fill: { type: c?.fill?.type, color } }
+      if (c?.gradientColor) entry.gradientColor = c.gradientColor
+      compact[key] = entry
     }
   }
-  if (cleaned.overrides?.byJobEnabled) {
-    for (const [job, enabled] of Object.entries(cleaned.overrides.byJobEnabled)) {
-      if (enabled === true) delete cleaned.overrides.byJobEnabled[job as Job]
-    }
+  return Object.keys(compact).length > 0 ? compact : undefined
+}
+
+function cleanOverrides(cleaned: any): void {
+  if (!cleaned.overrides) return
+  compactEnabledOverrides(cleaned.overrides.byJobEnabled)
+  compactEnabledOverrides(cleaned.overrides.byRoleEnabled)
+  const byJob = compactColorOverrides(cleaned.overrides.byJob, DEFAULT_JOB_COLORS)
+  if (byJob) {
+    cleaned.overrides.byJob = byJob
+  } else {
+    delete cleaned.overrides.byJob
   }
-  if (cleaned.overrides?.byRoleEnabled) {
-    for (const [role, enabled] of Object.entries(cleaned.overrides.byRoleEnabled)) {
-      if (enabled === true) delete cleaned.overrides.byRoleEnabled[role as Role]
-    }
+  const byRole = compactColorOverrides(cleaned.overrides.byRole, DEFAULT_ROLE_COLORS)
+  if (byRole) {
+    cleaned.overrides.byRole = byRole
+  } else {
+    delete cleaned.overrides.byRole
   }
-  if (cleaned.overrides?.byJob) {
-    const byJobCompact: Record<string, any> = {}
-    for (const [job, config] of Object.entries(cleaned.overrides.byJob as Record<string, any>)) {
-      const c = config as any
-      const color = c?.fill?.color
-      if (color !== DEFAULT_JOB_COLORS[job] || c?.gradientColor) {
-        const entry: any = { fill: { type: c?.fill?.type, color } }
-        if (c?.gradientColor) entry.gradientColor = c.gradientColor
-        byJobCompact[job] = entry
-      }
-    }
-    cleaned.overrides.byJob = Object.keys(byJobCompact).length > 0 ? byJobCompact : undefined
-  }
-  if (cleaned.overrides?.byRole) {
-    const byRoleCompact: Record<string, any> = {}
-    for (const [role, config] of Object.entries(cleaned.overrides.byRole as Record<string, any>)) {
-      const c = config as any
-      const color = c?.fill?.color
-      if (color !== DEFAULT_ROLE_COLORS[role] || c?.gradientColor) {
-        const entry: any = { fill: { type: c?.fill?.type, color } }
-        if (c?.gradientColor) entry.gradientColor = c.gradientColor
-        byRoleCompact[role] = entry
-      }
-    }
-    cleaned.overrides.byRole = Object.keys(byRoleCompact).length > 0 ? byRoleCompact : undefined
-  }
+}
+
+function cleanProfile(profile: Profile): Profile {
+  const cleaned: any = JSON.parse(JSON.stringify(profile))
+
+  cleanProfileLabelFields(cleaned)
+  cleanGradientColors(cleaned)
+  stripDisabledDefaultBlocks(cleaned)
+  stripShapeDefaults(cleaned)
+  stripLabelDefaults(cleaned)
+  stripGlobalDefaults(cleaned)
+  cleanOverrides(cleaned)
   // overrides.self - always preserve gradientColor
   // (no deletion — gradientColor used by label gradient mode regardless of fill type)
-  return cleaned
+  return cleaned as Profile
 }
 
 function restoreDefaults(profile: Profile): Profile {
