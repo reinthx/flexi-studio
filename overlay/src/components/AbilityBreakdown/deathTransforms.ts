@@ -44,7 +44,7 @@ export function resTimeSecondsForActor(deaths: DeathRecord[], actorName: string)
   return death?.resurrectTime ? death.resurrectTime / 1000 : null
 }
 
-export function countDeathEventAbilities(
+function countDeathEventAbilities(
   deaths: DeathRecord[],
   include: (event: DeathEvent, events: DeathEvent[]) => boolean,
 ): Map<string, number> {

@@ -15,6 +15,10 @@ Flexi Studio displays a live damage meter during combat. You can customize how i
 3. Set the overlay URL to `https://reinthx.github.io/flexi-studio/`
 4. Open the editor by clicking the settings button on the overlay, or visit `https://reinthx.github.io/flexi-studio/#/editor` in a browser
 
+### Lite overlay
+
+Use `https://reinthx.github.io/flexi-studio/lite/` for a meter-only overlay that keeps DPS, HPS, DTPS, and rDPS display/sorting but omits the Breakout popout and pull-analysis data collection.
+
 ### Self-hosted
 
 Download the latest build artifacts from [Actions](../../actions) and host the files yourself. Point ACT to your local URL.

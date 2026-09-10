@@ -19,7 +19,7 @@ export type TimelineRaidBuffWindow = { key: string; start: number; end: number; 
 export type TimelineDeathMarker = { key: string; time: number; label: string; death: DeathRecord }
 export type TimelineInspectorRow = [string, string]
 
-export const CHART_COLORS = ['#ff7675','#74b9ff','#55efc4','#fdcb6e','#a29bfe','#fd79a8','#00cec9','#e17055']
+const CHART_COLORS = ['#ff7675','#74b9ff','#55efc4','#fdcb6e','#a29bfe','#fd79a8','#00cec9','#e17055']
 export const GROUP_NAME = '__group__'
 export const GROUP_COLOR = 'rgba(255,255,255,0.7)'
 export const METRIC_LABELS: Record<ChartMetric, string> = { dps: 'DPS', rdps: 'rDPS', hps: 'HPS', dtps: 'DTPS' }
@@ -31,7 +31,7 @@ export function topTimelineSpikes(values: number[]) {
   return values.map(value => value / TIMELINE_BUCKET_SEC).map((value, index) => ({ value, index })).sort((a, b) => b.value - a.value).slice(0, 3)
 }
 
-export function smoothBuckets(buckets: number[], win = 4): number[] {
+function smoothBuckets(buckets: number[], win = 4): number[] {
   return buckets.map((_, index) => {
     const slice = buckets.slice(Math.max(0, index - win + 1), index + 1)
     return avg(slice)

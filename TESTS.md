@@ -34,14 +34,16 @@ This project uses Vitest for unit and focused integration tests.
 ### Overlay
 
 - Overlay config persistence, saved-profile fallback behavior, saving, and font loading.
-- Live data store frame creation, self filtering, pull stashing/deduping, and historical pull restoration.
+- Live data store frame creation, self filtering, rDPS display/sorting, pull stashing/deduping, and historical pull restoration.
 - Ability breakdown transformations for death sorting, death events, event rows, and view-state toggles.
+- Lite overlay source wiring that keeps the meter entry separate from Breakout and disables Breakout-only collection.
 - Meter bar parity expectations with the editor preview: measured bar width for shape-cut geometry, color overrides, Rank 1 options, and text effects, including source-level wiring guards.
 
 ### Browser Smoke
 
 - Built editor artifact renders the editor shell, primary controls, and preview meter.
 - Built overlay artifact renders the standalone overlay shell.
+- Built lite overlay artifact renders the standalone meter without Breakout actions.
 - Built overlay artifact renders the breakdown popout through a direct preview route and loads a seeded encounter snapshot.
 
 ## Current Coverage Intent

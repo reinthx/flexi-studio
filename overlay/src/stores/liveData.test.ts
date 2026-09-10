@@ -125,7 +125,9 @@ vi.mock('@shared', () => {
     deepClone,
     deepMerge,
     allocatePercentageBuffDamage,
-    RAID_BUFFS: {},
+    RAID_BUFFS: {
+      'battle litany': { multiplier: 1.1 },
+    },
     isProfileLike: vi.fn((value: unknown) => !!value && typeof value === 'object'),
     parseProfileSafe: vi.fn((json: string) => {
       try { return JSON.parse(json) } catch { return null }
@@ -152,9 +154,10 @@ function createLocalStorageMock(initial: Record<string, string> = {}) {
   }
 }
 
-async function createStore() {
+async function createStore(options: { lite?: boolean } = {}) {
   vi.resetModules()
   setActivePinia(createPinia())
+  if (options.lite) vi.stubGlobal('__FLEXI_LITE__', true)
   vi.stubGlobal('localStorage', createLocalStorageMock())
   vi.stubGlobal('window', {
     addEventListener: vi.fn(),
@@ -228,6 +231,247 @@ describe('overlay liveData store', () => {
       rank: 1,
     })
     expect(document.documentElement.style.opacity).toBe('1')
+
+    store.stop()
+  })
+
+  it('keeps rDPS available as a core meter display and sort metric', async () => {
+    const store = await createStore()
+    store.start()
+    store.applyConfig({
+      name: 'rDPS profile',
+      default: {},
+      overrides: {},
+      tabs: [],
+      global: {
+        dpsType: 'rdps',
+        sortBy: 'rdps',
+      },
+    } as any)
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '2500', damage: '75000', damageperc: '44', deaths: '0' },
+      Bob: { name: 'Bob', Job: 'BRD', encdps: '3200', damage: '96000', damageperc: '56', deaths: '0' },
+    }))
+
+    expect(store.frame?.bars.map(bar => [bar.name, bar.displayValue, bar.rdps])).toEqual([
+      ['Bob', '3200', '3200'],
+      ['Alice', '2500', '2500'],
+    ])
+    expect(store.frame?.totalRdps).toBe('5700')
+
+    store.stop()
+  })
+
+  it('preserves native OverlayPlugin rDPS in lite mode', async () => {
+    const store = await createStore({ lite: true })
+    store.start()
+    store.applyConfig({
+      name: 'Lite rDPS profile',
+      default: {},
+      overrides: {},
+      tabs: [],
+      global: {
+        dpsType: 'rdps',
+        sortBy: 'rdps',
+      },
+    } as any)
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '53600', RDPS: '53600', damage: '1608000', damageperc: '50', deaths: '0' },
+      Bob: { name: 'Bob', Job: 'BRD', encdps: '39700', RDPS: '38100', damage: '1191000', damageperc: '50', deaths: '0' },
+      Cara: { name: 'Cara', Job: 'DRG', encdps: '37100', RDPS: '36200', damage: '1113000', damageperc: '50', deaths: '0' },
+    }))
+
+    expect(store.frame?.bars.map(bar => [bar.name, bar.displayValue, bar.rdps])).toEqual([
+      ['Alice', '53600', '53600'],
+      ['Bob', '38100', '38100'],
+      ['Cara', '36200', '36200'],
+    ])
+    expect(store.frame?.totalRdps).toBe('127900')
+
+    store.stop()
+  })
+
+  it('keeps minimal LogLine rDPS attribution in lite mode without Breakout payloads', async () => {
+    const store = await createStore({ lite: true })
+    store.start()
+    store.applyConfig({
+      name: 'Lite computed rDPS profile',
+      default: {},
+      overrides: {},
+      tabs: [],
+      global: {
+        dpsType: 'rdps',
+        sortBy: 'rdps',
+      },
+    } as any)
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        'Drew Teriyaki': { name: 'Drew Teriyaki', Job: 'WAR', encdps: '3300', damage: '33000', damageperc: '90', deaths: '0' },
+        Bob: { name: 'Bob', Job: 'BRD', encdps: '1000', damage: '10000', damageperc: '10', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        duration: '00:01',
+        DURATION: '1',
+      },
+    })
+
+    mocks.listeners.LogLine(logLine({
+      0: '26',
+      1: '2026-05-01T12:00:00.0000000-06:00',
+      2: '08AB',
+      3: 'Battle Litany',
+      4: '30',
+      5: '10BBBBBB',
+      6: 'Bob',
+      7: '10AAAAAA',
+      8: 'Drew Teriyaki',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      1: '2026-05-01T12:00:01.0000000-06:00',
+      2: '10AAAAAA',
+      3: 'Drew Teriyaki',
+      4: '0001',
+      5: 'Heavy Swing',
+      6: '40000001',
+      7: 'Training Boss',
+      8: '03',
+      9: '27100000',
+    }))
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        'Drew Teriyaki': { name: 'Drew Teriyaki', Job: 'WAR', encdps: '3300', damage: '33000', damageperc: '90', deaths: '0' },
+        Bob: { name: 'Bob', Job: 'BRD', encdps: '1000', damage: '10000', damageperc: '10', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        duration: '00:10',
+        DURATION: '10',
+      },
+    })
+
+    expect(store.frame?.bars.map(bar => [bar.name, bar.displayValue, bar.rdps])).toEqual([
+      ['Drew Teriyaki', '3209', '3209'],
+      ['Bob', '1091', '1091'],
+    ])
+    expect(store.sessionPulls).toHaveLength(0)
+
+    store.stop()
+  })
+
+  it('applies rDPS given and taken to the YOU combatant row', async () => {
+    const store = await createStore({ lite: true })
+    store.start()
+    mocks.listeners.ChangePrimaryPlayer({ type: 'ChangePrimaryPlayer', charName: 'Drew Teriyaki' })
+    store.applyConfig({
+      name: 'YOU rDPS profile',
+      default: {},
+      overrides: {},
+      tabs: [],
+      global: {
+        dpsType: 'rdps',
+        sortBy: 'rdps',
+      },
+    } as any)
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        YOU: { name: 'YOU', Job: 'WAR', encdps: '3300', damage: '33000', damageperc: '90', deaths: '0' },
+        Bob: { name: 'Bob', Job: 'BRD', encdps: '1000', damage: '10000', damageperc: '10', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        duration: '00:01',
+        DURATION: '1',
+      },
+    })
+    mocks.listeners.LogLine(logLine({
+      0: '26',
+      1: '2026-05-01T12:00:00.0000000-06:00',
+      2: '08AB',
+      3: 'Battle Litany',
+      4: '30',
+      5: '10BBBBBB',
+      6: 'Bob',
+      7: '10AAAAAA',
+      8: 'Drew Teriyaki',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      1: '2026-05-01T12:00:01.0000000-06:00',
+      2: '10AAAAAA',
+      3: 'Drew Teriyaki',
+      4: '0001',
+      5: 'Heavy Swing',
+      6: '40000001',
+      7: 'Training Boss',
+      8: '03',
+      9: '27100000',
+    }))
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        YOU: { name: 'YOU', Job: 'WAR', encdps: '3300', damage: '33000', damageperc: '90', deaths: '0' },
+        Bob: { name: 'Bob', Job: 'BRD', encdps: '1000', damage: '10000', damageperc: '10', deaths: '0' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        duration: '00:10',
+        DURATION: '10',
+      },
+    })
+
+    expect(store.frame?.bars.map(bar => [bar.name, bar.displayValue, bar.rdps])).toEqual([
+      ['YOU', '3209', '3209'],
+      ['Bob', '1091', '1091'],
+    ])
+
+    store.stop()
+  })
+
+  it('keeps a small lightweight encounter history in lite mode', async () => {
+    const store = await createStore({ lite: true })
+    store.start()
+
+    for (let i = 1; i <= 6; i++) {
+      mocks.listeners.CombatData({
+        ...combatData(false, {
+          Alice: { name: 'Alice', Job: 'WAR', encdps: String(1000 + i), rdps: String(1100 + i), damage: '30000', damageperc: '100', deaths: '0' },
+        }),
+        Encounter: {
+          ...combatData(false, {}).Encounter,
+          title: `Lite Encounter ${i}`,
+          duration: `00:0${i}`,
+          DURATION: String(i),
+          ENCDPS: String(1000 + i),
+        },
+      })
+    }
+
+    expect(store.sessionPulls).toHaveLength(5)
+    expect(store.sessionPulls.map(pull => pull.encounterName)).toEqual([
+      'Lite Encounter 6',
+      'Lite Encounter 5',
+      'Lite Encounter 4',
+      'Lite Encounter 3',
+      'Lite Encounter 2',
+    ])
+    expect(store.sessionPulls[0]).not.toHaveProperty('abilityData')
+    expect(store.sessionPulls[0]).not.toHaveProperty('rawCombatants')
+    expect(store.sessionPulls[0]).not.toHaveProperty('resourceData')
+    expect(mocks.callHandler).not.toHaveBeenCalledWith(expect.objectContaining({
+      call: 'saveData',
+      key: 'act-flexi-pulls',
+    }))
+
+    store.viewPull(0)
+    expect(store.frame?.encounterTitle).toBe('Lite Encounter 6')
+    expect(store.frame?.bars[0]).toMatchObject({ name: 'Alice', rdps: '1106' })
 
     store.stop()
   })
@@ -316,6 +560,111 @@ describe('overlay liveData store', () => {
       abilityName: 'Heavy Swing',
       totalDamage: 10000,
     })
+
+    store.stop()
+  })
+
+  it('starts fresh breakdown data for repeated pulls of the same encounter', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '300000', damageperc: '90', deaths: '0' },
+        Bob: { name: 'Bob', Job: 'WHM', encdps: '0', damage: '0', damageperc: '0', deaths: '1' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        duration: '05:00',
+        DURATION: '300',
+      },
+    })
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      1: '2026-05-01T12:00:00.0000000-06:00',
+      2: '10AAAAAA',
+      3: 'Alice',
+      4: '0001',
+      5: 'Heavy Swing',
+      6: '40000001',
+      7: 'Test Encounter',
+      8: '03',
+      9: '27100000',
+      24: '75000',
+      25: '100000',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '25',
+      1: '2026-05-01T12:01:00.0000000-06:00',
+      2: '10BBBBBB',
+      3: 'Bob',
+      4: '40000001',
+      5: 'Test Encounter',
+    }))
+    mocks.listeners.CombatData({
+      ...combatData(false, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '300000', damageperc: '90', deaths: '0' },
+        Bob: { name: 'Bob', Job: 'WHM', encdps: '0', damage: '0', damageperc: '0', deaths: '1' },
+      }),
+      Encounter: {
+        ...combatData(false, {}).Encounter,
+        duration: '05:00',
+        DURATION: '300',
+      },
+    })
+
+    mocks.listeners.CombatData({
+      ...combatData(true, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '2000', damage: '600000', damageperc: '90', deaths: '0' },
+        Cara: { name: 'Cara', Job: 'DRG', encdps: '0', damage: '0', damageperc: '0', deaths: '1' },
+      }),
+      Encounter: {
+        ...combatData(true, {}).Encounter,
+        duration: '00:01',
+        DURATION: '1',
+      },
+    })
+    mocks.listeners.LogLine(logLine({
+      0: '21',
+      1: '2026-05-01T12:10:00.0000000-06:00',
+      2: '10AAAAAA',
+      3: 'Alice',
+      4: '0001',
+      5: 'Heavy Swing',
+      6: '40000001',
+      7: 'Test Encounter',
+      8: '03',
+      9: '4E200000',
+      24: '65000',
+      25: '100000',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '25',
+      1: '2026-05-01T12:11:00.0000000-06:00',
+      2: '10CCCCCC',
+      3: 'Cara',
+      4: '40000001',
+      5: 'Test Encounter',
+    }))
+    mocks.listeners.CombatData({
+      ...combatData(false, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '2000', damage: '600000', damageperc: '90', deaths: '0' },
+        Cara: { name: 'Cara', Job: 'DRG', encdps: '0', damage: '0', damageperc: '0', deaths: '1' },
+      }),
+      Encounter: {
+        ...combatData(false, {}).Encounter,
+        duration: '07:47',
+        DURATION: '467',
+      },
+    })
+
+    expect(store.sessionPulls).toHaveLength(2)
+    expect(store.sessionPulls[0].deaths?.map(death => death.targetName)).toEqual(['Cara'])
+    expect(store.sessionPulls[0].abilityData?.Alice?.['0001']).toMatchObject({
+      abilityName: 'Heavy Swing',
+      totalDamage: 20000,
+    })
+    expect(store.sessionPulls[1].deaths?.map(death => death.targetName)).toEqual(['Bob'])
 
     store.stop()
   })

@@ -97,6 +97,8 @@ export function buildFlexiBarTokens(
     rank: showRank ? String(bar.rank) : '',
     Rank: showRank ? String(bar.rank) : '',
     value: bar.displayValue,
+    dps: bar.dps,
+    encdps: bar.dps,
     pct: `${bar.displayPct}%`,
     crithit: bar.crithit,
     'crithit%': percentToken(bar.crithit),

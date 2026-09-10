@@ -32,4 +32,12 @@ describe('editor and overlay preview parity wiring', () => {
     expect(meterView).toContain(':color-overrides="store.profile.overrides"')
     expect(meterView).not.toContain(':bar-width="barWidth"')
   })
+
+  it('hides the full Breakout shortcut when the editor was opened from lite', () => {
+    const app = readVue('../App.vue')
+
+    expect(app).toContain("get('lite') === '1'")
+    expect(app).toContain('v-if="!isLiteEditor"')
+    expect(app).toContain('Open Breakdown')
+  })
 })

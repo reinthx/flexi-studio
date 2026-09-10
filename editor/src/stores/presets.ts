@@ -13,13 +13,13 @@ export interface CustomPreset {
   category: string // '' = Uncategorized
 }
 
-export interface BuiltInPreset {
+interface BuiltInPreset {
   name: string
   profile: Profile
   filename: string
 }
 
-export interface PresetCategory {
+interface PresetCategory {
   name: string
   collapsed: boolean
 }

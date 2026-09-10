@@ -26,6 +26,12 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 30_000,
     },
+    {
+      command: 'pnpm --filter overlay exec vite preview --host 127.0.0.1 --port 4175 --outDir ../dist/overlay-lite',
+      url: 'http://127.0.0.1:4175',
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
   ],
   projects: [
     {
