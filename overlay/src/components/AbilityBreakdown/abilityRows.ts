@@ -22,7 +22,7 @@ export function totalEncounterDamage(data: Record<string, CombatantAbilityData>)
   return Object.values(data).reduce((sum, combatantData) => sum + totalAbilityDamage(combatantData), 0)
 }
 
-export function buildAbilityRows(
+function buildAbilityRows(
   data: CombatantAbilityData,
   total: number,
   durationSec: number,
@@ -38,7 +38,7 @@ export function buildAbilityRows(
   }))
 }
 
-export function sortAbilityRows<T extends object>(
+function sortAbilityRows<T extends object>(
   rows: T[],
   column: AbilitySortColumn | TakenSortColumn,
   desc: boolean,

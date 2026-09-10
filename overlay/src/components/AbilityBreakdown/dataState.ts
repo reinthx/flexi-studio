@@ -33,7 +33,7 @@ export type BreakdownPayload = {
 }
 
 export const BREAKDOWN_SNAPSHOT_KEY = 'flexi-breakdown-snapshot'
-export const BREAKDOWN_SNAPSHOT_MAX_AGE_MS = 30_000
+const BREAKDOWN_SNAPSHOT_MAX_AGE_MS = 30_000
 export const BREAKDOWN_REQUEST_INTERVAL_MS = 5_000
 const MAX_PAYLOAD_RECORD_KEYS = 256
 const MAX_TIMELINE_BUCKETS = 7_200
@@ -106,7 +106,7 @@ function limitedStringArray(value: unknown, maxEntries: number): string[] {
     : []
 }
 
-export function normalizedPullList(value: unknown): PullEntry[] {
+function normalizedPullList(value: unknown): PullEntry[] {
   return limitedObjectArray<PullEntry>(value, MAX_PULLS)
 }
 

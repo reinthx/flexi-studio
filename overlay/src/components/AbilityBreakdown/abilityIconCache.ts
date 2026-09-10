@@ -7,7 +7,7 @@ import type { CastTimelineRow } from './castTimeline'
 
 type AbilityInfoResolver = (abilityId: string) => Promise<{ iconSrc?: string; recastMs?: number }>
 
-export type VisibleAbilityIconSources = {
+type VisibleAbilityIconSources = {
   abilities: AbilityBreakdownRow[]
   takenAbilities: AbilityBreakdownRow[]
   healingAbilities: AbilityBreakdownRow[]

@@ -1,7 +1,7 @@
 import type { Profile, CombatantSnapshot, GlobalConfig, BarStyle, StyleOverrides, Role, Job } from '../configSchema'
 import { DEFAULT_PROFILE, DEFAULT_BAR_STYLE, DEFAULT_GLOBAL } from '../presets'
 
-export function createMockCombatant(partial: Partial<CombatantSnapshot> = {}): CombatantSnapshot {
+function createMockCombatant(partial: Partial<CombatantSnapshot> = {}): CombatantSnapshot {
   return {
     name: 'Test Player',
     job: 'PLD',
@@ -50,14 +50,14 @@ export function createMockProfile(partial: Partial<Profile> = {}): Profile {
   }
 }
 
-export function createMockGlobalConfig(partial: Partial<GlobalConfig> = {}): GlobalConfig {
+function createMockGlobalConfig(partial: Partial<GlobalConfig> = {}): GlobalConfig {
   return {
     ...DEFAULT_GLOBAL,
     ...partial,
   }
 }
 
-export function createMockBarStyle(partial: Partial<BarStyle> = {}): BarStyle {
+function createMockBarStyle(partial: Partial<BarStyle> = {}): BarStyle {
   return {
     ...DEFAULT_BAR_STYLE,
     ...partial,

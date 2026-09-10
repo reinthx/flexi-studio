@@ -46,11 +46,11 @@ const MITIGATION_TERMS = terms("reprisal|rampart|arms length|arm's length|feint|
 const COOLDOWN_TERMS = terms("sprint|swiftcast|lucid dreaming|surecast|true north|leg sweep|interject|low blow|provoke|shirk|fight or flight|requiescat|imperator|expiacion|circle of scorn|intervene|atonement|confiteor|berserk|inner release|infuriate|primal rend|primal wrath|onslaught|upheaval|orogeny|delirium|blood weapon|salted earth|salt and darkness|carve and spit|abyssal drain|shadowbringer|edge of shadow|flood of shadow|no mercy|bloodfest|sonic break|double down|rough divide|danger zone|blasting zone|bow shock|continuation|reign of beasts|presence of mind|thin air|assize|afflatus misery|aetherflow|chain stratagem|energy drain|draw|divination|lightspeed|earthly star|minor arcana|rhizomata|phlegma|toxikon|psyche|pneuma|ley lines|triplecast|amplifier|manafont|transpose|sharpcast|enochian|paradox|xenoglossy|foul|acceleration|embolden|manafication|fleche|contre sixte|corps-a-corps|engagement|displacement|resolution|searing light|summon bahamut|summon phoenix|summon solar bahamut|energy siphon|enkindle|aethercharge|fester|painflare|battle litany|life surge|lance charge|dragon sight|geirskogul|nastrond|wyrmwind thrust|stardiver|dragonfire dive|mirage dive|brotherhood|riddle of fire|riddle of wind|perfect balance|form shift|thunderclap|enlightenment|six-sided star|mug|trick attack|dokumori|bunshin|kassatsu|ten chi jin|dream within a dream|assassinate|bhavacakra|hellfrog medium|meikyo shisui|ikishoten|hissatsu|tsubame-gaeshi|hagakure|meditate|senei|guren|shoha|kaeshi|arcane circle|gluttony|plentiful harvest|enshroud|soul sow|harvest moon|lemure|communio|serpent's ire|reawaken|vicewinder|slither|uncoiled fury|twinfang|twinblood|battle voice|raging strikes|barrage|radiant finale|wanderer's minuet|mage's ballad|army's paeon|sidewinder|apex arrow|blast arrow|pitch perfect|wildfire|reassemble|barrel stabilizer|hypercharge|chainsaw|air anchor|drill|bio blaster|automaton queen|rook autoturret|queen overdrive|technical step|technical finish|devilment|flourish|standard step|standard finish|fan dance|starfall dance|tillana|saber dance|starry muse|subtractive palette|creature motif|weapon motif|landscape motif|muse|hammer stamp|mog of the ages|retribution of the madeen")
 const HEAL_TERMS = terms('cure|heal|medica|regen|benefic|succor|adlo|physick|lustrate|essential dignity|afflatus|tetra|excog|indom|aspected|pneuma')
 
-export const CAST_FILTER_LABELS: Record<CastFilter, string> = { cooldowns: 'Cooldowns', mitigations: 'Mitigations', dps: 'Abilities', heals: 'Heals' }
+const CAST_FILTER_LABELS: Record<CastFilter, string> = { cooldowns: 'Cooldowns', mitigations: 'Mitigations', dps: 'Abilities', heals: 'Heals' }
 export const CAST_FILTER_ORDER: CastFilter[] = ['cooldowns', 'mitigations', 'dps', 'heals']
 const CAST_FILTER_SORT: Record<CastFilter, number> = { cooldowns: 0, mitigations: 1, dps: 2, heals: 3 }
 
-export function abilityMatchesTerms(abilityName: string, terms: string[]): boolean {
+function abilityMatchesTerms(abilityName: string, terms: string[]): boolean {
   const name = abilityName.toLowerCase().replace(/[’']/g, "'")
   return terms.some(term => name.includes(term))
 }
@@ -68,7 +68,7 @@ export function castFilterLabel(filter: CastFilter): string {
   return CAST_FILTER_LABELS[filter]
 }
 
-export function castMitigationWindow(event: CastEvent): { start: number; end: number } {
+function castMitigationWindow(event: CastEvent): { start: number; end: number } {
   const durationMs = event.buffDurationMs ?? Math.max(event.durationMs ?? 0, 15_000)
   return { start: event.t, end: event.t + durationMs }
 }
@@ -305,7 +305,7 @@ export function buildCastTimelineGroups(rows: CastTimelineRow[], collapsedGroups
     .filter(group => group.rows.length > 0)
 }
 
-export function buildCastResourceTracks(samples: ResourceSample[], durationSec: number): CastResourceTrack[] {
+function buildCastResourceTracks(samples: ResourceSample[], durationSec: number): CastResourceTrack[] {
   if (samples.length === 0 || durationSec <= 0) return []
   const latest = samples[samples.length - 1]
   const rows: CastResourceTrack[] = [{ key: 'hp', label: 'HP', value: `${Math.round((latest.hp ?? 0) * 100)}%`, color: '#22c55e', fill: 'rgba(34,197,94,0.16)' }]
@@ -315,7 +315,7 @@ export function buildCastResourceTracks(samples: ResourceSample[], durationSec: 
   return rows
 }
 
-export function resourcePoint(sample: ResourceSample, key: ResourceTrackKey, durationSec: number): { x: number; y: number } {
+function resourcePoint(sample: ResourceSample, key: ResourceTrackKey, durationSec: number): { x: number; y: number } {
   const value = key === 'hp' ? sample.hp : (sample.mp ?? 0)
   return { x: clampedPct(sample.t, Math.max(1, durationSec * 1000)), y: Math.max(0, Math.min(100, (1 - value) * 100)) }
 }
