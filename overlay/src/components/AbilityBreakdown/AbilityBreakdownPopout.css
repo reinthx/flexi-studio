@@ -822,6 +822,15 @@ th.col-abilities { width: 280px; min-width: 240px; max-width: 320px; }
 }
 .bp-rail {
   border-right: 1px solid rgba(255,255,255,0.07);
+  /* Alliance raids list 24+ actors: let the rail scroll instead of clipping. */
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.bp-rail > .bp-rail-title {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #12121b;
 }
 .bp-main {
   min-width: 0;

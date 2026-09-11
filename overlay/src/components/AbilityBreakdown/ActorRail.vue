@@ -51,14 +51,19 @@ defineEmits<{
   min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: rgba(255,255,255,0.02);
   border-right: 1px solid rgba(255,255,255,0.07);
 }
 .bp-rail-title {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   padding: 10px 12px 8px;
   color: rgba(255,255,255,0.35);
   border-bottom: 1px solid rgba(255,255,255,0.06);
+  background: #12121b;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
