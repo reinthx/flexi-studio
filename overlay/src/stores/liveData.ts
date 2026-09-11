@@ -545,18 +545,22 @@ export const useLiveDataStore = defineStore('liveData', () => {
   ): Record<string, number> {
     const duration = Math.max(1, durationSec)
     const canonicalName = (name: string): string => name === 'YOU' && selfName.value ? selfName.value : name
-    const canonicalizeRates = (record: Record<string, number>): Record<string, number> => {
+    // dps/damage are duplicate measurements of one quantity under two keys, so
+    // keep the max. given/taken are disjoint per-hit accumulations that can
+    // split across YOU and the character name, so sum them like the live meter
+    // does via mapTotalForCombatant — max would silently drop half the credit.
+    const canonicalizeRates = (record: Record<string, number>, merge: 'max' | 'sum'): Record<string, number> => {
       const result: Record<string, number> = {}
       for (const [name, value] of Object.entries(record)) {
         const key = canonicalName(name)
-        result[key] = Math.max(result[key] ?? 0, value)
+        result[key] = merge === 'sum' ? (result[key] ?? 0) + value : Math.max(result[key] ?? 0, value)
       }
       return result
     }
-    const canonicalDps = canonicalizeRates(dpsByCombatant)
-    const canonicalDamage = canonicalizeRates(damageByCombatant)
-    const canonicalGiven = canonicalizeRates(given)
-    const canonicalTaken = canonicalizeRates(taken)
+    const canonicalDps = canonicalizeRates(dpsByCombatant, 'max')
+    const canonicalDamage = canonicalizeRates(damageByCombatant, 'max')
+    const canonicalGiven = canonicalizeRates(given, 'sum')
+    const canonicalTaken = canonicalizeRates(taken, 'sum')
     const names = new Set([
       ...Object.keys(canonicalDps),
       ...Object.keys(canonicalDamage),
