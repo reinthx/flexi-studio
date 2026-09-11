@@ -1452,16 +1452,38 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return appliedHeal > 0 || overheal > 0
   }
 
+  function splitLogLine(event: LogLineEvent): { parts: string[]; lineType: string } {
+    const parts = event.rawLine.split('|')
+    return { parts, lineType: parts[0] }
+  }
+
+  function readLogLineTime(parts: string[]): void {
+    const parsedLogTime = Date.parse(parts[1] ?? '')
+    currentLogTime = Number.isFinite(parsedLogTime) ? parsedLogTime : null
+  }
+
+  // Shared 26/30 raid-buff bookkeeping for the full and lite LogLine paths.
+  // (The full path additionally tracks tick effects and resurrections inline.)
+  function recordRaidBuffLine(parts: string[], lineType: string): void {
+    if (lineType === '26') {
+      recordRaidBuffWindow(parts[5], parts[6], parts[8], parts[3], parseFloat(parts[4]))
+    } else if (lineType === '30') {
+      const effectName = parts[3]
+      const sourceName = parts[6]
+      const targetName = parts[8]
+      if (!effectName || !sourceName || !targetName) return
+      removeRaidBuffWindow(sourceName, targetName, effectName)
+    }
+  }
+
   function onLogLine(event: LogLineEvent): void {
     if (!BREAKDOWN_ENABLED) {
       onLiteLogLine(event)
       return
     }
 
-    const parts = event.rawLine.split('|')
-    const lineType = parts[0]
-    const parsedLogTime = Date.parse(parts[1] ?? '')
-    currentLogTime = Number.isFinite(parsedLogTime) ? parsedLogTime : null
+    const { parts, lineType } = splitLogLine(event)
+    readLogLineTime(parts)
     maybeResetAfterStashedEncounter(parts, lineType)
 
     if (lineType === '03') {
@@ -1663,7 +1685,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       recordActiveTickEffect(sourceId, targetId, effectId, effectName, durationSec)
       recordActiveSelfHealingEffect(sourceId, targetId, effectId, effectName, durationSec)
       attachBuffDuration(sourceName, targetName, effectName, Math.round(durationSec * 1000))
-      recordRaidBuffWindow(sourceId, sourceName, targetName, effectName, durationSec)
+      recordRaidBuffLine(parts, lineType)
 
       // Only track player resurrections
       if (!targetId.startsWith('10')) return
@@ -1686,16 +1708,16 @@ export const useLiveDataStore = defineStore('liveData', () => {
       // NetworkLosesEffect
       // parts: [0]=type [1]=ts [2]=effectId [3]=effectName [4]=duration
       //        [5]=sourceId [6]=sourceName [7]=targetId [8]=targetName
-      const effectName = parts[3]
       const effectId = parts[2]
       const sourceId = parts[5]
-      const sourceName = parts[6]
       const targetId = parts[7]
+      const effectName = parts[3]
+      const sourceName = parts[6]
       const targetName = parts[8]
       if (!effectName || !sourceName || !targetName) return
       removeActiveTickEffect(sourceId, targetId, effectId, effectName)
       removeActiveSelfHealingEffect(sourceId, targetId, effectId, effectName)
-      removeRaidBuffWindow(sourceName, targetName, effectName)
+      recordRaidBuffLine(parts, lineType)
     }
   }
 
@@ -1764,9 +1786,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const { combatants } = resolvePets(event.Combatant, profile.value.global.pets)
     const stashDuration = encounterDurationSec(event.Encounter) || 1
     for (const c of combatants) injectCombatantRdps(c, stashDuration)
+    const now = Date.now()
     const recordBase = {
-      id: `${Date.now()}`,
-      timestamp: Date.now(),
+      id: `${now}`,
+      timestamp: now,
       encounterName: title,
       zone: zone.value,
       duration: event.Encounter['duration'] ?? '',
@@ -1979,10 +2002,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   function onLiteLogLine(event: LogLineEvent): void {
-    const parts = event.rawLine.split('|')
-    const lineType = parts[0]
-    const parsedLogTime = Date.parse(parts[1] ?? '')
-    currentLogTime = Number.isFinite(parsedLogTime) ? parsedLogTime : null
+    const { parts, lineType } = splitLogLine(event)
+    readLogLineTime(parts)
 
     if (lineType === '21' || lineType === '22') {
       const sourceId     = parts[2]
@@ -1997,19 +2018,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const damage = decodeLogDamage(damageHex)
       if (damage <= 0) return
       attributeRaidBuffContribution(petOwnerName || sourceName, petOwnerName ? petOwnerId : sourceId, targetName, targetId, damage)
-    } else if (lineType === '26') {
-      const effectName = parts[3]
-      const durationSec = parseFloat(parts[4])
-      const sourceId = parts[5]
-      const sourceName = parts[6]
-      const targetName = parts[8]
-      recordRaidBuffWindow(sourceId, sourceName, targetName, effectName, durationSec)
-    } else if (lineType === '30') {
-      const effectName = parts[3]
-      const sourceName = parts[6]
-      const targetName = parts[8]
-      if (!effectName || !sourceName || !targetName) return
-      removeRaidBuffWindow(sourceName, targetName, effectName)
+    } else if (lineType === '26' || lineType === '30') {
+      recordRaidBuffLine(parts, lineType)
     }
   }
 

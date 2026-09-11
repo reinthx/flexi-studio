@@ -364,6 +364,49 @@ describe('overlay liveData store', () => {
     store.stop()
   })
 
+  it('drops lite rDPS credit once the buff window is lost', async () => {
+    const store = await createStore({ lite: true })
+    store.start()
+    store.applyConfig({
+      name: 'Lite buff loss profile',
+      default: {},
+      overrides: {},
+      tabs: [],
+      global: {
+        dpsType: 'rdps',
+        sortBy: 'rdps',
+      },
+    } as any)
+
+    const combatants = {
+      'Drew Teriyaki': { name: 'Drew Teriyaki', Job: 'WAR', encdps: '3300', damage: '33000', damageperc: '90', deaths: '0' },
+      Bob: { name: 'Bob', Job: 'BRD', encdps: '1000', damage: '10000', damageperc: '10', deaths: '0' },
+    }
+    mocks.listeners.CombatData({ ...combatData(true, combatants) })
+
+    mocks.listeners.LogLine(logLine({
+      0: '26', 2: '08AB', 3: 'Battle Litany', 4: '30',
+      5: '10BBBBBB', 6: 'Bob', 7: '10AAAAAA', 8: 'Drew Teriyaki',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '30', 2: '08AB', 3: 'Battle Litany',
+      5: '10BBBBBB', 6: 'Bob', 7: '10AAAAAA', 8: 'Drew Teriyaki',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '21', 2: '10AAAAAA', 3: 'Drew Teriyaki', 4: '0001', 5: 'Heavy Swing',
+      6: '40000001', 7: 'Training Boss', 8: '03', 9: '27100000',
+    }))
+
+    mocks.listeners.CombatData({ ...combatData(true, combatants) })
+
+    expect(store.frame?.bars.map(bar => [bar.name, bar.displayValue, bar.rdps])).toEqual([
+      ['Drew Teriyaki', '3300', '3300'],
+      ['Bob', '1000', '1000'],
+    ])
+
+    store.stop()
+  })
+
   it('applies rDPS given and taken to the YOU combatant row', async () => {
     const store = await createStore({ lite: true })
     store.start()
