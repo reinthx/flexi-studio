@@ -21,6 +21,7 @@ export default defineConfig(({ mode }) => {
   resolve: {
     alias: {
       '@shared': resolve(__dirname, '../shared/src'),
+      '@overlay': resolve(__dirname, '../overlay/src'),
       '@': resolve(__dirname, 'src'),
     },
     dedupe: ['vue'],
