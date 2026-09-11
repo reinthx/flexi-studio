@@ -106,6 +106,185 @@ describe('resolveBarStyle', () => {
     expect(style.fill).toBeDefined()
   })
 
+  it('applies job tints to gradient fills with the override gradient end', () => {
+    const profile = createMockProfile({
+      default: {
+        ...createMockProfile().default,
+        fill: {
+          type: 'gradient',
+          gradient: {
+            type: 'linear',
+            angle: 90,
+            stops: [
+              { position: 0, color: '#aaaaaa' },
+              { position: 1, color: '#bbbbbb' },
+            ],
+          },
+          applyJobColor: true,
+        },
+      },
+      overrides: createMockStyleOverrides({
+        byJob: { PLD: { fill: { type: 'solid', color: '#A6D100' }, gradientColor: '#222222' } },
+        byJobEnabled: { PLD: true },
+      }),
+    })
+
+    const style = resolveBarStyle('PLD', 'Player', 0, profile, '')
+    expect(style.fill.type).toBe('gradient')
+    if (style.fill.type !== 'gradient') return
+    expect(style.fill.gradient.stops).toEqual([
+      { position: 0, color: '#A6D100' },
+      { position: 1, color: '#222222' },
+    ])
+  })
+
+  it('applies role tints to solid fills and skips disabled roles', () => {
+    const tinted = createMockProfile({
+      default: {
+        ...createMockProfile().default,
+        fill: { type: 'solid', color: '#ffffff', applyRoleColor: true },
+      },
+      overrides: createMockStyleOverrides({
+        byRole: { tank: { fill: { type: 'solid', color: '#4a90d9' }, gradientColor: '#111111' } },
+        byRoleEnabled: { tank: true },
+      }),
+    })
+    const style = resolveBarStyle('PLD', 'Player', 0, tinted, '')
+    expect(style.fill).toMatchObject({ type: 'solid', color: '#4a90d9' })
+
+    const disabled = createMockProfile({
+      default: {
+        ...createMockProfile().default,
+        fill: { type: 'solid', color: '#ffffff', applyRoleColor: true },
+      },
+      overrides: createMockStyleOverrides({
+        byRole: { tank: { fill: { type: 'solid', color: '#4a90d9' } } },
+        byRoleEnabled: { tank: false },
+      }),
+    })
+    expect(resolveBarStyle('PLD', 'Player', 0, disabled, '').fill).toMatchObject({
+      type: 'solid',
+      color: '#ffffff',
+    })
+  })
+
+  it('applies job tints to textures as tintColor or tintGradient stops', () => {
+    const textureBase = {
+      type: 'texture' as const,
+      texture: {
+        src: 'texture.png',
+        repeat: 'paginate' as const,
+        opacity: 1,
+        blendMode: 'normal' as string,
+        pagination: { enabled: true, startOffsetX: 0, startOffsetY: 0 },
+      },
+      applyJobColor: true,
+    }
+    const overrides = () =>
+      createMockStyleOverrides({
+        byJob: { PLD: { fill: { type: 'solid', color: '#A6D100' }, gradientColor: '#333333' } },
+        byJobEnabled: { PLD: true },
+      })
+
+    const plain = createMockProfile({
+      default: { ...createMockProfile().default, fill: textureBase },
+      overrides: overrides(),
+    })
+    const plainStyle = resolveBarStyle('PLD', 'Player', 0, plain, '')
+    expect(plainStyle.fill.type).toBe('texture')
+    if (plainStyle.fill.type !== 'texture') return
+    expect(plainStyle.fill.texture.tintColor).toBe('#A6D100')
+
+    const gradientTinted = createMockProfile({
+      default: {
+        ...createMockProfile().default,
+        fill: {
+          ...textureBase,
+          texture: {
+            ...textureBase.texture,
+            tintGradient: {
+              type: 'linear',
+              angle: 0,
+              stops: [
+                { position: 0, color: '#000000' },
+                { position: 1, color: '#ffffff' },
+              ],
+            },
+          },
+        },
+      },
+      overrides: overrides(),
+    })
+    const gradientStyle = resolveBarStyle('PLD', 'Player', 0, gradientTinted, '')
+    expect(gradientStyle.fill.type).toBe('texture')
+    if (gradientStyle.fill.type !== 'texture') return
+    expect(gradientStyle.fill.texture.tintGradient?.stops).toEqual([
+      { position: 0, color: '#A6D100' },
+      { position: 1, color: '#333333' },
+    ])
+  })
+
+  it('applies rank 1 gradient fill as texture tintGradient', () => {
+    const gradient = {
+      type: 'linear' as const,
+      angle: 45,
+      stops: [
+        { position: 0, color: '#ff0000' },
+        { position: 1, color: '#00ff00' },
+      ],
+    }
+    const profile = createMockProfile({
+      default: {
+        ...createMockProfile().default,
+        fill: {
+          type: 'texture',
+          texture: {
+            src: 'texture.png',
+            repeat: 'paginate',
+            opacity: 1,
+            blendMode: 'normal',
+            pagination: { enabled: true, startOffsetX: 0, startOffsetY: 0 },
+          },
+        },
+      },
+      global: {
+        ...createMockProfile().global,
+        rankIndicator: {
+          ...createMockProfile().global.rankIndicator,
+          rank1Enabled: true,
+          rank1StyleEnabled: true,
+          rank1Style: { fill: { type: 'gradient', gradient } },
+        },
+      },
+    })
+
+    const style = resolveBarStyle('PLD', 'Player', 1, profile, 'Player')
+
+    expect(style.fill.type).toBe('texture')
+    if (style.fill.type !== 'texture') return
+    expect(style.fill.texture.src).toBe('texture.png')
+    expect(style.fill.texture.tintColor).toBeUndefined()
+    expect(style.fill.texture.tintGradient).toEqual(gradient)
+  })
+
+  it('scales rank 1 height and skips rank styling off the top bar', () => {
+    const ranked = createMockProfile({
+      global: {
+        ...createMockProfile().global,
+        rankIndicator: {
+          ...createMockProfile().global.rankIndicator,
+          rank1Enabled: true,
+          rank1StyleEnabled: true,
+          rank1Style: {},
+          rank1HeightIncrease: 10,
+        },
+      },
+    })
+    const baseHeight = createMockProfile().default.height
+    expect(resolveBarStyle('PLD', 'Player', 1, ranked, '').height).toBeCloseTo(baseHeight * 1.1, 5)
+    expect(resolveBarStyle('PLD', 'Player', 2, ranked, '').height).toBe(baseHeight)
+  })
+
   it('applies rank 1 solid fill as texture tint without replacing the texture fill', () => {
     const profile = createMockProfile({
       default: {

@@ -1,6 +1,57 @@
 import { ref } from 'vue'
 import type { BreakdownView, CastFilter, EventActorScope, EventFilter, TimelineOverlay } from './types'
 
+/**
+ * Copy-toggle a set member. Always returns a new Set so Vue refs update —
+ * mutating a Set in place does not trigger reactivity.
+ */
+export function toggleSetMember<T>(set: Set<T>, member: T): Set<T> {
+  const next = new Set(set)
+  if (next.has(member)) next.delete(member)
+  else next.add(member)
+  return next
+}
+
+/**
+ * Series to auto-hide on a fresh pull: timeline names outside the party that
+ * are not enemies. Pure core of the popout's applyAutoHide.
+ */
+export function computeAutoHiddenSeries(
+  timelineNames: string[],
+  partyNames: string[],
+  selfName: string,
+  isEnemy: (name: string) => boolean,
+): Set<string> {
+  const party = new Set([...partyNames, selfName, 'YOU'])
+  const toHide = new Set<string>()
+  for (const name of timelineNames) {
+    if (!party.has(name) && !isEnemy(name)) toHide.add(name)
+  }
+  return toHide
+}
+
+/** Stable key for tracking the selected death across data refreshes. */
+export function deathSelectionKey(
+  death: { targetId: string; targetName: string; timestamp: number } | null | undefined,
+): string {
+  return death ? `${death.targetId}|${death.targetName}|${death.timestamp}` : ''
+}
+
+/**
+ * Horizontal scroll delta for wheel-over-timeline. Returns 0 when there is
+ * nothing to scroll, preferring the dominant axis.
+ */
+export function wheelScrollDelta(
+  scrollWidth: number,
+  clientWidth: number,
+  deltaX: number,
+  deltaY: number,
+): number {
+  if (scrollWidth - clientWidth <= 0) return 0
+  const delta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY
+  return delta || 0
+}
+
 export function useBreakdownViewState() {
   const activeView = ref<BreakdownView>('overview')
   const chartMetric = ref<'dps' | 'rdps' | 'hps' | 'dtps'>('dps')
@@ -32,24 +83,15 @@ export function useBreakdownViewState() {
   ]
 
   function toggleTimelineOverlay(name: TimelineOverlay): void {
-    const next = new Set(timelineOverlays.value)
-    if (next.has(name)) next.delete(name)
-    else next.add(name)
-    timelineOverlays.value = next
+    timelineOverlays.value = toggleSetMember(timelineOverlays.value, name)
   }
 
   function toggleEventFilter(name: EventFilter): void {
-    const next = new Set(eventFilters.value)
-    if (next.has(name)) next.delete(name)
-    else next.add(name)
-    eventFilters.value = next
+    eventFilters.value = toggleSetMember(eventFilters.value, name)
   }
 
   function toggleCastFilter(name: CastFilter): void {
-    const next = new Set(castFilters.value)
-    if (next.has(name)) next.delete(name)
-    else next.add(name)
-    castFilters.value = next
+    castFilters.value = toggleSetMember(castFilters.value, name)
   }
 
   function openTimelineAtBucket(bucket: number): void {

@@ -84,7 +84,7 @@ import {
   timelineWindowForBucket,
   topTimelineSpikes,
 } from './AbilityBreakdown/timelineSummary'
-import { useBreakdownViewState } from './AbilityBreakdown/viewState'
+import { computeAutoHiddenSeries, deathSelectionKey as buildDeathSelectionKey, toggleSetMember, useBreakdownViewState, wheelScrollDelta } from './AbilityBreakdown/viewState'
 
 const {
   allData,
@@ -201,11 +201,8 @@ const combatantGroups = computed(() => groupCombatants(visibleCombatants.value, 
 const groupCollapsed = ref<Set<string>>(new Set())
 
 function toggleGroup(label: string) {
-  if (groupCollapsed.value.has(label)) {
-    groupCollapsed.value.delete(label)
-  } else {
-    groupCollapsed.value.add(label)
-  }
+  // Copy-replace (not in-place mutation) so the collapsed Set stays reactive.
+  groupCollapsed.value = toggleSetMember(groupCollapsed.value, label)
 }
 
 const resolvedSelected = computed(() => resolveSelectedCombatant({
@@ -393,10 +390,7 @@ function castFilterLabel(filter: CastFilter): string {
 }
 
 function toggleCastGroupCollapsed(category: CastFilter): void {
-  const next = new Set(collapsedCastGroups.value)
-  if (next.has(category)) next.delete(category)
-  else next.add(category)
-  collapsedCastGroups.value = next
+  collapsedCastGroups.value = toggleSetMember(collapsedCastGroups.value, category)
 }
 
 const selectedResourceSamples = computed(() => {
@@ -452,9 +446,7 @@ function castCooldownLabel(event: CastEvent): string {
 }
 
 function scrollElementHorizontallyByWheel(el: HTMLElement, e: WheelEvent): boolean {
-  const maxScroll = el.scrollWidth - el.clientWidth
-  if (maxScroll <= 0) return false
-  const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+  const delta = wheelScrollDelta(el.scrollWidth, el.clientWidth, e.deltaX, e.deltaY)
   if (!delta) return false
   el.scrollLeft += delta
   return true
@@ -484,7 +476,7 @@ function toggleDeathSelection(index: number, death: DeathRecord): void { selecte
 function openActorDone(name: string): void { selectActor(name); activeView.value = 'done' }
 
 function deathSelectionKey(death: DeathRecord | null | undefined): string {
-  return death ? `${death.targetId}|${death.targetName}|${death.timestamp}` : ''
+  return buildDeathSelectionKey(death)
 }
 
 watch(deaths, () => {
@@ -570,19 +562,11 @@ function applyAutoHide(pullIdx: number | null | undefined, timeline: DpsTimeline
   if (pullIdx === lastAutoHidePull) return
   lastAutoHidePull = pullIdx
   if (partyNames.value.length === 0) return
-  const party = new Set([...partyNames.value, selfName.value, 'YOU'])
-  const toHide = new Set<string>()
-  for (const name of Object.keys(timeline)) {
-    if (!party.has(name) && !isEnemy(name)) toHide.add(name)
-  }
-  hiddenSeries.value = toHide
+  hiddenSeries.value = computeAutoHiddenSeries(Object.keys(timeline), partyNames.value, selfName.value, isEnemy)
 }
 
 function toggleSeries(name: string): void {
-  const next = new Set(hiddenSeries.value)
-  if (next.has(name)) next.delete(name)
-  else next.add(name)
-  hiddenSeries.value = next
+  hiddenSeries.value = toggleSetMember(hiddenSeries.value, name)
 }
 
 const PL = 52, PR = 16, PT = 12, PB = 28

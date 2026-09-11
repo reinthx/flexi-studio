@@ -364,6 +364,49 @@ describe('overlay liveData store', () => {
     store.stop()
   })
 
+  it('drops lite rDPS credit once the buff window is lost', async () => {
+    const store = await createStore({ lite: true })
+    store.start()
+    store.applyConfig({
+      name: 'Lite buff loss profile',
+      default: {},
+      overrides: {},
+      tabs: [],
+      global: {
+        dpsType: 'rdps',
+        sortBy: 'rdps',
+      },
+    } as any)
+
+    const combatants = {
+      'Drew Teriyaki': { name: 'Drew Teriyaki', Job: 'WAR', encdps: '3300', damage: '33000', damageperc: '90', deaths: '0' },
+      Bob: { name: 'Bob', Job: 'BRD', encdps: '1000', damage: '10000', damageperc: '10', deaths: '0' },
+    }
+    mocks.listeners.CombatData({ ...combatData(true, combatants) })
+
+    mocks.listeners.LogLine(logLine({
+      0: '26', 2: '08AB', 3: 'Battle Litany', 4: '30',
+      5: '10BBBBBB', 6: 'Bob', 7: '10AAAAAA', 8: 'Drew Teriyaki',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '30', 2: '08AB', 3: 'Battle Litany',
+      5: '10BBBBBB', 6: 'Bob', 7: '10AAAAAA', 8: 'Drew Teriyaki',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '21', 2: '10AAAAAA', 3: 'Drew Teriyaki', 4: '0001', 5: 'Heavy Swing',
+      6: '40000001', 7: 'Training Boss', 8: '03', 9: '27100000',
+    }))
+
+    mocks.listeners.CombatData({ ...combatData(true, combatants) })
+
+    expect(store.frame?.bars.map(bar => [bar.name, bar.displayValue, bar.rdps])).toEqual([
+      ['Drew Teriyaki', '3300', '3300'],
+      ['Bob', '1000', '1000'],
+    ])
+
+    store.stop()
+  })
+
   it('applies rDPS given and taken to the YOU combatant row', async () => {
     const store = await createStore({ lite: true })
     store.start()
@@ -1666,6 +1709,279 @@ describe('overlay liveData store', () => {
     })
     expect(historicalPull.bossPercentLabel).toContain('3/3 defeated')
     expect(historicalPull.primaryEnemyName).not.toBe('Treno Citizen')
+
+    store.stop()
+  })
+
+  it('attributes DoT ticks to the source using linked effect names', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '26', 2: '4C9', 3: 'Dia', 4: '30.00',
+      5: '10AAAAAA', 6: 'Alice', 7: '40000001', 8: 'Training Boss',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '24', 2: '40000001', 3: 'Training Boss', 4: 'DoT', 5: '4C9',
+      6: '100', 7: '90000', 8: '100000', 17: '10AAAAAA', 18: 'Alice',
+    }))
+
+    expect(store.currentAbilityData['Alice']?.['dot:4C9']).toMatchObject({
+      abilityName: 'Dia',
+      totalDamage: 0x100,
+      hits: 1,
+    })
+    expect(store.currentAbilityData['Alice']?.['dot:4C9']?.targets?.['Training Boss']).toMatchObject({
+      total: 0x100,
+      hits: 1,
+    })
+
+    store.stop()
+  })
+
+  it('falls back to generic tick names and ignores zero ticks', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '24', 2: '40000001', 3: 'Training Boss', 4: 'DoT', 5: 'FFF',
+      6: '0', 7: '90000', 8: '100000', 17: '10AAAAAA', 18: 'Alice',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '24', 2: '40000001', 3: 'Training Boss', 4: 'DoT', 5: '4C9',
+      6: '100', 7: '90000', 8: '100000', 17: '10AAAAAA', 18: 'Alice',
+    }))
+
+    expect(store.currentAbilityData['Alice']?.['dot:FFF']).toBeUndefined()
+    expect(store.currentAbilityData['Alice']?.['dot:4C9']?.abilityName).toBe('DoT (4C9)')
+
+    store.stop()
+  })
+
+  it('splits HoT ticks into effective healing and overheal', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '24', 2: '10AAAAAA', 3: 'Alice', 4: 'HoT', 5: '4C9',
+      6: '100', 7: '90000', 8: '100000', 17: '10AAAAAA', 18: 'Alice',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '24', 2: '10BBBBBB', 3: 'Bob', 4: 'HoT', 5: '4C9',
+      6: '100', 7: '100000', 8: '100000', 17: '10AAAAAA', 18: 'Alice',
+    }))
+
+    mocks.listeners.CombatData(combatData(false, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    expect(store.sessionPulls[0].healingReceivedData?.Alice?.['hot:4C9']).toMatchObject({
+      abilityName: 'HoT (4C9)',
+      totalDamage: 0x100,
+      hits: 1,
+      overheal: 0,
+      sources: { Alice: { total: 0x100, hits: 1 } },
+    })
+    expect(store.sessionPulls[0].healingReceivedData?.Bob?.['hot:4C9']).toMatchObject({
+      totalDamage: 0,
+      hits: 1,
+      overheal: 0x100,
+    })
+
+    store.stop()
+  })
+
+  it('records player deaths and links later resurrection effects', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Bob: { name: 'Bob', Job: 'DRG', encdps: '2000', damage: '60000', damageperc: '100', deaths: '1' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '25', 2: '10BBBBBB', 3: 'Bob', 4: '40000001', 5: 'Training Boss',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '26', 2: 'BAC', 3: 'Raise', 4: '8.00',
+      5: '10AAAAAA', 6: 'Alice', 7: '10BBBBBB', 8: 'Bob',
+    }))
+
+    mocks.listeners.CombatData(combatData(false, {
+      Bob: { name: 'Bob', Job: 'DRG', encdps: '2000', damage: '60000', damageperc: '100', deaths: '1' },
+    }))
+
+    expect(store.sessionPulls[0].deaths).toHaveLength(1)
+    expect(store.sessionPulls[0].deaths[0]).toMatchObject({
+      targetName: 'Bob',
+      targetId: '10BBBBBB',
+      resurrectSourceName: 'Alice',
+    })
+    expect(store.sessionPulls[0].deaths[0].resurrectTime).toBeGreaterThanOrEqual(0)
+    expect(store.sessionPulls[0].deaths[0].lastHits.at(-1)).toMatchObject({ abilityName: 'Death' })
+
+    store.stop()
+  })
+
+  it('ignores deaths of hinted friendly NPCs', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '03', 2: '40000002', 3: 'Alphinaud', 4: '1D',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '25', 2: '40000002', 3: 'Alphinaud', 4: '40000001', 5: 'Training Boss',
+    }))
+
+    mocks.listeners.CombatData(combatData(false, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    expect(store.sessionPulls[0].deaths).toEqual([])
+
+    store.stop()
+  })
+
+  it('credits raid buffs only while their window is active', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '26', 2: '123', 3: 'Battle Litany', 4: '20.00',
+      5: '10BBBBBB', 6: 'Bob', 7: '40000001', 8: 'Training Boss',
+    }))
+    const hit = () => mocks.listeners.LogLine(logLine({
+      0: '21', 2: '10AAAAAA', 3: 'Alice', 4: '0001', 5: 'Heavy Swing',
+      6: '40000001', 7: 'Training Boss', 8: '03', 9: '27100000',
+      24: '90000', 25: '100000',
+    }))
+    hit()
+    vi.advanceTimersByTime(25000)
+    hit()
+
+    mocks.listeners.CombatData(combatData(false, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    // Only the first 10000 hit falls inside the 20s window: (10000 - 10000/1.1) over 30s.
+    expect(store.sessionPulls[0].rdpsGiven?.Bob).toBeCloseTo((10000 - 10000 / 1.1) / 30, 2)
+
+    store.stop()
+  })
+
+  it('stops crediting raid buffs after the effect is lost', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '26', 2: '123', 3: 'Battle Litany', 4: '20.00',
+      5: '10BBBBBB', 6: 'Bob', 7: '40000001', 8: 'Training Boss',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '30', 2: '123', 3: 'Battle Litany',
+      5: '10BBBBBB', 6: 'Bob', 7: '40000001', 8: 'Training Boss',
+    }))
+    mocks.listeners.LogLine(logLine({
+      0: '21', 2: '10AAAAAA', 3: 'Alice', 4: '0001', 5: 'Heavy Swing',
+      6: '40000001', 7: 'Training Boss', 8: '03', 9: '27100000',
+      24: '90000', 25: '100000',
+    }))
+
+    mocks.listeners.CombatData(combatData(false, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    expect(store.sessionPulls[0].rdpsGiven ?? {}).toEqual({})
+
+    store.stop()
+  })
+
+  it('sums split YOU and name rDPS contributions in breakdown payloads', async () => {
+    const store = await createStore()
+    store.start()
+    mocks.listeners.ChangePrimaryPlayer({ type: 'ChangePrimaryPlayer', charName: 'Alice' })
+
+    mocks.listeners.CombatData(combatData(true, {
+      YOU: { name: 'YOU', Job: 'WAR', encdps: '2500', damage: '75000', damageperc: '100', deaths: '0' },
+    }))
+
+    mocks.listeners.LogLine(logLine({
+      0: '26', 2: '123', 3: 'Battle Litany', 4: '20.00',
+      5: '10BBBBBB', 6: 'Bob', 7: '40000001', 8: 'Training Boss',
+    }))
+    for (const dealer of ['YOU', 'Alice']) {
+      mocks.listeners.LogLine(logLine({
+        0: '21', 2: '10AAAAAA', 3: dealer, 4: '0001', 5: 'Heavy Swing',
+        6: '40000001', 7: 'Training Boss', 8: '03', 9: '2AF80000',
+        24: '90000', 25: '100000',
+      }))
+    }
+
+    store.broadcastForCombatant('Alice')
+    const payload = JSON.parse(localStorage.getItem('flexi-breakdown-snapshot') ?? '{}')
+
+    // Each 11000 hit donates 1000 to Bob; Alice took both, so 2000/30s is removed.
+    expect(payload.rdpsByCombatant.Alice).toBeCloseTo(2500 - 2000 / 30, 1)
+    expect(payload.rdpsByCombatant.YOU).toBeUndefined()
+
+    store.stop()
+  })
+
+  it('ignores malformed and unknown LogLine packets without throwing', async () => {
+    const store = await createStore()
+    store.start()
+
+    mocks.listeners.CombatData(combatData(true, {
+      Alice: { name: 'Alice', Job: 'WAR', encdps: '1000', damage: '30000', damageperc: '100', deaths: '0' },
+    }))
+
+    expect(() => {
+      mocks.listeners.LogLine({ type: 'LogLine', rawLine: '', line: [] })
+      mocks.listeners.LogLine(logLine({ 0: '99', 2: 'whatever' }))
+      mocks.listeners.LogLine(logLine({ 0: '21', 2: '10AAAAAA', 3: 'Alice' }))
+      mocks.listeners.LogLine(logLine({
+        0: '21', 2: '10AAAAAA', 3: 'Alice', 4: '0001', 5: 'Hit',
+        6: '40000001', 7: 'Boss', 8: 'zz', 9: 'zz',
+      }))
+      mocks.listeners.LogLine(logLine({
+        0: '24', 2: '40000001', 3: 'Boss', 4: 'XX', 5: '1',
+        6: '100', 7: '1', 8: '2', 17: '10AAAAAA', 18: 'Alice',
+      }))
+      mocks.listeners.LogLine(logLine({ 0: '26', 2: '1', 3: '', 4: 'x', 5: '', 6: '', 7: '', 8: '' }))
+    }).not.toThrow()
+    expect(store.currentAbilityData).toEqual({})
+
+    // A bad timestamp degrades gracefully: the hit still records.
+    mocks.listeners.LogLine(logLine({
+      0: '21', 1: 'not-a-date', 2: '10AAAAAA', 3: 'Alice', 4: '0001', 5: 'Heavy Swing',
+      6: '40000001', 7: 'Boss', 8: '03', 9: '27100000', 24: '75000', 25: '100000',
+    }))
+    expect(store.currentAbilityData['Alice']?.['0001']?.totalDamage).toBe(10000)
 
     store.stop()
   })

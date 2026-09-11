@@ -21,7 +21,7 @@ import {
 } from './shapeGeometry'
 
 /** Sample a color from a gradient at position t (0–1) by lerping between stops. */
-function sampleGradientColor(g: GradientFill, t: number): string {
+export function sampleGradientColor(g: GradientFill, t: number): string {
   const stops = [...g.stops].sort((a, b) => a.position - b.position)
   if (stops.length === 0) return '#000'
   if (stops.length === 1 || t <= stops[0].position) return stops[0].color
@@ -36,7 +36,7 @@ function sampleGradientColor(g: GradientFill, t: number): string {
   return stops[stops.length - 1].color
 }
 
-function lerpColor(a: string, b: string, t: number): string {
+export function lerpColor(a: string, b: string, t: number): string {
   const pa = parseHex(a), pb = parseHex(b)
   const r = Math.round(pa[0] + (pb[0] - pa[0]) * t)
   const g = Math.round(pa[1] + (pb[1] - pa[1]) * t)
@@ -45,7 +45,7 @@ function lerpColor(a: string, b: string, t: number): string {
 }
 
 
-function parseHex(c: string): [number, number, number] {
+export function parseHex(c: string): [number, number, number] {
   const hex = c.replace('#', '')
   if (hex.length === 3) {
     return [parseInt(hex[0]+hex[0],16), parseInt(hex[1]+hex[1],16), parseInt(hex[2]+hex[2],16)]
@@ -128,7 +128,7 @@ const DEFAULT_LABEL: BarLabel = {
 }
 
 /** Compute the CSS position style for a single absolutely-positioned label field. */
-function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number, styleConfig: BarStyle, barWidth: number): Record<string, string | number> {
+export function calcFieldStyle(field: LabelField, padding: number, outlineWidth: number, styleConfig: BarStyle, barWidth: number): Record<string, string | number> {
   const ox = field.offsetX ?? 0
   const oy = field.offsetY ?? 0
   const extraPad = outlineWidth
@@ -251,18 +251,18 @@ export { DEFAULT_ICON_CONFIG, DEFAULT_LABEL, DEFAULT_SHAPE, DEFAULT_STYLE }
 
 const SVG_SHADOW_REGION = 10000
 
-function getFillOpacity(fill?: BarFill): number {
+export function getFillOpacity(fill?: BarFill): number {
   if (!fill) return 1
   if (fill.type === 'texture') return fill.texture.opacity
   return fill.opacity ?? 1
 }
 
-function buildShapeStrokePoints(shape: BarStyle['shape'], width: number, height: number): string | undefined {
+export function buildShapeStrokePoints(shape: BarStyle['shape'], width: number, height: number): string | undefined {
   if (!shape || !isNonRectShape(shape)) return undefined
   return pointsToString(buildShapePoints(shape, width, height))
 }
 
-function parseSvgPoints(points: string): Array<[number, number]> {
+export function parseSvgPoints(points: string): Array<[number, number]> {
   return points
     .split(' ')
     .map(point => point.split(',').map(Number) as [number, number])
@@ -286,7 +286,7 @@ function clipPolygonX(points: Array<[number, number]>, xLimit: number, keepGreat
   return result
 }
 
-function buildSegmentStrokePolygons(shape: BarStyle['shape'], width: number, height: number): Array<{ key: string; points: string }> {
+export function buildSegmentStrokePolygons(shape: BarStyle['shape'], width: number, height: number): Array<{ key: string; points: string }> {
   const sf = shape?.segmentFill
   if (!sf?.enabled) return []
   const segmentWidth = sf.segmentWidth ?? 8

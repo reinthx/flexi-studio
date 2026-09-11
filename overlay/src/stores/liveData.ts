@@ -25,6 +25,11 @@ import {
   isProfileLike,
   parseProfileSafe,
 } from '@shared'
+import {
+  effectiveDpsTypeFor,
+  resolveCombatantFilter,
+  sortCombatantsForMeter,
+} from '@shared/frameBuilder'
 import type {
   CombatDataEvent,
   ChangePrimaryPlayerEvent,
@@ -52,6 +57,17 @@ import { buildDeathEvents } from '@shared/deathRecap'
 import { buildMetricFractions, createMetricFractionContext } from '@shared/metricFractions'
 import { normalizeJob } from '@shared/jobMap'
 import { useOverlayConfig } from './overlayConfig'
+import {
+  actionEffectKind,
+  combatantNameAliases as baseCombatantNameAliases,
+  decodeLogDamage,
+  decodeTickAmount,
+  isEnemyId,
+  isPlayerId,
+  normalizeEffectId,
+  parseActionEffectFlags,
+  tickEffectKey,
+} from '../lib/logLine'
 
 declare const __FLEXI_LITE__: boolean | undefined
 
@@ -509,10 +525,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   function combatantNameAliases(name: string): string[] {
-    const aliases = [name]
-    if (name === 'YOU' && selfName.value) aliases.push(selfName.value)
-    if (selfName.value && name === selfName.value) aliases.push('YOU')
-    return Array.from(new Set(aliases.filter(Boolean)))
+    return baseCombatantNameAliases(name, selfName.value)
   }
 
   function mapTotalForCombatant(map: Map<string, number>, name: string): number {
@@ -532,18 +545,22 @@ export const useLiveDataStore = defineStore('liveData', () => {
   ): Record<string, number> {
     const duration = Math.max(1, durationSec)
     const canonicalName = (name: string): string => name === 'YOU' && selfName.value ? selfName.value : name
-    const canonicalizeRates = (record: Record<string, number>): Record<string, number> => {
+    // dps/damage are duplicate measurements of one quantity under two keys, so
+    // keep the max. given/taken are disjoint per-hit accumulations that can
+    // split across YOU and the character name, so sum them like the live meter
+    // does via mapTotalForCombatant — max would silently drop half the credit.
+    const canonicalizeRates = (record: Record<string, number>, merge: 'max' | 'sum'): Record<string, number> => {
       const result: Record<string, number> = {}
       for (const [name, value] of Object.entries(record)) {
         const key = canonicalName(name)
-        result[key] = Math.max(result[key] ?? 0, value)
+        result[key] = merge === 'sum' ? (result[key] ?? 0) + value : Math.max(result[key] ?? 0, value)
       }
       return result
     }
-    const canonicalDps = canonicalizeRates(dpsByCombatant)
-    const canonicalDamage = canonicalizeRates(damageByCombatant)
-    const canonicalGiven = canonicalizeRates(given)
-    const canonicalTaken = canonicalizeRates(taken)
+    const canonicalDps = canonicalizeRates(dpsByCombatant, 'max')
+    const canonicalDamage = canonicalizeRates(damageByCombatant, 'max')
+    const canonicalGiven = canonicalizeRates(given, 'sum')
+    const canonicalTaken = canonicalizeRates(taken, 'sum')
     const names = new Set([
       ...Object.keys(canonicalDps),
       ...Object.keys(canonicalDamage),
@@ -813,23 +830,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
     refreshLiveCombatantMetrics(combatants, encounterDurationSec(event.Encounter) || 1)
 
     // Use combatantFilter if set, otherwise fall back to legacy selfOnly/partyOnly
-    const filter = g.combatantFilter ?? (g.selfOnly ? 'self' : g.partyOnly ? 'party' : 'all')
+    const filter = resolveCombatantFilter(g)
 
-    const filtered = filterCombatantsForMeter(combatants, filter)
-      .sort((a, b) => {
-        if (g.sortBy === 'role') {
-          const roleOrder: Record<string, number> = { tank: 0, healer: 1, melee: 2, ranged: 3, caster: 4, unknown: 5 }
-          const getJobRole = (job: string) => {
-            const JOB_ROLES: Record<string, string> = { PLD: 'tank', WAR: 'tank', DRK: 'tank', GNB: 'tank', WHM: 'healer', SCH: 'healer', AST: 'healer', SGE: 'healer', MNK: 'melee', DRG: 'melee', NIN: 'melee', SAM: 'melee', RPR: 'melee', VPR: 'melee', BRD: 'ranged', MCH: 'ranged', DNC: 'ranged', BLM: 'caster', SMN: 'caster', RDM: 'caster', PCT: 'caster', BLU: 'caster' }
-            return JOB_ROLES[normalizeJob(job)] ?? 'unknown'
-          }
-          return (roleOrder[getJobRole(b['Job'] ?? '')] ?? 5) - (roleOrder[getJobRole(a['Job'] ?? '')] ?? 5)
-        }
-        return parseFloat(b[g.sortBy] ?? '0') - parseFloat(a[g.sortBy] ?? '0')
-      })
+    const filtered = sortCombatantsForMeter(filterCombatantsForMeter(combatants, filter), g.sortBy)
       .slice(0, g.maxCombatants)
 
-    const effectiveDpsType = ((g.dpsType as any) === 'role' ? 'encdps' : g.dpsType)
+    const effectiveDpsType = effectiveDpsTypeFor(g.dpsType)
     const bars = buildCombatantBars(filtered, effectiveDpsType, partyData.value)
 
     const newFrame: Frame = {
@@ -861,14 +867,6 @@ export const useLiveDataStore = defineStore('liveData', () => {
   // Attribute player damage against enemies to buffs on the dealer and debuffs on the target.
   // Logged damage already includes active buffs, so allocation removes the combined
   // multiplier first and distributes the gained damage by log-weighted share.
-  function isPlayerId(id: string): boolean {
-    return id.startsWith('10')
-  }
-
-  function isEnemyId(id: string): boolean {
-    return id.startsWith('40')
-  }
-
   function isObjectiveEnemy(name: string, id: string): boolean {
     if (!isEnemyId(id)) return false
     if (nonObjectiveNpcIds.has(id)) return false
@@ -894,9 +892,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   function logLineEnemyNames(parts: string[], lineType: string): string[] {
     const candidates: Array<[string, string]> = []
-    if (lineType === '20') {
-      candidates.push([parts[3], parts[2]], [parts[7], parts[6]])
-    } else if (lineType === '21' || lineType === '22') {
+    if (lineType === '20' || lineType === '21' || lineType === '22') {
       candidates.push([parts[3], parts[2]], [parts[7], parts[6]])
     } else if (lineType === '24') {
       candidates.push([parts[3], parts[2]], [parts[18], parts[17]])
@@ -946,6 +942,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
   ): void {
     if (!dealerName || !targetName || damage <= 0) return
     if (!isPlayerId(dealerId) || !isEnemyId(targetId)) return
+    if (activeRaidBuffs.size === 0) return
 
     const nowMs = currentPullOffsetMs()
     const windows = [
@@ -987,37 +984,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (idx !== -1) windows.splice(idx, 1)
   }
 
-  function decodeLogDamage(hex: string): number {
-    if (!hex || hex === '0') return 0
-    const n = parseInt(hex, 16)
-    if (isNaN(n)) return 0
-    const upper = (n >>> 16) & 0xFFFF
-    const lower = n & 0xFFFF
-    return lower & 0x4000
-      ? upper | (((lower & 0x3FFF) + 1) << 16)
-      : upper
-  }
-
-  function decodeTickAmount(hex: string, targetMaxHp?: number): number {
-    if (!hex || hex === '0') return 0
-    const n = parseInt(hex, 16)
-    if (!Number.isFinite(n)) return 0
-
-    const plausibleCeiling = Number.isFinite(targetMaxHp) && (targetMaxHp ?? 0) > 0
-      ? Math.max(targetMaxHp as number * 2, 1_000_000)
-      : 1_000_000
-    if (n <= plausibleCeiling) return n
-
-    const lower20 = n & 0xFFFFF
-    if (lower20 > 0 && lower20 <= plausibleCeiling) return lower20
-
-    const lower16 = n & 0xFFFF
-    return lower16 > 0 ? lower16 : n
-  }
-
-  function normalizeEffectId(effectId: string): string {
-    return (effectId || '').trim().toUpperCase()
-  }
+  // decodeLogDamage, decodeTickAmount, normalizeEffectId live in ../lib/logLine
+  // (pure + directly unit-tested) and are imported above.
 
   function recordEffectName(effectId: string, effectName: string): void {
     const key = normalizeEffectId(effectId)
@@ -1026,17 +994,14 @@ export const useLiveDataStore = defineStore('liveData', () => {
     currentEffectNames.set(key, name)
   }
 
-  function tickEffectKey(sourceId: string, targetId: string): string {
-    return `${sourceId || ''}|${targetId || ''}`
-  }
-
   function setActiveEffects(map: Map<string, ActiveTickEffect[]>, key: string, effects: ActiveTickEffect[]): void {
     if (effects.length > 0) map.set(key, effects)
     else map.delete(key)
   }
 
   function activeEffectsFor(map: Map<string, ActiveTickEffect[]>, key: string): ActiveTickEffect[] {
-    const active = (map.get(key) ?? []).filter(effect => effect.expiresAt > currentPullOffsetMs())
+    const nowMs = currentPullOffsetMs()
+    const active = (map.get(key) ?? []).filter(effect => effect.expiresAt > nowMs)
     setActiveEffects(map, key, active)
     return active
   }
@@ -1059,8 +1024,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const key = tickEffectKey(sourceId, targetId)
     const active = activeEffectsFor(activeTickEffects, key)
     if (active.length === 0) return undefined
-    const names = [...new Set(active.map(effect => effect.effectName))]
-    return names.length === 1 ? names[0] : undefined
+    const first = active[0].effectName
+    for (let i = 1; i < active.length; i++) {
+      if (active[i].effectName !== first) return undefined
+    }
+    return first
   }
 
   function jobTickFallbackName(kind: 'DoT' | 'HoT', sourceName: string, targetId: string): string | undefined {
@@ -1101,10 +1069,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     targetId = '',
     hitSeverity = 0,
   ): void {
-    if (!currentAbilityData.value[effectiveName]) {
-      currentAbilityData.value[effectiveName] = {}
-    }
-    const combatant = currentAbilityData.value[effectiveName]
+    const combatant = currentAbilityData.value[effectiveName] ??= {}
     const stats = ensureAbilityStats(combatant, abilityId, abilityName)
     stats.totalDamage += damage
     stats.hits += 1
@@ -1144,16 +1109,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     recordTimelineBucket(currentTimeline.value, effectiveName, damage)
   }
 
-  function actionEffectSeverity(flags: string): number {
-    const parsed = parseInt(flags, 16)
-    if (!Number.isFinite(parsed)) return 0
-    return Math.floor(parsed / 0x100) & 0xFF
-  }
-
-  function actionEffectKind(flags: string): number {
-    const parsed = parseInt(flags, 16)
-    return Number.isFinite(parsed) ? parsed & 0xFF : 0
-  }
+  // actionEffectKind / parseActionEffectFlags live in ../lib/logLine (single parse).
 
   function recordActiveSelfHealingEffect(sourceId: string, targetId: string, effectId: string, effectName: string, durationSec: number): void {
     const name = effectName?.trim()
@@ -1496,16 +1452,38 @@ export const useLiveDataStore = defineStore('liveData', () => {
     return appliedHeal > 0 || overheal > 0
   }
 
+  function splitLogLine(event: LogLineEvent): { parts: string[]; lineType: string } {
+    const parts = event.rawLine.split('|')
+    return { parts, lineType: parts[0] }
+  }
+
+  function readLogLineTime(parts: string[]): void {
+    const parsedLogTime = Date.parse(parts[1] ?? '')
+    currentLogTime = Number.isFinite(parsedLogTime) ? parsedLogTime : null
+  }
+
+  // Shared 26/30 raid-buff bookkeeping for the full and lite LogLine paths.
+  // (The full path additionally tracks tick effects and resurrections inline.)
+  function recordRaidBuffLine(parts: string[], lineType: string): void {
+    if (lineType === '26') {
+      recordRaidBuffWindow(parts[5], parts[6], parts[8], parts[3], parseFloat(parts[4]))
+    } else if (lineType === '30') {
+      const effectName = parts[3]
+      const sourceName = parts[6]
+      const targetName = parts[8]
+      if (!effectName || !sourceName || !targetName) return
+      removeRaidBuffWindow(sourceName, targetName, effectName)
+    }
+  }
+
   function onLogLine(event: LogLineEvent): void {
     if (!BREAKDOWN_ENABLED) {
       onLiteLogLine(event)
       return
     }
 
-    const parts = event.rawLine.split('|')
-    const lineType = parts[0]
-    const parsedLogTime = Date.parse(parts[1] ?? '')
-    currentLogTime = Number.isFinite(parsedLogTime) ? parsedLogTime : null
+    const { parts, lineType } = splitLogLine(event)
+    readLogLineTime(parts)
     maybeResetAfterStashedEncounter(parts, lineType)
 
     if (lineType === '03') {
@@ -1549,11 +1527,14 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const damageHex    = parts[9]
       const tgtCurrentHp = parseInt(parts[24], 10)
       const tgtMaxHp     = parseInt(parts[25], 10)
-      const srcCurrentHp = parseInt(parts[34], 10)
-      const srcMaxHp     = parseInt(parts[35], 10)
       const petOwnerName = parts[48]
       const effectiveName = petOwnerName || sourceName
-      const flagByte     = actionEffectKind(flags)
+      const { kind: flagByte, severity: flagSeverity } = parseActionEffectFlags(flags)
+      // Source HP is only needed to attribute self-healing procs (e.g. Bloodwhetting),
+      // so parse it lazily instead of on every ability line.
+      const healsSelf = isEnemyId(targetId) && isPlayerId(sourceId)
+      let srcCurrentHp = 0
+      let srcMaxHp = 0
 
       recordNetworkEnemyInstance(sourceName, sourceId, srcMaxHp)
       recordNetworkEnemyInstance(targetName, targetId, tgtMaxHp)
@@ -1568,7 +1549,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
         // Damage hit — attribute to source for DPS, to target for DTPS
         const damage = decodeLogDamage(damageHex)
         if (damage > 0 && effectiveName && abilityId) {
-          recordAbilityHit(effectiveName, abilityId, abilityName, damage, targetName, targetId, actionEffectSeverity(flags))
+          recordAbilityHit(effectiveName, abilityId, abilityName, damage, targetName, targetId, flagSeverity)
           didRecord = true
         }
         if (damage > 0 && targetName) {
@@ -1585,6 +1566,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
         }
       }
 
+      const selfHealingEffect = healsSelf ? activeSelfHealingEffect(sourceId) : undefined
+      if (selfHealingEffect) {
+        srcCurrentHp = parseInt(parts[34], 10)
+        srcMaxHp = parseInt(parts[35], 10)
+      }
+
       for (let i = 1; i < 8; i++) {
         const effectFlags = parts[8 + i * 2]
         const effectAmountHex = parts[9 + i * 2]
@@ -1592,7 +1579,6 @@ export const useLiveDataStore = defineStore('liveData', () => {
         const heal = decodeLogDamage(effectAmountHex)
         if (heal <= 0 || !effectiveName) continue
 
-        const selfHealingEffect = isEnemyId(targetId) && isPlayerId(sourceId) ? activeSelfHealingEffect(sourceId) : undefined
         const healTargetName = selfHealingEffect ? sourceName : targetName
         const healTargetCurrentHp = selfHealingEffect ? srcCurrentHp : tgtCurrentHp
         const healTargetMaxHp = selfHealingEffect ? srcMaxHp : tgtMaxHp
@@ -1699,7 +1685,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
       recordActiveTickEffect(sourceId, targetId, effectId, effectName, durationSec)
       recordActiveSelfHealingEffect(sourceId, targetId, effectId, effectName, durationSec)
       attachBuffDuration(sourceName, targetName, effectName, Math.round(durationSec * 1000))
-      recordRaidBuffWindow(sourceId, sourceName, targetName, effectName, durationSec)
+      recordRaidBuffLine(parts, lineType)
 
       // Only track player resurrections
       if (!targetId.startsWith('10')) return
@@ -1722,16 +1708,16 @@ export const useLiveDataStore = defineStore('liveData', () => {
       // NetworkLosesEffect
       // parts: [0]=type [1]=ts [2]=effectId [3]=effectName [4]=duration
       //        [5]=sourceId [6]=sourceName [7]=targetId [8]=targetName
-      const effectName = parts[3]
       const effectId = parts[2]
       const sourceId = parts[5]
-      const sourceName = parts[6]
       const targetId = parts[7]
+      const effectName = parts[3]
+      const sourceName = parts[6]
       const targetName = parts[8]
       if (!effectName || !sourceName || !targetName) return
       removeActiveTickEffect(sourceId, targetId, effectId, effectName)
       removeActiveSelfHealingEffect(sourceId, targetId, effectId, effectName)
-      removeRaidBuffWindow(sourceName, targetName, effectName)
+      recordRaidBuffLine(parts, lineType)
     }
   }
 
@@ -1800,9 +1786,10 @@ export const useLiveDataStore = defineStore('liveData', () => {
     const { combatants } = resolvePets(event.Combatant, profile.value.global.pets)
     const stashDuration = encounterDurationSec(event.Encounter) || 1
     for (const c of combatants) injectCombatantRdps(c, stashDuration)
+    const now = Date.now()
     const recordBase = {
-      id: `${Date.now()}`,
-      timestamp: Date.now(),
+      id: `${now}`,
+      timestamp: now,
       encounterName: title,
       zone: zone.value,
       duration: event.Encounter['duration'] ?? '',
@@ -2015,10 +2002,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   function onLiteLogLine(event: LogLineEvent): void {
-    const parts = event.rawLine.split('|')
-    const lineType = parts[0]
-    const parsedLogTime = Date.parse(parts[1] ?? '')
-    currentLogTime = Number.isFinite(parsedLogTime) ? parsedLogTime : null
+    const { parts, lineType } = splitLogLine(event)
+    readLogLineTime(parts)
 
     if (lineType === '21' || lineType === '22') {
       const sourceId     = parts[2]
@@ -2033,19 +2018,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
       const damage = decodeLogDamage(damageHex)
       if (damage <= 0) return
       attributeRaidBuffContribution(petOwnerName || sourceName, petOwnerName ? petOwnerId : sourceId, targetName, targetId, damage)
-    } else if (lineType === '26') {
-      const effectName = parts[3]
-      const durationSec = parseFloat(parts[4])
-      const sourceId = parts[5]
-      const sourceName = parts[6]
-      const targetName = parts[8]
-      recordRaidBuffWindow(sourceId, sourceName, targetName, effectName, durationSec)
-    } else if (lineType === '30') {
-      const effectName = parts[3]
-      const sourceName = parts[6]
-      const targetName = parts[8]
-      if (!effectName || !sourceName || !targetName) return
-      removeRaidBuffWindow(sourceName, targetName, effectName)
+    } else if (lineType === '26' || lineType === '30') {
+      recordRaidBuffLine(parts, lineType)
     }
   }
 

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { useBreakdownViewState } from '../viewState'
+import {
+  computeAutoHiddenSeries,
+  deathSelectionKey,
+  toggleSetMember,
+  useBreakdownViewState,
+  wheelScrollDelta,
+} from '../viewState'
 
 describe('useBreakdownViewState', () => {
   it('initializes the breakdown view defaults', () => {
@@ -47,6 +53,40 @@ describe('useBreakdownViewState', () => {
     expect(state.eventFilters.value.has('damage')).toBe(true)
     expect(state.timelineOverlays.value.has('buffs')).toBe(true)
     expect(state.castFilters.value.has('dps')).toBe(true)
+  })
+
+  it('toggles set members with a fresh set', () => {
+    const original = new Set(['a'])
+    const removed = toggleSetMember(original, 'a')
+    expect(removed.has('a')).toBe(false)
+    expect(original.has('a')).toBe(true)
+    expect(removed).not.toBe(original)
+
+    const added = toggleSetMember(original, 'b')
+    expect(added.has('b')).toBe(true)
+    expect(original.has('b')).toBe(false)
+  })
+
+  it('hides non-party non-enemy timeline series', () => {
+    const isEnemy = (name: string) => name === 'Boss'
+    expect([...computeAutoHiddenSeries(['Alice', 'Bob', 'Boss', 'Pet (Alice)'], ['Alice'], 'YOU', isEnemy)]).toEqual([
+      'Bob',
+      'Pet (Alice)',
+    ])
+    expect([...computeAutoHiddenSeries(['Alice', 'Boss'], ['Alice'], 'YOU', isEnemy)]).toEqual([])
+  })
+
+  it('keys deaths stably and blanks missing ones', () => {
+    expect(deathSelectionKey({ targetId: '10', targetName: 'Bob', timestamp: 5 })).toBe('10|Bob|5')
+    expect(deathSelectionKey(null)).toBe('')
+    expect(deathSelectionKey(undefined)).toBe('')
+  })
+
+  it('resolves wheel deltas to the dominant scrollable axis', () => {
+    expect(wheelScrollDelta(100, 100, 5, 5)).toBe(0)
+    expect(wheelScrollDelta(200, 100, 0, 0)).toBe(0)
+    expect(wheelScrollDelta(200, 100, 8, 3)).toBe(8)
+    expect(wheelScrollDelta(200, 100, 3, -9)).toBe(-9)
   })
 
   it('opens the timeline view focused at a bucket', () => {

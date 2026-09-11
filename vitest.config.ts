@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@shared': resolve(__dirname, 'shared/src'),
+      '@overlay': resolve(__dirname, 'overlay/src'),
     },
   },
   test: {

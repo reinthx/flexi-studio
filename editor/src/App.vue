@@ -29,9 +29,9 @@ const isLiteEditor = new URLSearchParams(window.location.search).get('lite') ===
 // Keep overlay mode alias for all existing v-if/v-else references
 const isOverlayMode = computed(() => currentRoute.value === 'overlay')
 
-const BreakdownPopout = defineAsyncComponent(() => import('../../overlay/src/components/AbilityBreakdownPopout.vue'))
+const BreakdownPopout = defineAsyncComponent(() => import('@overlay/components/AbilityBreakdownPopout.vue'))
 
-const OverlayMeter = defineAsyncComponent(() => import('../../overlay/src/components/MeterView.vue'))
+const OverlayMeter = defineAsyncComponent(() => import('@overlay/components/MeterView.vue'))
 
 const applySuccess = ref(false)
 let applyTimer: ReturnType<typeof setTimeout> | null = null
