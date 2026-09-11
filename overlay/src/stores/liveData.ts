@@ -25,6 +25,11 @@ import {
   isProfileLike,
   parseProfileSafe,
 } from '@shared'
+import {
+  effectiveDpsTypeFor,
+  resolveCombatantFilter,
+  sortCombatantsForMeter,
+} from '@shared/frameBuilder'
 import type {
   CombatDataEvent,
   ChangePrimaryPlayerEvent,
@@ -821,23 +826,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
     refreshLiveCombatantMetrics(combatants, encounterDurationSec(event.Encounter) || 1)
 
     // Use combatantFilter if set, otherwise fall back to legacy selfOnly/partyOnly
-    const filter = g.combatantFilter ?? (g.selfOnly ? 'self' : g.partyOnly ? 'party' : 'all')
+    const filter = resolveCombatantFilter(g)
 
-    const filtered = filterCombatantsForMeter(combatants, filter)
-      .sort((a, b) => {
-        if (g.sortBy === 'role') {
-          const roleOrder: Record<string, number> = { tank: 0, healer: 1, melee: 2, ranged: 3, caster: 4, unknown: 5 }
-          const getJobRole = (job: string) => {
-            const JOB_ROLES: Record<string, string> = { PLD: 'tank', WAR: 'tank', DRK: 'tank', GNB: 'tank', WHM: 'healer', SCH: 'healer', AST: 'healer', SGE: 'healer', MNK: 'melee', DRG: 'melee', NIN: 'melee', SAM: 'melee', RPR: 'melee', VPR: 'melee', BRD: 'ranged', MCH: 'ranged', DNC: 'ranged', BLM: 'caster', SMN: 'caster', RDM: 'caster', PCT: 'caster', BLU: 'caster' }
-            return JOB_ROLES[normalizeJob(job)] ?? 'unknown'
-          }
-          return (roleOrder[getJobRole(b['Job'] ?? '')] ?? 5) - (roleOrder[getJobRole(a['Job'] ?? '')] ?? 5)
-        }
-        return parseFloat(b[g.sortBy] ?? '0') - parseFloat(a[g.sortBy] ?? '0')
-      })
+    const filtered = sortCombatantsForMeter(filterCombatantsForMeter(combatants, filter), g.sortBy)
       .slice(0, g.maxCombatants)
 
-    const effectiveDpsType = ((g.dpsType as any) === 'role' ? 'encdps' : g.dpsType)
+    const effectiveDpsType = effectiveDpsTypeFor(g.dpsType)
     const bars = buildCombatantBars(filtered, effectiveDpsType, partyData.value)
 
     const newFrame: Frame = {
