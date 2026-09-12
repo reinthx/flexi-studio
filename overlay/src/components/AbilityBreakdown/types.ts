@@ -56,4 +56,6 @@ export interface CombatantGroup {
 
 export type NameStyleFn = (name: string) => CSSProperties | undefined
 
+export type DisplayNameFn = (name: string) => string
+
 export type ResourceTrackKey = 'hp' | 'mp'

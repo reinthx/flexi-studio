@@ -55,6 +55,21 @@ export function nameStyleFor(name: string, blurNames: boolean, selfName: string)
     : undefined
 }
 
+/** Display name for the breakdown page: swap self to 'YOU' when locked. */
+export function displayNameFor(name: string, blurNames: boolean, selfName: string): string {
+  if (!blurNames || !name) return name
+  if (selfName && name === selfName) return 'YOU'
+  return name
+}
+
+/** Display text for composite labels (e.g. "Alice died"): swap self to 'YOU' when locked. */
+export function displayTextFor(text: string, blurNames: boolean, selfName: string): string {
+  if (!blurNames || !text || !selfName) return text
+  if (text === selfName) return 'YOU'
+  // Only replace whole-word occurrences to avoid partial-name collisions.
+  return text.split(selfName).join('YOU')
+}
+
 export function groupCombatants(names: string[], partyData: PartyMemberData[], selfName: string): CombatantGroup[] {
   if (names.length === 0) return []
 

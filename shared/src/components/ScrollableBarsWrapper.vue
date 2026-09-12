@@ -20,6 +20,8 @@ const wrapperStyle = computed(() => {
     maxHeight: props.maxHeight ?? 'unset',
     overflowX: isHorizontal ? 'auto' : 'hidden',
     overflowY: isHorizontal ? 'hidden' : 'auto',
+    scrollbarWidth: 'none',
+    msOverflowStyle: 'none',
   }
   if (isHorizontal) style.height = '100%'
   return style
@@ -28,6 +30,12 @@ const wrapperStyle = computed(() => {
 
 <style scoped>
 .scrollable-bars {
-  /* no extra styling; this wrapper only controls scrolling boundaries */
+  /* Inner scroller: outer .bars-container stays hidden so only one
+     scroll context exists. Scrollbars are hidden for overlay use. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollable-bars::-webkit-scrollbar {
+  display: none;
 }
 </style>

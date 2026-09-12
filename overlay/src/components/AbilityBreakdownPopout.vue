@@ -37,7 +37,7 @@ import {
   selectedCastEventsForAbility,
   singleSelectedCastEvent,
 } from './AbilityBreakdown/castTimeline'
-import { actorJobFor, groupCombatants, isEnemyId, isNpcId, nameStyleFor, resolveSelectedCombatant, visibleCombatantNames } from './AbilityBreakdown/combatants'
+import { actorJobFor, displayNameFor, displayTextFor, groupCombatants, isEnemyId, isNpcId, nameStyleFor, resolveSelectedCombatant, visibleCombatantNames } from './AbilityBreakdown/combatants'
 import { BREAKDOWN_REQUEST_INTERVAL_MS, BREAKDOWN_SNAPSHOT_KEY, evaluateEncounterPayload, parseValidBreakdownSnapshot, useBreakdownDataState } from './AbilityBreakdown/dataState'
 import type { BreakdownPayload } from './AbilityBreakdown/dataState'
 import {
@@ -224,6 +224,14 @@ function actorJobIcon(name: string): string {
 
 function nameStyle(name: string) {
   return nameStyleFor(name, blurNames.value, selfName.value)
+}
+
+function displayName(name: string): string {
+  return displayNameFor(name, blurNames.value, selfName.value)
+}
+
+function displayText(text: string): string {
+  return displayTextFor(text, blurNames.value, selfName.value)
 }
 
 const rawData = computed(() => allData.value[resolvedSelected.value] ?? {})
@@ -619,6 +627,7 @@ const actorRailCommon = computed(() => ({
   actorJob,
   actorJobIcon,
   nameStyle,
+  tabLabel: displayName,
   onToggleGroup: toggleGroup,
   onSelectActor: selectActor,
 }))
@@ -799,7 +808,7 @@ const activeFilterChips = computed(() => buildActiveFilterChips({
   eventWindowOnly: eventWindowOnly.value,
   selectedDeathIndex: selectedDeathIndex.value,
   hasSelectedDeathWindow: Boolean(selectedDeathWindow.value),
-}))
+}).map(chip => displayTextFor(chip, blurNames.value, selfName.value)))
 const eventInspectorRows = computed(() => buildEventInspectorRows({
   rowCount: eventRows.value.length,
   actorScope: eventActorScope.value,
@@ -935,7 +944,7 @@ onUnmounted(() => {
         </div>
         <div class="bp-analysis-stat">
           <span class="bp-analysis-label">Selected Target</span>
-          <span class="bp-analysis-value" :style="nameStyle(resolvedSelected)">{{ resolvedSelected || 'None' }}</span>
+          <span class="bp-analysis-value" :style="nameStyle(resolvedSelected)">{{ displayName(resolvedSelected) || 'None' }}</span>
         </div>
       </div>
     </div>
@@ -1050,7 +1059,7 @@ onUnmounted(() => {
                 class="bp-event-item"
                 @click="openDeath(item.death)"
               >
-                <span class="bp-event-name" :style="nameStyle(item.death.targetName)">{{ item.label }}</span>
+                <span class="bp-event-name" :style="nameStyle(item.death.targetName)">{{ displayText(item.label) }}</span>
                 <span class="bp-event-detail">{{ item.detail }}</span>
               </button>
             </section>
@@ -1060,7 +1069,7 @@ onUnmounted(() => {
         <aside class="bp-inspector">
           <div class="bp-inspector-title">Overview Inspector</div>
             <div class="bp-inspector-block">
-              <div class="bp-kv"><span>Player</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected || 'None' }}</strong></div>
+              <div class="bp-kv"><span>Player</span><strong :style="nameStyle(resolvedSelected)">{{ displayName(resolvedSelected) || 'None' }}</strong></div>
               <div v-for="[label, value] in overviewInspectorRows" :key="label" class="bp-kv"><span>{{ label }}</span><strong :title="label === 'rDPS' ? rdpsDeltaLabel(resolvedSelected) : undefined">{{ value }}</strong></div>
           </div>
           <div class="bp-inspector-block">
@@ -1073,7 +1082,7 @@ onUnmounted(() => {
             <div v-if="partyHighestHit" class="bp-party-highlight">
               <span class="bp-party-label">Party highest hit</span>
               <strong>{{ partyHighestHit.ability }} · {{ f(partyHighestHit.amount) }}</strong>
-              <span :style="nameStyle(partyHighestHit.actor)">{{ partyHighestHit.actor }}</span>
+              <span :style="nameStyle(partyHighestHit.actor)">{{ displayName(partyHighestHit.actor) }}</span>
             </div>
           </div>
         </aside>
@@ -1105,6 +1114,7 @@ onUnmounted(() => {
         :entry-pull-label="entryPullLabel"
         :pull-outcome-class="pullOutcomeClass"
         :name-style="nameStyle"
+        :display-name="displayName"
         :actor-job-icon="actorJobIcon"
         @select-pull="selectPullEntry"
         @open-death="openDeath"
@@ -1143,7 +1153,7 @@ onUnmounted(() => {
               </tr></thead>
               <tbody>
                 <tr v-for="row in doneTargetRows" :key="`done-target-${row.target}`">
-                  <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname" :style="nameStyle(row.target)">{{ row.target }}</span></td>
+                  <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname" :style="nameStyle(row.target)">{{ displayName(row.target) }}</span></td>
                   <td class="col-num">{{ row.casts }}</td>
                   <td class="col-num">{{ row.damage > 0 ? f(row.damage) : '—' }}</td>
                   <td class="col-num">{{ row.healing > 0 ? f(row.healing) : '—' }}</td>
@@ -1189,7 +1199,7 @@ onUnmounted(() => {
               </tr></thead>
               <tbody>
                 <tr v-for="row in doneSourceRows" :key="`done-source-${row.name}`" :class="{ 'bp-row-active': resolvedSelected === row.name }" @click="selectActor(row.name)">
-                  <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname" :style="nameStyle(row.name)">{{ row.name }}</span></td>
+                  <td class="col-name"><div class="row-fill" :style="{ width: row.pct + '%' }" /><span class="aname" :style="nameStyle(row.name)">{{ displayName(row.name) }}</span></td>
                   <td class="col-num">{{ f(row.total) }}</td>
                   <td class="col-pct">{{ row.pct }}%</td>
                   <td class="col-num">{{ encounterDurationSec > 0 ? f(row.dps) : '—' }}</td>
@@ -1291,7 +1301,7 @@ onUnmounted(() => {
                 stroke="rgba(116,185,255,0.18)"
                 stroke-width="0.5"
               >
-                <title>{{ `${buff.name} active (${fmtSeconds(buff.start)}-${fmtSeconds(buff.end)})${buff.source ? ` from ${buff.source}` : ''}${buff.target ? ` on ${buff.target}` : ''}` }}</title>
+                <title>{{ displayText(`${buff.name} active (${fmtSeconds(buff.start)}-${fmtSeconds(buff.end)})${buff.source ? ` from ${buff.source}` : ''}${buff.target ? ` on ${buff.target}` : ''}`) }}</title>
               </rect>
 
               <polyline
@@ -1332,7 +1342,7 @@ onUnmounted(() => {
                 stroke="rgba(255,70,70,0.55)"
                 stroke-width="1.5"
               >
-                <title>{{ marker.label }}</title>
+                <title>{{ displayText(marker.label) }}</title>
               </line>
 
               <line
@@ -1346,7 +1356,7 @@ onUnmounted(() => {
                 stroke="rgba(255,255,255,0.72)"
                 stroke-width="1.5"
               >
-                <title>{{ marker.label }}</title>
+                <title>{{ displayText(marker.label) }}</title>
               </line>
 
               <circle
@@ -1375,7 +1385,7 @@ onUnmounted(() => {
               <div class="bp-tooltip-time">{{ hoverTooltip.timeLabel }}</div>
               <div v-for="entry in hoverTooltip.entries" :key="entry.name" class="bp-tooltip-row">
                 <span class="bp-tooltip-dot" :style="{ background: entry.color }" />
-                <span class="bp-tooltip-name" :style="nameStyle(entry.name)">{{ entry.label }}</span>
+                <span class="bp-tooltip-name" :style="nameStyle(entry.name)">{{ displayName(entry.name) }}</span>
                 <span class="bp-tooltip-val">{{ f(entry.value) }}</span>
                 <span v-if="chartMetric === 'rdps'" class="bp-tooltip-adj">+{{ f(entry.rdpsGiven) }} / -{{ f(entry.rdpsTaken) }}</span>
               </div>
@@ -1393,12 +1403,12 @@ onUnmounted(() => {
               <div v-if="hoverTooltip.deaths.length > 0 || hoverTooltip.raises.length > 0" class="bp-tooltip-section">
                 <div class="bp-tooltip-section-title">Events</div>
                 <div v-for="marker in hoverTooltip.deaths" :key="`tip-${marker.key}`" class="bp-tooltip-row">
-                  <span class="bp-tooltip-name" :style="nameStyle(marker.death.targetName)">{{ marker.death.targetName }}</span>
+                  <span class="bp-tooltip-name" :style="nameStyle(marker.death.targetName)">{{ displayName(marker.death.targetName) }}</span>
                   <span class="bp-tooltip-val">Died</span>
                 </div>
                 <div v-for="marker in hoverTooltip.raises" :key="`tip-${marker.key}`" class="bp-tooltip-row">
-                  <span class="bp-tooltip-name" :style="nameStyle(marker.death.targetName)">{{ marker.death.targetName }}</span>
-                  <span class="bp-tooltip-val">Raised by {{ marker.death.resurrectSourceName || 'Unknown' }}</span>
+                  <span class="bp-tooltip-name" :style="nameStyle(marker.death.targetName)">{{ displayName(marker.death.targetName) }}</span>
+                  <span class="bp-tooltip-val">Raised by {{ displayName(marker.death.resurrectSourceName || 'Unknown') }}</span>
                 </div>
               </div>
             </div>
@@ -1407,7 +1417,7 @@ onUnmounted(() => {
               <div v-for="s in chartLines.series" :key="s.name" class="bp-legend-item" :class="{ hidden: hiddenSeries.has(s.name) }" @click="toggleSeries(s.name)">
                 <span class="bp-legend-dot"
                   :style="{ background: s.isGroup ? 'transparent' : s.color, border: s.isGroup ? `1px dashed ${GROUP_COLOR}` : 'none' }" />
-                <span class="bp-legend-name" :class="{ 'bp-legend-name--focused': s.isFocused }" :style="s.isGroup ? undefined : nameStyle(s.name)">{{ s.isGroup ? 'Group' : s.name }}</span>
+                <span class="bp-legend-name" :class="{ 'bp-legend-name--focused': s.isFocused }" :style="s.isGroup ? undefined : nameStyle(s.name)">{{ s.isGroup ? 'Group' : displayName(s.name) }}</span>
               </div>
             </div>
           </div>
@@ -1416,15 +1426,15 @@ onUnmounted(() => {
         <aside class="bp-inspector">
           <div class="bp-inspector-title">Timeline Inspector</div>
             <div class="bp-inspector-block">
-              <div class="bp-kv"><span>Selected Actor</span><strong :style="nameStyle(resolvedSelected)">{{ resolvedSelected }}</strong></div>
+              <div class="bp-kv"><span>Selected Actor</span><strong :style="nameStyle(resolvedSelected)">{{ displayName(resolvedSelected) }}</strong></div>
             </div>
           <InspectorRows :rows="timelineInspectorRows" />
           <InspectorList
             heading="Window Events"
             empty-text="Hover the chart to correlate deaths, raises, and casts in the same time bucket."
             :rows="[
-              ...timelineInspectorDeaths.map(death => ({ key: `ins-death-${death.timestamp}`, title: death.targetName, titleStyle: nameStyle(death.targetName), detail: `Death @ ${fmtTime(death.timestamp)}` })),
-              ...timelineInspectorCasts.map(cast => ({ key: `ins-cast-${cast.t}-${cast.abilityName}`, title: cast.abilityName, detail: cast.target ? `→ ${cast.target}` : 'cast' })),
+              ...timelineInspectorDeaths.map(death => ({ key: `ins-death-${death.timestamp}`, title: displayName(death.targetName), titleStyle: nameStyle(death.targetName), detail: `Death @ ${fmtTime(death.timestamp)}` })),
+              ...timelineInspectorCasts.map(cast => ({ key: `ins-cast-${cast.t}-${cast.abilityName}`, title: cast.abilityName, detail: cast.target ? `→ ${displayName(cast.target)}` : 'cast' })),
             ]"
           />
         </aside>
@@ -1447,6 +1457,7 @@ onUnmounted(() => {
         :f="f"
         :fmt-time="fmtTime"
         :name-style="nameStyle"
+        :display-name="displayName"
         :death-hp-bars="deathHpBars"
         :format-hp-before="formatHpBefore"
         :ability-id-for-name="abilityIdForName"
@@ -1622,7 +1633,7 @@ onUnmounted(() => {
               <div v-if="selectedCastAbility.targets.length === 0" class="bp-empty-panel">No target data captured for this ability.</div>
               <div v-else class="cast-target-list">
                 <div v-for="target in selectedCastAbility.targets" :key="target.id ? `${target.name}-${target.id}` : target.name" class="cast-target-row">
-                  <span class="cast-target-name" :style="nameStyle(target.name)" :title="target.id ? `${target.name} · ${target.id}` : target.name">{{ target.label }}</span>
+                  <span class="cast-target-name" :style="nameStyle(target.name)" :title="target.id ? `${displayName(target.name)} · ${target.id}` : displayName(target.name)">{{ displayText(target.label) }}</span>
                   <span class="cast-target-detail">
                     <span v-if="target.casts > 0">{{ target.casts }} cast{{ target.casts === 1 ? '' : 's' }}</span>
                     <span v-if="target.hits > 0">{{ target.hits }} hit{{ target.hits === 1 ? '' : 's' }}</span>
@@ -1639,11 +1650,11 @@ onUnmounted(() => {
               <div v-if="castMitigationEffectiveness.stackedWith.length === 0" class="bp-empty-panel">No overlapping mitigation captured.</div>
               <div v-else class="cast-target-list">
                 <div v-for="mit in castMitigationEffectiveness.stackedWith" :key="mit.key" class="cast-target-row">
-                  <span class="cast-target-name" :title="`${mit.time} · ${mit.source}${mit.target ? ` → ${mit.target}` : ''}`">{{ mit.name }}</span>
+                  <span class="cast-target-name" :title="displayText(`${mit.time} · ${mit.source}${mit.target ? ` → ${mit.target}` : ''}`)">{{ displayText(mit.name) }}</span>
                   <span class="cast-target-detail">
                     <span>{{ mit.expected }}</span>
                     <span>{{ mit.overlap }}</span>
-                    <span>{{ mit.source }}</span>
+                    <span>{{ displayName(mit.source) }}</span>
                   </span>
                 </div>
               </div>
@@ -1689,11 +1700,11 @@ onUnmounted(() => {
               <tbody>
                 <tr v-for="row in eventRows" :key="row.key" :class="{ 'bp-row-active': selectedAbility === row.ability }" @click="selectAbility(row.ability)">
                   <td class="col-num">{{ fmtTime(row.t) }}</td>
-                  <td class="col-name"><span class="aname" :style="nameStyle(row.actor)">{{ row.actor }}</span></td>
+                  <td class="col-name"><span class="aname" :style="nameStyle(row.actor)">{{ displayName(row.actor) }}</span></td>
                   <td class="col-name">{{ row.eventType }}</td>
                   <td class="col-name"><AbilityCell :ability-id="abilityIdForName(row.ability)" :ability-name="row.ability" :icon-src="abilityIconSrc(abilityIdForName(row.ability), row.ability)" small @icon-error="clearAbilityIcon(abilityIdForName(row.ability), row.ability)" /></td>
-                  <td class="col-name">{{ row.source || '—' }}</td>
-                  <td class="col-name">{{ row.target || '—' }}</td>
+                  <td class="col-name">{{ displayName(row.source) || '—' }}</td>
+                  <td class="col-name">{{ displayName(row.target) || '—' }}</td>
                   <td class="col-num">{{ row.amount === null ? '—' : f(row.amount) }}</td>
                   <td class="col-name">{{ row.hpBefore }}</td>
                   <td class="col-name">{{ row.hpAfter }}</td>

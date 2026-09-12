@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { DeathRecord } from '@shared/configSchema'
 import type { PullGroupDpsBar } from './timelineSummary'
-import type { NameStyleFn, PullEntry } from './types'
+import type { DisplayNameFn, NameStyleFn, PullEntry } from './types'
 import type { PullDamageRow } from './pullInsights'
 
 defineProps<{
@@ -28,6 +28,7 @@ defineProps<{
   entryPullLabel: (entry: PullEntry) => string
   pullOutcomeClass: (entry: PullEntry) => string
   nameStyle: NameStyleFn
+  displayName: DisplayNameFn
   actorJobIcon: (name: string) => string
 }>()
 
@@ -92,7 +93,7 @@ const emit = defineEmits<{
           <div class="bp-panel-title">Death Windows</div>
           <div v-if="sortedDeaths.length === 0" class="bp-empty-panel">No deaths recorded for this pull.</div>
           <button v-for="death in sortedDeaths.slice(0, 8)" :key="`${death.targetName}-${death.timestamp}`" class="bp-event-item" @click="emit('openDeath', death)">
-            <span class="bp-event-name" :style="nameStyle(death.targetName)">{{ death.targetName }}</span>
+            <span class="bp-event-name" :style="nameStyle(death.targetName)">{{ displayName(death.targetName) }}</span>
             <span class="bp-event-detail">{{ fmtTime(death.timestamp) }}{{ death.resurrectTime ? ` · raised ${fmtTime(death.resurrectTime)}` : ' · no raise seen' }}</span>
           </button>
         </section>
@@ -115,7 +116,7 @@ const emit = defineEmits<{
               <thead><tr><th class="col-name">Name</th><th class="col-num">Amount</th><th class="col-pct">%</th><th class="col-num">DPS</th><th class="col-num">rDPS</th><th class="col-num">Given</th><th class="col-num">Taken</th><th class="col-num">Deaths</th></tr></thead>
               <tbody>
                 <tr v-for="row in pullDamageRows" :key="`pull-damage-${row.name}`" :class="{ 'bp-row-active': resolvedSelected === row.name }" @click="emit('openActor', row.name)">
-                  <td class="col-name"><div class="row-fill" :style="{ width: row.width }" /><span class="aname bp-player-cell" :style="nameStyle(row.name)"><img v-if="actorJobIcon(row.name)" :src="actorJobIcon(row.name)" alt="" class="bp-job-icon bp-player-cell-icon" /><span class="bp-player-cell-name">{{ row.name }}</span></span></td>
+                  <td class="col-name"><div class="row-fill" :style="{ width: row.width }" /><span class="aname bp-player-cell" :style="nameStyle(row.name)"><img v-if="actorJobIcon(row.name)" :src="actorJobIcon(row.name)" alt="" class="bp-job-icon bp-player-cell-icon" /><span class="bp-player-cell-name">{{ displayName(row.name) }}</span></span></td>
                   <td class="col-num">{{ f(row.total) }}</td><td class="col-pct">{{ row.pct }}%</td><td class="col-num">{{ f(row.dps) }}</td><td class="col-num">{{ f(row.rdps) }}</td><td class="col-num">{{ row.given > 0 ? f(row.given) : '—' }}</td><td class="col-num">{{ row.taken > 0 ? f(row.taken) : '—' }}</td><td class="col-num" :class="{ danger: row.deaths > 0 }">{{ row.deaths || '—' }}</td>
                 </tr>
               </tbody>

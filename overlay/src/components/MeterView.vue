@@ -355,7 +355,7 @@ const showResizeCorner = computed(() => g.value.header?.pinned === true)
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   width: 100%;
   padding: 4px;
 }

@@ -4,7 +4,7 @@ import AbilityCell from './AbilityCell.vue'
 import InspectorList from './InspectorList.vue'
 import InspectorRows from './InspectorRows.vue'
 import type { DeathInspectorRow, DeathRelatedDamageRow, DeathWindow } from './deathTransforms'
-import type { NameStyleFn } from './types'
+import type { DisplayNameFn, NameStyleFn } from './types'
 
 type DeathInspectorTab = 'recap' | 'context' | 'related'
 type DeathHpBar = { x: number; width: number; hpBefore: number; hpAfter: number; type: 'dmg' | 'heal' | 'death'; isEstimated: boolean }
@@ -24,6 +24,7 @@ defineProps<{
   f: (value: number) => string
   fmtTime: (ms: number) => string
   nameStyle: NameStyleFn
+  displayName: DisplayNameFn
   deathHpBars: (death: DeathRecord) => DeathHpBar[]
   formatHpBefore: (event: DeathEvent) => string
   abilityIdForName: (abilityName: string) => string
@@ -44,7 +45,7 @@ const emit = defineEmits<{
     <aside class="bp-rail bp-rail--deaths">
       <div class="bp-rail-title">Deaths</div>
       <div v-for="(death, i) in sortedDeaths" :key="i" class="dl-death-row" :class="{ active: selectedDeathIndex === i }" @click="emit('selectDeath', i, death)">
-        <div class="dl-death-info"><span class="dl-death-name" :style="nameStyle(death?.targetName ?? '')">{{ death?.targetName ?? 'Unknown' }}</span><span class="dl-death-time">{{ fmtTime(death?.timestamp ?? 0) }}</span></div>
+        <div class="dl-death-info"><span class="dl-death-name" :style="nameStyle(death?.targetName ?? '')">{{ displayName(death?.targetName ?? '') || 'Unknown' }}</span><span class="dl-death-time">{{ fmtTime(death?.timestamp ?? 0) }}</span></div>
         <div class="dl-spark">
           <svg viewBox="0 0 120 28" preserveAspectRatio="none" width="120" height="28" class="bp-spark-svg">
             <line x1="0" y1="28" x2="120" y2="28" stroke="rgba(255,255,255,0.07)" stroke-width="1" />
@@ -66,7 +67,7 @@ const emit = defineEmits<{
       <div v-if="!selectedDeath" class="dl-detail-empty">Select a death to review</div>
       <template v-else>
         <div class="dl-detail-header">
-          <span class="dl-detail-name" :style="nameStyle(selectedDeath.targetName)">{{ selectedDeath.targetName }}</span>
+          <span class="dl-detail-name" :style="nameStyle(selectedDeath.targetName)">{{ displayName(selectedDeath.targetName) }}</span>
           <span class="dl-detail-time">died @ {{ fmtTime(selectedDeath?.timestamp ?? 0) }}</span>
           <span class="dl-detail-sub">window {{ selectedDeathWindow ? `${fmtTime(selectedDeathWindow.start)} → ${fmtTime(selectedDeathWindow.end)}` : '—' }}</span>
         </div>
@@ -79,7 +80,7 @@ const emit = defineEmits<{
                 <td class="dl-col-time">{{ fmtTime(hit?.t ?? 0) }}</td>
                 <td class="dl-col-type"><span v-if="hit.isDeathBlow" class="dl-badge-death">X</span><span v-else :class="hit.type === 'heal' ? 'dl-badge-heal' : 'dl-badge-dmg'">{{ hit.type === 'heal' ? 'H' : 'D' }}</span></td>
                 <td class="dl-col-ability"><AbilityCell :ability-id="abilityIdForName(hit.abilityName)" :ability-name="hit.abilityName" :icon-src="abilityIconSrc(abilityIdForName(hit.abilityName), hit.abilityName)" small @icon-error="emit('clearAbilityIcon', abilityIdForName(hit.abilityName), hit.abilityName)" /></td>
-                <td class="dl-col-source">{{ hit.sourceName }}</td>
+                <td class="dl-col-source">{{ displayName(hit.sourceName) }}</td>
                 <td class="dl-col-hpbefore"><span>{{ formatHpBefore(hit) }}</span><span v-if="hit.isEstimated" class="dl-hp-estimate">est.</span></td>
                 <td class="dl-col-hpbar"><div class="dl-hpbar-container"><div class="dl-hpbar-bg" :style="`width: ${hit.hpBefore * 100}%`"></div><div v-if="Math.abs(hit.hpAfter - hit.hpBefore) > 0.001" class="dl-hpbar-change" :class="hit.type === 'heal' ? 'dl-hpbar-heal' : 'dl-hpbar-dmg'" :style="hit.type === 'heal' ? `left: ${hit.hpBefore * 100}%; width: ${(hit.hpAfter - hit.hpBefore) * 100}%` : `left: ${hit.hpAfter * 100}%; width: ${(hit.hpBefore - hit.hpAfter) * 100}%`"></div></div></td>
                 <td class="dl-col-amount" :class="hit.type === 'heal' ? 'dl-amount-heal-bold' : (hit.isDeathBlow ? 'dl-amount-death' : 'dl-amount-dmg-bold')">{{ hit.isDeathBlow ? 'KO' : (hit.type === 'heal' ? '+' : '-') + f(hit.amount) }}</td>
@@ -97,7 +98,7 @@ const emit = defineEmits<{
       </div>
       <div v-if="!selectedDeath" class="bp-empty-panel">Pick a death to inspect it.</div>
       <template v-else-if="deathInspectorTab === 'recap'">
-        <div class="bp-inspector-block"><div class="bp-kv"><span>Target</span><strong :style="nameStyle(selectedDeath.targetName)">{{ selectedDeath.targetName }}</strong></div></div>
+        <div class="bp-inspector-block"><div class="bp-kv"><span>Target</span><strong :style="nameStyle(selectedDeath.targetName)">{{ displayName(selectedDeath.targetName) }}</strong></div></div>
         <InspectorRows :rows="selectedDeathRecapRows" />
       </template>
       <InspectorList
