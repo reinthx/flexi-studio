@@ -34,6 +34,8 @@ The editor lets you configure:
 
 Changes sync live to the overlay when clicking "Apply changes" — no reload needed.
 
+Full usage guide (overlay, editor, Pulls window, Lite vs Full): [docs/USAGE.md](docs/USAGE.md). The same guide is available in-app via the editor's `Help` button.
+
 ## Presets
 
 Presets can be selected from the editor and applied to the active overlay. Custom presets are stored locally by ACT/OverlayPlugin or the browser environment you are using.

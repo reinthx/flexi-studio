@@ -9,6 +9,9 @@ import GlobalSettingsPanel from './components/panels/GlobalSettingsPanel.vue'
 import BarStylePanel from './components/panels/BarStylePanel.vue'
 import ColorEditor from './components/controls/ColorEditor.vue'
 import PresetPanel from './components/panels/PresetPanel.vue'
+import HelpModal from './components/help/HelpModal.vue'
+import { getBuildCommitUrl, getBuildInfo, getBuildLabel } from '@shared/buildInfo'
+import { openExternalUrl } from '@shared/externalLink'
 
 const liveData = useLiveDataStore()
 const config   = useConfigStore()
@@ -106,6 +109,19 @@ const globalBadge = computed(() => {
 })
 
 const saveStateLabel = computed(() => applySuccess.value ? 'Live overlay updated' : config.dirty ? 'Unsaved changes' : 'Saved')
+
+// ── Help + build badge ────────────────────────────────────────────────────────
+const showHelp = ref(false)
+const buildInfo = getBuildInfo()
+const buildLabel = getBuildLabel(buildInfo)
+const buildCommitUrl = getBuildCommitUrl(buildInfo)
+// Never a dead badge: unknown builds link to the repo instead of a commit.
+const buildHref = buildCommitUrl ?? buildInfo.repo
+const buildTitle = [
+  `SHA: ${buildInfo.sha}`,
+  ...(buildInfo.time ? [`Built: ${buildInfo.time}`] : []),
+  buildCommitUrl ? 'Click to open the commit on GitHub' : 'Open the repository on GitHub',
+].join('\n')
 </script>
 
 <template>
@@ -126,8 +142,17 @@ const saveStateLabel = computed(() => applySuccess.value ? 'Live overlay updated
         <span class="divider">|</span>
         <span class="subtitle">A modern overlay for ACT</span>
         <span class="save-state" :class="{ dirty: config.dirty, success: applySuccess }">{{ saveStateLabel }}</span>
+        <a
+          class="build-badge"
+          :href="buildHref"
+          target="_blank"
+          rel="noopener"
+          :title="buildTitle"
+          @click.prevent="openExternalUrl(buildHref)"
+        >{{ buildLabel }}</a>
       </div>
       <div class="top-bar-right">
+        <button class="utility-btn" @click="showHelp = true">Help</button>
         <button v-if="!isLiteEditor" class="utility-btn" @click="openBreakdown">Open Breakdown</button>
         <button class="apply-btn" :class="{ success: applySuccess }" @click="applyLive">
           {{ applySuccess ? '✓ Applied' : 'Apply Changes' }}
@@ -185,6 +210,8 @@ const saveStateLabel = computed(() => applySuccess.value ? 'Live overlay updated
         </div>
       </div>
     </div>
+
+    <HelpModal v-if="showHelp" :is-lite="isLiteEditor" @close="showHelp = false" />
   </div>
 </template>
 
@@ -254,6 +281,23 @@ const saveStateLabel = computed(() => applySuccess.value ? 'Live overlay updated
   color: #9ff0c0;
   border-color: rgba(58, 158, 95, 0.35);
   background: rgba(58, 158, 95, 0.14);
+}
+
+.build-badge {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 2px 7px;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+}
+a.build-badge:hover {
+  color: #fff;
+  background: var(--bg-control);
+  border-color: var(--border);
 }
 
 .top-bar-right {
