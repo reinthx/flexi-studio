@@ -16,6 +16,12 @@ test/
 test-debug.html
 .worktrees/
 
+# Local agent skills and generated media — environment-specific, never commit.
+.agents/
+brag-capture/
+brag-output/
+skills-lock.json
+
 # Licensed/personal fonts — keep local only, never commit.
 # Free fonts (Orbitron, OstrichSans, Redacted) are tracked.
 # Put personal fonts in /fonts or set CUSTOM_FONTS_DIR in .env.local

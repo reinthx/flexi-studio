@@ -17,7 +17,7 @@ This covers:
 - Playwright browser smoke tests for editor, overlay, and breakdown.
 - GitHub Pages artifact build.
 
-The GitHub Pages workflow also runs typecheck, Vitest, Playwright smoke tests, and `pnpm build:github` before uploading the Pages artifact.
+The GitHub Pages workflow also runs typecheck, Vitest, Playwright smoke tests, and `pnpm build` before uploading the Pages artifact.
 
 ## Manual ACT Smoke
 

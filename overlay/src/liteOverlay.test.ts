@@ -44,4 +44,17 @@ describe('lite overlay wiring', () => {
     expect(meterView).toContain(':on-breakdown="canUseBreakdown ? openPullDashboard : undefined"')
     expect(meterView).toContain('@click="canUseBreakdown ? openAbilityBreakdown(bar.name) : undefined"')
   })
+
+  it('builds lite into the served tree with a single canonical build', () => {
+    // `pnpm build` is the only build: dist/editor/ must nest lite/ so one
+    // static server serves every route, and the editor build must not vary
+    // by vite mode (there is no Pages-only build to diverge).
+    const buildAll = read('../../scripts/build-all.js')
+    expect(buildAll).toContain("dist/editor/lite")
+    expect(buildAll).toContain("dist/overlay-lite")
+
+    const editorConfig = read('../../editor/vite.config.ts')
+    expect(editorConfig).not.toMatch(/mode\s*===\s*['"]github['"]/)
+    expect(editorConfig).not.toMatch(/mode\s*===\s*['"]lite['"]/)
+  })
 })
