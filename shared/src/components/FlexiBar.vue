@@ -1,11 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import type { ValueFormat } from '../configSchema'
-import { formatValue } from '../formatValue'
 import { getJobIconSrc } from '../jobMap'
-import { renderTemplate } from '../templateRenderer'
 import { useBarStyles } from '../useBarStyles'
-import { buildFlexiBarTokens } from '../barRenderer'
+import { buildFlexiBarTokens, buildTokenCacheKey, renderBarFieldText } from '../barRenderer'
 import type { FlexiBarProps } from '../barRenderer'
 
 const emit = defineEmits<{ click: [] }>()
@@ -15,11 +12,18 @@ const barEl = ref<HTMLElement | null>(null)
 const barWidth = ref(0)
 let barResizeObserver: ResizeObserver | null = null
 
+// When the parent meter list measures its own width (useListWidth) and
+// passes it down, per-bar observers are redundant — every row stretches to
+// the same width. The local observer only exists for standalone consumers
+// that don't provide containerWidth.
+const useExternalWidth = computed(() => props.containerWidth !== undefined)
+
 function updateBarWidth() {
   barWidth.value = barEl.value?.getBoundingClientRect().width ?? 0
 }
 
 onMounted(() => {
+  if (useExternalWidth.value) return
   updateBarWidth()
   if (typeof ResizeObserver !== 'undefined' && barEl.value) {
     barResizeObserver = new ResizeObserver(updateBarWidth)
@@ -33,6 +37,11 @@ onUnmounted(() => {
   barResizeObserver?.disconnect()
   barResizeObserver = null
   window.removeEventListener('resize', updateBarWidth)
+})
+
+const resolvedBarWidth = computed(() => {
+  const external = props.containerWidth ?? 0
+  return external > 0 ? external : barWidth.value
 })
 
 const {
@@ -52,7 +61,7 @@ const {
   iconBgOutlineStyle, iconBgStyle, iconBgDiamondStyle,
   iconFallback,
   rank1HeightAdjustment, rank1ZIndex, rank1GlowStyle, rank1ShowCrown, rank1CrownStyle, rank1CrownIcon, rank1CrownIsImage, rank1NameGradientStyle, isRank1,
-} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, () => props.colorOverrides, () => barWidth.value)
+} = useBarStyles(() => props.bar, () => props.styleConfig, () => props.orientation, () => props.barIndex ?? 0, () => props.tabLabelConfig, () => props.rank1Config, () => props.colorOverrides, () => resolvedBarWidth.value)
 
 const isHorizontal = computed(() => props.orientation === 'horizontal')
 
@@ -97,33 +106,37 @@ const blurStyle = computed(() => {
   return { fontFamily: "'redacted-script-bold'", filter: 'blur(1px)', opacity: '0.85', userSelect: 'none' as const, letterSpacing: '-0.06em', fontSize: '1.15em', lineHeight: '1.15', transform: 'translateY(-3px)' }
 })
 
-const tokens = computed(() => buildFlexiBarTokens(props.bar, props.showRank, props.valueFormat ?? 'abbreviated'))
+let tokensCacheKey = ''
+let tokensCacheValue: Record<string, string> = {}
+const tokens = computed(() => {
+  // Token inputs snap at 1s ticks while bar identity changes every rAF
+  // frame; memoize so gliding frames reuse the token map.
+  const key = buildTokenCacheKey(props.bar, props.showRank, props.valueFormat ?? 'abbreviated')
+  if (key !== tokensCacheKey) {
+    tokensCacheKey = key
+    tokensCacheValue = buildFlexiBarTokens(props.bar, props.showRank, props.valueFormat ?? 'abbreviated')
+  }
+  return tokensCacheValue
+})
 
-function metricAwareValue(field: { template: string }, fmt: ValueFormat): string | undefined {
-  const template = field.template.toLowerCase()
-  if (!field.template.includes('{value}')) return undefined
-  if (template.includes('rdps')) return formatValue(props.bar.rawRdps ?? props.bar.rawValue ?? 0, fmt)
-  if (template.includes('dps') && !template.includes('rdps')) return formatValue(props.bar.rawDps ?? props.bar.rawValue ?? 0, fmt)
-  return undefined
-}
+// Rendered text is re-evaluated every frame but only changes on ticks
+// (except {value} metric fields, whose raw inputs glide). Cache per
+// (template, format, token-key, raw-values) so gliding frames skip the
+// template pass for static fields.
+const fieldTextCache = new Map<string, { key: string; value: string }>()
 
 function fieldText(field: { template: string; valueFormat?: string }): string {
-  const tpl = field.template.replace('{icon}', '').trim()
-  const fmt = field.valueFormat as ValueFormat
-  const metricValue = metricAwareValue(field, fmt || props.valueFormat || 'abbreviated')
-  if (fmt && fmt !== props.valueFormat) {
-    const nextTokens = { ...tokens.value }
-    nextTokens.value = metricValue ?? formatValue(props.bar.rawValue ?? 0, fmt)
-    nextTokens.dps = formatValue(props.bar.rawDps ?? 0, fmt)
-    nextTokens.encdps = nextTokens.dps
-    nextTokens.enchps = formatValue(props.bar.rawEnchps ?? 0, fmt)
-    nextTokens.rdps = formatValue(props.bar.rawRdps ?? 0, fmt)
-    return renderTemplate(tpl, nextTokens)
-  }
-  if (metricValue !== undefined) {
-    return renderTemplate(tpl, { ...tokens.value, value: metricValue })
-  }
-  return renderTemplate(tpl, tokens.value)
+  const fmt = props.valueFormat ?? 'abbreviated'
+  const tokenKey = buildTokenCacheKey(props.bar, props.showRank, fmt)
+  const cacheKey = `${field.template} ${field.valueFormat ?? ''}`
+  const key = field.template.includes('{value}')
+    ? `${tokenKey} ${props.bar.rawValue}|${props.bar.rawDps}|${props.bar.rawEnchps}|${props.bar.rawRdps}`
+    : tokenKey
+  const hit = fieldTextCache.get(cacheKey)
+  if (hit && hit.key === key) return hit.value
+  const value = renderBarFieldText(field, tokens.value, props.bar, fmt)
+  fieldTextCache.set(cacheKey, { key, value })
+  return value
 }
 
 function handleClick() {

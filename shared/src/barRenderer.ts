@@ -1,5 +1,6 @@
-import type { BarLabel, BarStyle, Orientation, Profile } from './configSchema'
+import type { BarLabel, BarStyle, Orientation, Profile, ValueFormat } from './configSchema'
 import { formatValue } from './formatValue'
+import { renderTemplate } from './templateRenderer'
 import type { BarData } from './useBarStyles'
 
 export interface FlexiBarRank1Config {
@@ -57,6 +58,12 @@ export interface FlexiBarProps {
   tabLabelConfig?: BarLabel
   rank1Config?: FlexiBarRank1Config
   colorOverrides?: Profile['overrides']
+  /**
+   * Measured list-container content width (one ResizeObserver per meter list
+   * in the parent). When present, per-bar measurement is skipped. Rows in a
+   * vertical list stretch to exactly this width.
+   */
+  containerWidth?: number
 }
 
 export function splitMaxHit(raw: string | undefined, valueFormat: 'raw' | 'abbreviated' | 'formatted' = 'abbreviated'): {
@@ -114,4 +121,71 @@ export function buildFlexiBarTokens(
     death: bar.deaths !== '0' ? `${bar.deaths} deaths` : '',
     icon: bar.job,
   }
+}
+
+export interface BarFieldLike {
+  template: string
+  valueFormat?: string
+}
+
+export interface BarRawValues {
+  rawValue?: number
+  rawDps?: number
+  rawEnchps?: number
+  rawRdps?: number
+}
+
+/**
+ * Cache key over every text-visible input of buildFlexiBarTokens.
+ * Deliberately excludes fillFraction, alpha, metricFractions, and raw*
+ * values: tokens stay identical while bars glide, so per-frame rebuilds
+ * can be skipped by comparing this key.
+ */
+export function buildTokenCacheKey(
+  bar: BarData & { tohit?: string },
+  showRank: boolean,
+  valueFormat: 'raw' | 'abbreviated' | 'formatted' = 'abbreviated',
+): string {
+  return [
+    bar.name, bar.job, bar.rank, showRank ? '1' : '0', valueFormat,
+    bar.displayValue, bar.displayPct, bar.dps, bar.enchps, bar.rdps,
+    bar.crithit, bar.directhit, bar.tohit ?? '', bar.maxHit, bar.deaths,
+  ].join('\u0000')
+}
+
+function metricAwareValue(template: string, fmt: ValueFormat, raw: BarRawValues): string | undefined {
+  const lower = template.toLowerCase()
+  if (!template.includes('{value}')) return undefined
+  if (lower.includes('rdps')) return formatValue(raw.rawRdps ?? raw.rawValue ?? 0, fmt)
+  if (lower.includes('dps') && !lower.includes('rdps')) return formatValue(raw.rawDps ?? raw.rawValue ?? 0, fmt)
+  return undefined
+}
+
+/**
+ * Render one label field to text. Pure counterpart of FlexiBar's fieldText:
+ * per-field valueFormat overrides re-resolve the metric tokens, otherwise
+ * the shared token map is reused.
+ */
+export function renderBarFieldText(
+  field: BarFieldLike,
+  tokens: Record<string, string>,
+  raw: BarRawValues,
+  valueFormat: 'raw' | 'abbreviated' | 'formatted' = 'abbreviated',
+): string {
+  const tpl = field.template.replace('{icon}', '').trim()
+  const fmt = (field.valueFormat ?? valueFormat) as ValueFormat
+  const metricValue = metricAwareValue(field.template, fmt, raw)
+  if (field.valueFormat && field.valueFormat !== valueFormat) {
+    const nextTokens = { ...tokens }
+    nextTokens.value = metricValue ?? formatValue(raw.rawValue ?? 0, fmt)
+    nextTokens.dps = formatValue(raw.rawDps ?? 0, fmt)
+    nextTokens.encdps = nextTokens.dps
+    nextTokens.enchps = formatValue(raw.rawEnchps ?? 0, fmt)
+    nextTokens.rdps = formatValue(raw.rawRdps ?? 0, fmt)
+    return renderTemplate(tpl, nextTokens)
+  }
+  if (metricValue !== undefined) {
+    return renderTemplate(tpl, { ...tokens, value: metricValue })
+  }
+  return renderTemplate(tpl, tokens)
 }

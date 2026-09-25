@@ -21,16 +21,21 @@ describe('editor and overlay preview parity wiring', () => {
     const meterBar = readVue('../../../overlay/src/components/MeterBar.vue')
     const flexiBar = readVue('../../../shared/src/components/FlexiBar.vue')
     const meterView = readVue('../../../overlay/src/components/MeterView.vue')
+    const previewArea = readVue('./preview/PreviewArea.vue')
 
     expect(meterBar).toContain("import FlexiBar from '@shared/components/FlexiBar.vue'")
     expect(meterBar).toContain('validate-style')
     expect(flexiBar).toContain('new ResizeObserver(updateBarWidth)')
     expect(flexiBar).toContain("barEl.value?.getBoundingClientRect().width")
     expect(flexiBar).toContain('() => props.colorOverrides')
-    expect(flexiBar).toContain('() => barWidth.value')
+    expect(flexiBar).toContain('() => resolvedBarWidth.value')
+    expect(flexiBar).toContain('props.containerWidth')
     expect(flexiBar).toContain('flexShrink: 0')
     expect(meterView).toContain(':color-overrides="store.profile.overrides"')
     expect(meterView).not.toContain(':bar-width="barWidth"')
+    // Single list-level measurement replaces per-bar observers in both meters.
+    expect(meterView).toContain(':container-width="listWidth"')
+    expect(previewArea).toContain(':container-width="listWidth"')
   })
 
   it('hides the full Breakout shortcut when the editor was opened from lite', () => {

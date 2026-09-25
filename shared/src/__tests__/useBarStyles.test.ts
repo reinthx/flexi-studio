@@ -75,9 +75,34 @@ describe('useBarStyles', () => {
       top: '0',
       left: '0',
       bottom: '0',
-      width: '50%',
+      right: '0',
+      transform: 'scaleX(0.5)',
+      transformOrigin: 'left center',
       backgroundColor: '#123456',
     })
+    expect(styles.fillStyle.value).not.toHaveProperty('width')
+  })
+
+  it('keeps the width path for segment fills (px masks would squash under scale)', () => {
+    const style = cloneStyle()
+    style.fill = { type: 'solid', color: '#123456' }
+    style.shape = {
+      ...style.shape,
+      segmentFill: { enabled: true, segmentWidth: 8, gap: 2 },
+    }
+    const styles = useBarStyles(
+      () => bar({ fillFraction: 0.5 }),
+      () => style,
+      () => 'vertical',
+      () => 0,
+      () => undefined,
+      undefined,
+      undefined,
+      () => 200,
+    )
+
+    expect(styles.fillStyle.value).toMatchObject({ width: '50%' })
+    expect(styles.fillStyle.value).not.toHaveProperty('transform')
   })
 
   it('builds horizontal fill styles from the bottom up', () => {
@@ -98,9 +123,12 @@ describe('useBarStyles', () => {
       bottom: '0',
       left: '0',
       right: '0',
-      height: '25%',
+      height: '100%',
+      transform: 'scaleY(0.25)',
+      transformOrigin: 'center bottom',
       backgroundColor: '#abcdef',
     })
+    expect(styles.fillStyle.value).not.toHaveProperty('width')
   })
 
   it('keeps paginated background textures offset by bar index', () => {
@@ -766,7 +794,11 @@ describe('metric strip', () => {
     style.metricStrip = { ...(style.metricStrip ?? {}), enabled: true } as any
     const styles = makeStyles(style, { fillFraction: 0.5 })
 
-    expect(styles.metricStripStyle.value?.width).toBe('50%')
+    expect(styles.metricStripStyle.value).toMatchObject({
+      width: '100%',
+      transform: 'scaleX(0.5)',
+      transformOrigin: 'left center',
+    })
   })
 
   it('stays hidden when disabled', () => {
@@ -819,5 +851,20 @@ describe('texture fill inner sizing', () => {
     }
     expect(makeStyles(texture).fillTextureInnerStyle.value).toBeDefined()
     expect(makeStyles(cloneStyle()).fillTextureInnerStyle.value).toBeUndefined()
+  })
+
+  it('counter-scales the texture inner against the transformed parent', () => {
+    const texture = cloneStyle()
+    texture.fill = {
+      type: 'texture',
+      texture: { src: 'x', repeat: 'stretch', opacity: 1, blendMode: 'normal' },
+    }
+    const styles = makeStyles(texture, { fillFraction: 0.5 })
+    expect(styles.fillStyle.value).toMatchObject({ transform: 'scaleX(0.5)' })
+    expect(styles.fillTextureInnerStyle.value).toMatchObject({
+      width: '100%',
+      transform: 'scaleX(2)',
+      transformOrigin: 'left center',
+    })
   })
 })

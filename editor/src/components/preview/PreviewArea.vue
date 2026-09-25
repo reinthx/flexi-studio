@@ -6,8 +6,8 @@ import PreviewBar from './PreviewBar.vue'
 import ScrollableBarsWrapper from '@shared/components/ScrollableBarsWrapper.vue'
 import PreviewHeader from './PreviewHeader.vue'
 import { useConfigStore } from '../../stores/config'
-import { resolveBarStyle } from '@shared/styleResolver'
 import { buildFillCss } from '@shared/cssBuilder'
+import { useMeterList } from '@shared/meterList'
 
 const STORAGE_KEY = 'flexi-editor-meter-height'
 
@@ -17,17 +17,12 @@ const profile  = computed(() => config.profile)
 const g        = computed(() => profile.value.global)
 const frame    = computed(() => liveData.frame)
 
-const bars = computed(() => {
-  if (!frame.value) return []
-  const sn = liveData.selfName
-  return frame.value.bars.map((b, i) => ({
-    ...b,
-    rank: i + 1,
-    barIndex: i,
-    style: resolveBarStyle(b.job, b.name, i + 1, profile.value, sn),
-    isRank1: i === 0,
-    isSelf: b.name === sn || b.name === 'YOU',
-  }))
+// Shared meter-list wiring (memoized styles, FLIP rank swaps, single width
+// measurement) — identical to the overlay meter by construction.
+const { bars, flip, listWidth, measureBars } = useMeterList({
+  profile: () => profile.value,
+  selfName: () => liveData.selfName,
+  frame: () => liveData.frame,
 })
 
 const isHorizontal = computed(() => g.value.orientation === 'horizontal')
@@ -182,9 +177,11 @@ function toggleHeaderPin() {
       <div ref="meterEl" class="preview-meter" :style="meterStyle">
         <div class="meter-frame" :style="{ flexDirection: isHorizontal ? 'row' : 'column' }">
           <div class="preview-meter-bg" :style="windowBgLayer" />
-        <ScrollableBarsWrapper :maxHeight="`${winH}px`" :orientation="g.orientation">
+        <ScrollableBarsWrapper :maxHeight="`${winH}px`" :orientation="g.orientation" :ref="measureBars">
           <PreviewBar
             v-for="bar in bars" :key="bar.name"
+            :ref="(el) => flip.setRowEl(bar.name, el)"
+            :container-width="listWidth"
             :bar="bar" :style-config="bar.style"
             :orientation="g.orientation" :show-rank="g.rankIndicator.showNumbers"
             :container-height="winH"

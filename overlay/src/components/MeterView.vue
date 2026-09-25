@@ -3,9 +3,8 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useLiveDataStore } from '../stores/liveData'
 import MeterBar from './MeterBar.vue'
 import MeterHeader from './MeterHeader.vue'
-import type { BarStyle } from '@shared/configSchema'
-import { resolveBarStyle } from '@shared/styleResolver'
 import { buildFillCss } from '@shared/cssBuilder'
+import { useMeterList } from '@shared/meterList'
 import { loadCustomFont } from '@shared/googleFonts'
 import ScrollableBarsWrapper from '@shared/components/ScrollableBarsWrapper.vue'
 
@@ -37,39 +36,12 @@ const openEditor = () => {
   window.open(editorUrl(), 'act-flexi-editor', 'width=1300,height=840')
 }
 
-interface ResolvedBar {
-  name: string
-  job: string
-  fillFraction: number
-  displayValue: string
-  displayPct: string
-  deaths: string
-  crithit: string
-  directhit: string
-  tohit: string
-  dps: string
-  enchps: string
-  rdps: string
-  maxHit: string
-  alpha: number
-  rank: number
-  rawDps: number
-  barIndex: number
-  style: BarStyle & { rank1HeightIncrease?: number }
-  isSelf: boolean
-  isRank1: boolean
-}
-
-const bars = computed<ResolvedBar[]>(() => {
-  if (!frame.value) return []
-  return frame.value.bars.map((b, i): ResolvedBar => ({
-    ...b,
-    rank: i + 1,
-    barIndex: i,
-    style: resolveBarStyle(b.job, b.name, i + 1, store.profile, store.selfName),
-    isSelf: b.name === store.selfName || b.name === 'YOU',
-    isRank1: i === 0,
-  }))
+// Shared meter-list wiring (memoized styles, FLIP rank swaps, single width
+// measurement) — identical to the editor preview by construction.
+const { bars, flip, listWidth, measureBars } = useMeterList({
+  profile: () => store.profile,
+  selfName: () => store.selfName,
+  frame: () => store.frame,
 })
 
 const isHorizontal = computed(() => g.value.orientation === 'horizontal')
@@ -271,13 +243,15 @@ const showResizeCorner = computed(() => g.value.header?.pinned === true)
       <div class="meter-bg" :style="bgStyle" />
       <div v-if="showResizeCorner" class="resize-corner" />
 
-    <div class="bars-container" :style="containerStyle">
+    <div class="bars-container" :style="containerStyle" :ref="measureBars">
       <div v-if="bars.length === 0" class="empty-state">Waiting for combat data…</div>
       <ScrollableBarsWrapper :maxHeight="barsMaxHeight" :orientation="g.orientation">
         <MeterBar
           v-for="bar in bars"
           :key="bar.name"
+          :ref="(el) => flip.setRowEl(bar.name, el)"
           :bar="bar"
+          :container-width="listWidth"
           :style-config="bar.style"
           :orientation="g.orientation"
           :show-rank="g.rankIndicator.showNumbers"

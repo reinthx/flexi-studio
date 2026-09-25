@@ -100,6 +100,7 @@ export const DEFAULT_GLOBAL: GlobalConfig = {
   maxCombatants: 72,
   showHeader: true,
   transitionDuration: 900,
+  rankSwapAnimation: true,
   holdDuration: 12000,
   orientation: 'vertical',
   opacity: 1,

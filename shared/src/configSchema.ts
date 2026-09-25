@@ -430,6 +430,7 @@ export interface GlobalConfig {
   maxCombatants: number
   showHeader: boolean      // header visibility shortcut (also in header.show)
   transitionDuration: number  // ms
+  rankSwapAnimation: boolean // rank leapfrog on swaps (default true)
   holdDuration: number        // ms before clearing after isActive → false
   orientation: Orientation
   opacity: number             // 0–1, whole overlay transparency

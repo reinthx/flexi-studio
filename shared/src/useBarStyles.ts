@@ -831,17 +831,30 @@ export function useBarStyles(
     return shapeCss.value.clipPath
   })
 
+  // Compositor-friendly fill sizing. Scaling a full-size box avoids the
+  // layout + paint churn of animating width/height every rAF frame.
+  // Segment fills keep the width path: their px-based masks and
+  // frac-derived clips are expressed against the frac-sized box and would
+  // squash under a scale transform. %-based shape clips are scale-invariant
+  // (uniform scale of the same proportional geometry), so they transform.
+  const useTransformFill = computed(() => !sc().shape?.segmentFill?.enabled)
+
   const fillStyle = computed(() => {
     const frac = b().fillFraction
     if (!isFillVisible.value) return { display: 'none' }
     const idx = bi()
     const bhg = barHeightWithGap.value
     const fillCss = isTextureFill.value ? {} : buildFillCss(sc().fill, idx, bhg, ori())
+    const sizeCss = useTransformFill.value
+      ? (isHorizontal.value
+        ? { bottom: '0', left: '0', right: '0', height: '100%', transform: `scaleY(${frac})`, transformOrigin: 'center bottom' }
+        : { top: '0', left: '0', bottom: '0', right: '0', transform: `scaleX(${frac})`, transformOrigin: 'left center' })
+      : (isHorizontal.value
+        ? { bottom: '0', left: '0', right: '0', height: frac >= 1 ? '100%' : `${frac * 100}%` }
+        : { top: '0', left: '0', bottom: '0', ...(frac >= 1 ? { right: '0' } : { width: `${frac * 100}%` }) })
     return {
       position: 'absolute' as const,
-      ...(isHorizontal.value
-        ? { bottom: '0', left: '0', right: '0', height: frac >= 1 ? '100%' : `${frac * 100}%` }
-        : { top: '0', left: '0', bottom: '0', ...(frac >= 1 ? { right: '0' } : { width: `${frac * 100}%` }) }),
+      ...sizeCss,
       ...fillCss,
       // Texture fills use an inner div to avoid rubberband stretch in CEF
       ...(isTextureFill.value ? { overflow: 'hidden' as const } : {}),
@@ -878,14 +891,21 @@ export function useBarStyles(
     const frac = b().fillFraction
     const idx = bi()
     const bhg = barHeightWithGap.value
+    // Mirror the outer sizing: inverse-scale against a transformed parent,
+    // 1/frac width math against a width-sized parent.
+    const sizeCss = useTransformFill.value
+      ? (isHorizontal.value
+        ? { width: '100%', height: '100%', bottom: '0', transform: frac > 0 ? `scaleY(${1 / frac})` : 'scaleY(1)', transformOrigin: 'center bottom' }
+        : { height: '100%', width: '100%', transform: frac > 0 ? `scaleX(${1 / frac})` : 'scaleX(1)', transformOrigin: 'left center' })
+      : (isHorizontal.value
+        ? { width: '100%', height: frac > 0 ? `${(1 / frac) * 100}%` : '100%', bottom: '0' }
+        : { height: '100%', width: frac > 0 ? `${(1 / frac) * 100}%` : '100%' })
     return {
       position: 'absolute' as const,
       top: '0',
       left: '0',
       // Expand to full bar width/height: parent is frac% of bar, so inner = 1/frac * 100%
-      ...(isHorizontal.value
-        ? { width: '100%', height: frac > 0 ? `${(1 / frac) * 100}%` : '100%', bottom: '0' }
-        : { height: '100%', width: frac > 0 ? `${(1 / frac) * 100}%` : '100%' }),
+      ...sizeCss,
       ...buildFillCss(sc().fill, idx, bhg, ori()),
     }
   })
@@ -1066,11 +1086,15 @@ export function useBarStyles(
     return {
       position: 'absolute' as const,
       left: '0',
-      width: frac >= 1 ? '100%' : `${frac * 100}%`,
+      top: '0',
       height: '100%',
+      // Strips are plain rects (any shape clip is %-based and scale-invariant),
+      // so they ride the same transform path as the main fill.
+      ...(useTransformFill.value
+        ? { width: '100%', transform: `scaleX(${frac})`, transformOrigin: 'left center' }
+        : { width: frac >= 1 ? '100%' : `${frac * 100}%` }),
       zIndex: 1,
       opacity: String(strip.opacity ?? 1),
-      top: '0',
       ...fillCss,
     }
   })

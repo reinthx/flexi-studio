@@ -648,6 +648,13 @@ function onBrowseChange(e: Event) {
         <DragNumber :model-value="g.holdDuration / 1000" :min="0" :max="30" :step="1" unit="s" :speed="0.5"
           @update:model-value="v => patch({ holdDuration: v * 1000 })" />
       </div>
+      <div class="row">
+        <label class="ctrl-label">
+          <input type="checkbox" :checked="g.rankSwapAnimation !== false"
+            @change="e => patch({ rankSwapAnimation: (e.target as HTMLInputElement).checked })" />
+          Rank swaps
+        </label>
+      </div>
     </div>
 
     <!-- Rank #1 -->
