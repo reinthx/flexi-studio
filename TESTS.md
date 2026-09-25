@@ -29,7 +29,8 @@ This project uses Vitest for unit and focused integration tests.
 - Config store persistence through OverlayPlugin/localStorage fallback, malformed profile handling, saving, and dirty state.
 - Preset store custom preset CRUD, category management, import/export, conflict handling, applying presets, and badge state.
 - Editor live data preview frame construction, filtering, listener lifecycle, and frame throttling.
-- Preview parity expectations for resizable meter height, restored size persistence, and shared bar renderer inputs, including source-level wiring guards until browser component tests are available.
+- Mounted control tests (jsdom + Vue Test Utils, per-file opt-in): DragNumber scrub/typing/clamp, BarSlider click/drag/step/zero-range, ColorPicker hex+rgba parsing/debounce/alpha, PresetPanel save/overwrite/delete/apply with confirm modals.
+- Mounted `PreviewArea` wiring: empty state, per-row rank/self/style/width props with real style resolution, persisted height restore, transform fills in the DOM.
 
 ### Overlay
 
@@ -37,7 +38,7 @@ This project uses Vitest for unit and focused integration tests.
 - Live data store frame creation, self filtering, rDPS display/sorting, pull stashing/deduping, and historical pull restoration.
 - Ability breakdown transformations for death sorting, death events, event rows, and view-state toggles.
 - Lite overlay source wiring that keeps the meter entry separate from Breakout and disables Breakout-only collection.
-- Meter bar parity expectations with the editor preview: measured bar width for shape-cut geometry, color overrides, Rank 1 options, and text effects, including source-level wiring guards.
+- Meter bar parity through mounted tests: `MeterBar` prop forwarding into `FlexiBar`, `FlexiBar` transform fills/text refresh/zero-fill in the DOM.
 
 ### Browser Smoke
 
@@ -54,18 +55,18 @@ The most valuable covered surfaces are pure logic, stores, parsing helpers, pers
 
 ## Known Blind Spots
 
-- Most Vue single-file components are not covered by DOM/component tests yet.
-- Editor/overlay visual parity is partly protected by shared renderer unit tests, source-level component wiring tests, and browser smoke tests. The current high-risk cases still need pixel-level or component-specific assertions: shape-cut right-edge completion, Rank 1 top-bar styling, texture tint/fill rendering, text outline/shadow clipping, and editor preview resize behavior.
-- `overlay/src/stores/liveData.ts` still has many untested ACT LogLine parsing paths, including detailed damage/healing lines, DoT/HoT attribution, deaths/raises, rDPS contribution windows, and malformed lines.
-- `AbilityBreakdownPopout.vue` is large and mostly untested; it should be covered through extracted helpers or focused component tests before broad UI assertions.
-- Editor controls such as `DragNumber`, `BarSlider`, `ColorPicker`, and `PresetPanel` need interaction tests.
+- Most Vue single-file components are still not covered by DOM/component tests; mounted coverage now exists for `DragNumber`, `BarSlider`, `ColorPicker`, `PresetPanel`, `PreviewArea`, `MeterBar`, and `FlexiBar`.
+- Editor/overlay visual parity is protected by shared renderer unit tests, mounted component tests, browser smoke tests, and a Playwright shape-cut preset check asserting rank-1 edge completion, rank-1 texture tinting, and unclipped label outline/shadow in both surfaces. Remaining pixel-level risks: Rank 1 top-bar styling variants and editor preview resize behavior.
+- `overlay/src/stores/liveData.ts` parsing is covered through extracted pure helpers plus store-level LogLine tests; remaining untested paths are mostly store-state orchestration around already-covered decoders.
+- `AbilityBreakdownPopout.vue` load flow is covered through mounted snapshot/init/broadcast tests; its inner views remain helper-unit-tested only.
 - Build/typecheck should still be run before releases because Vitest intentionally mocks browser layout, resize observers, and OverlayPlugin boundaries.
+- Component tests run under jsdom with a pinned workspace Vue instance (see `vitest.config.ts`); `ResizeObserver`, `element.animate`, and real layout are absent, so observer/animation paths take their fallbacks there by design.
 
 ## Recommended Next Tests
 
-1. Extract more pure helpers from overlay live data LogLine parsing and cover them directly.
-2. Add component tests for the small editor controls with tricky input behavior.
-3. Replace the current source-level `PreviewArea`/`MeterBar` wiring guards with mounted component tests once jsdom/Vue Test Utils or equivalent browser testing is available.
-4. Expand Playwright checks for a shape-cut preset in both editor preview and overlay, specifically asserting the right edge is filled, texture tints apply to the first/rank-1 bar, and text outlines/shadows are not clipped.
-5. Add focused overlay component tests for `MeterHeader`, `MeterView`, and the ability breakdown popout snapshot/load flow.
+1. ~~Extract more pure helpers from overlay live data LogLine parsing and cover them directly.~~ Done (`overlay/src/lib/logLine.ts` + store rewiring).
+2. ~~Add component tests for the small editor controls with tricky input behavior.~~ Done (item above).
+3. ~~Replace the source-level `PreviewArea`/`MeterBar` wiring guards with mounted component tests.~~ Done (items above; residual resize-CSS guard remains in `previewParity.test.ts`).
+4. ~~Expand Playwright checks for a shape-cut preset in both editor preview and overlay.~~ Done (`e2e/meter-parity.spec.ts`: edge completion, rank-1 texture tint, unclipped outline/shadow).
+5. ~~Add focused overlay component tests for `MeterHeader`, `MeterView`, and the ability breakdown popout snapshot/load flow.~~ Done (`MeterHeader`/`MeterView`/popout mounts; inner breakdown views stay helper-tested).
 6. Add ACT/OverlayPlugin smoke evidence to each launch, because browser tests cannot fully emulate CEF and live ACT event delivery.

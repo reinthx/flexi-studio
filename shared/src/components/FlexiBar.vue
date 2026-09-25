@@ -145,7 +145,7 @@ function handleClick() {
 </script>
 
 <template>
-  <div v-if="isValid" ref="barEl" :style="wrapperStyle" @click="handleClick">
+  <div v-if="isValid" ref="barEl" data-bar-row :data-bar-name="props.bar.name" :style="wrapperStyle" @click="handleClick">
     <div :style="bgShadowDirectionalClip">
       <svg
         v-if="bgShadowSvgStyle && bgShadowSvgFilterAttrs && bgShadowSvgDropShadowAttrs && bgShadowSvgMaskAttrs"
@@ -239,8 +239,8 @@ function handleClick() {
 
     <div :style="fillShadowBoundsStyle">
       <div :style="fillShadowWrapStyle">
-        <div :style="fillStyle">
-          <div v-if="fillTextureInnerStyle" :style="fillTextureInnerStyle" />
+        <div data-bar-fill :style="fillStyle">
+          <div v-if="fillTextureInnerStyle" data-bar-fill-inner :style="fillTextureInnerStyle" />
         </div>
       </div>
     </div>
@@ -328,6 +328,7 @@ function handleClick() {
         <div :style="[field.style, blurStyle ? { maxWidth: 'none' } : {}]">
           <span
             v-if="labelOutlineShadow"
+            data-bar-label-outline
             :style="{
               position: 'absolute',
               inset: 0,
@@ -342,6 +343,7 @@ function handleClick() {
             }"
           >{{ fieldText(field) }}</span>
           <span
+            data-bar-label
             :style="{
               display: 'block',
               minWidth: 0,
