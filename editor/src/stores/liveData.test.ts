@@ -189,4 +189,26 @@ describe('editor liveData store', () => {
 
     expect(store.frame).toBeNull()
   })
+
+  it('emits the latest throttled frame on the trailing edge', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = await createStore(10)
+
+      store.buildFrame(combatData(true, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '1000' },
+      }) as any, profile())
+      expect(store.frame).toBeNull()
+
+      store.buildFrame(combatData(true, {
+        Alice: { name: 'Alice', Job: 'WAR', encdps: '2000' },
+      }) as any, profile())
+      expect(store.frame).toBeNull()
+
+      vi.advanceTimersByTime(50)
+      expect(store.frame?.bars[0]?.displayValue).toBe('2000')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

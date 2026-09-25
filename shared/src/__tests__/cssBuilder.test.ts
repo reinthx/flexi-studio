@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildDropShadowFilter, buildFillCss, buildBorderRadiusCss, buildEdgeClipPath, buildCornerCutCss, buildShapeCss, buildOutlineCss, buildGradientAnimationCss } from '../cssBuilder'
+import { buildDropShadowFilter, buildFillCss, clearFillCssCache, buildBorderRadiusCss, buildEdgeClipPath, buildCornerCutCss, buildShapeCss, buildOutlineCss, buildGradientAnimationCss } from '../cssBuilder'
 import type { BarFill, BarShape, BarOutline, Orientation, GradientFill } from '../configSchema'
 
 describe('buildDropShadowFilter', () => {
@@ -377,5 +377,28 @@ describe('buildGradientAnimationCss', () => {
     }
     const result = buildGradientAnimationCss(gradient)
     expect(result.animation).toContain(',')
+  })
+})
+
+describe('buildFillCss memo', () => {
+  it('returns stable identities per fill object and varies by bar index', () => {
+    const fill: BarFill = { type: 'solid', color: '#4a90d9' }
+    const first = buildFillCss(fill, 0)
+    expect(buildFillCss(fill, 0)).toBe(first)
+    expect(buildFillCss(fill, 0)).toEqual({ backgroundColor: '#4a90d9' })
+    expect(buildFillCss(fill, 2)).not.toBe(first)
+    expect(buildFillCss({ type: 'solid', color: '#4a90d9' }, 0)).not.toBe(first)
+  })
+
+  it('busts on clearFillCssCache for in-place fill edits', () => {
+    const fill: BarFill = { type: 'solid', color: '#4a90d9' }
+    const first = buildFillCss(fill, 0)
+    fill.color = '#ff0000'
+    expect(buildFillCss(fill, 0)).toBe(first)
+    clearFillCssCache()
+    const rebuilt = buildFillCss(fill, 0)
+    expect(rebuilt).not.toBe(first)
+    expect(rebuilt).toEqual({ backgroundColor: '#ff0000' })
+    clearFillCssCache()
   })
 })

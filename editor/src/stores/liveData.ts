@@ -27,15 +27,34 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
   const frame = shallowRef<Frame | null>(null)
   const isActive = ref(false)
 
-  // Throttle to ~30fps to avoid overwhelming Vue's reactivity
+  // Throttle to ~30fps to avoid overwhelming Vue's reactivity, but always
+  // emit the latest frame (trailing edge) so the preview glides instead of
+  // stepping on stale data.
   let lastFrameTime = 0
+  let pendingFrame: Frame | null = null
+  let flushTimer = 0
   const THROTTLE_MS = 33
+
+  function flushPending(): void {
+    flushTimer = 0
+    if (pendingFrame) {
+      lastFrameTime = performance.now()
+      frame.value = pendingFrame
+      pendingFrame = null
+    }
+  }
 
   const engine = new TransitionEngine((f) => {
     const now = performance.now()
     if (now - lastFrameTime >= THROTTLE_MS) {
       lastFrameTime = now
+      pendingFrame = null
       frame.value = f
+    } else {
+      pendingFrame = f
+      if (!flushTimer) {
+        flushTimer = setTimeout(flushPending, THROTTLE_MS - (now - lastFrameTime))
+      }
     }
   })
 
@@ -131,6 +150,11 @@ export const useLiveDataStore = defineStore('editorLiveData', () => {
     removeListener('PartyChanged', onPartyChanged)
     stopEvents()
     engine.stop()
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = 0
+    }
+    pendingFrame = null
   }
 
   return { frame, selfName, isActive, start, stop, setProfileGetter, buildFrame }

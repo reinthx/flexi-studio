@@ -99,7 +99,7 @@ export const DEFAULT_GLOBAL: GlobalConfig = {
   sortBy: 'encdps',
   maxCombatants: 72,
   showHeader: true,
-  transitionDuration: 800,
+  transitionDuration: 900,
   holdDuration: 12000,
   orientation: 'vertical',
   opacity: 1,

@@ -171,6 +171,57 @@ export function resolveBarStyle(
   return { ...base, rank1HeightIncrease } as BarStyle & { rank1HeightIncrease: number }
 }
 
+export interface BarStyleCache {
+  resolve(
+    combatantJob: string,
+    combatantName: string,
+    rank: number,
+    profile: Profile,
+    selfName: string,
+  ): BarStyle
+  clear(): void
+}
+
+/**
+ * Memoized resolveBarStyle for per-frame meter rendering.
+ *
+ * resolveBarStyle JSON-clones profile.default on every call; meter lists call
+ * it per bar per rAF frame (~60fps), and the fresh object identity also
+ * defeats every downstream computed cache in useBarStyles. This memoizes by
+ * (job, name, rank-1-ness, selfName) so steady-state frames are pure Map
+ * lookups returning stable identities.
+ *
+ * Profiles are mutated in place by the editor, so call sites MUST call
+ * clear() when the profile changes (e.g. via a deep watch). A wholesale
+ * profile replacement is detected automatically via object identity.
+ *
+ * The returned style objects are shared across frames — treat them as
+ * read-only and never mutate them.
+ */
+export function createBarStyleCache(): BarStyleCache {
+  let cachedProfile: Profile | null = null
+  const byKey = new Map<string, BarStyle>()
+  return {
+    resolve(combatantJob, combatantName, rank, profile, selfName) {
+      if (profile !== cachedProfile) {
+        cachedProfile = profile
+        byKey.clear()
+      }
+      // Rank only matters as rank-1 vs not (rank1 style override).
+      const key = `${combatantJob}|${combatantName}|${rank === 1 ? 1 : 0}|${selfName}`
+      const cached = byKey.get(key)
+      if (cached) return cached
+      const resolved = resolveBarStyle(combatantJob, combatantName, rank, profile, selfName)
+      byKey.set(key, resolved)
+      return resolved
+    },
+    clear() {
+      cachedProfile = null
+      byKey.clear()
+    },
+  }
+}
+
 // ─── Deep clone / merge ───────────────────────────────────────────────────────
 
 export function deepClone<T>(obj: T): T {

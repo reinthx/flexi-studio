@@ -327,7 +327,7 @@ const DEFAULT_LABEL: BarLabel = {
 
 const DEFAULT_GLOBAL: GlobalConfig = {
   dpsType: 'encdps', sortBy: 'encdps', maxCombatants: 72, showHeader: true,
-  transitionDuration: 800, holdDuration: 12000, orientation: 'vertical', opacity: 1,
+    transitionDuration: 900, holdDuration: 12000, orientation: 'vertical', opacity: 1,
   outOfCombat: 'dim', outOfCombatOpacity: 0.4, valueFormat: 'abbreviated',
   combatantFilter: 'all', partyOnly: false, selfOnly: false, blurNames: false,
   windowOpacity: 1,
@@ -459,7 +459,7 @@ function stripGlobalDefaults(cleaned: any): void {
   const global = cleaned.global as MutableRecord
   const globalScalarDefaults: Record<string, any> = {
     dpsType: 'encdps', sortBy: 'encdps', maxCombatants: 72, showHeader: true,
-    transitionDuration: 800, holdDuration: 12000, orientation: 'vertical', opacity: 1,
+  transitionDuration: 900, holdDuration: 12000, orientation: 'vertical', opacity: 1,
     outOfCombat: 'dim', outOfCombatOpacity: 0.4, valueFormat: 'abbreviated',
     combatantFilter: 'all', partyOnly: false, selfOnly: false, blurNames: false,
     windowOpacity: 1, windowBg: 'transparent', mergePets: true,

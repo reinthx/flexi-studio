@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { deepClone, deepMerge, resolveBarStyle } from '../styleResolver'
+import { createBarStyleCache, deepClone, deepMerge, resolveBarStyle } from '../styleResolver'
 import { createMockProfile, createMockStyleOverrides } from './helpers'
 
 describe('deepClone', () => {
@@ -318,5 +318,45 @@ describe('resolveBarStyle', () => {
     expect(style.fill.texture.src).toBe('texture.png')
     expect(style.fill.texture.tintColor).toBe('#ff0000')
     expect(style.fill.texture.tintGradient).toBeUndefined()
+  })
+})
+
+describe('createBarStyleCache', () => {
+  it('returns stable identities for repeated frames', () => {
+    const profile = createMockProfile()
+    const cache = createBarStyleCache()
+    const first = cache.resolve('PLD', 'Alice', 2, profile, '')
+    const second = cache.resolve('PLD', 'Alice', 2, profile, '')
+    expect(second).toBe(first)
+    expect(second).toEqual(resolveBarStyle('PLD', 'Alice', 2, profile, ''))
+  })
+
+  it('keys rank-1, job, name, and self separately', () => {
+    const profile = createMockProfile()
+    const cache = createBarStyleCache()
+    const rank1 = cache.resolve('PLD', 'Alice', 1, profile, '')
+    const rank2 = cache.resolve('PLD', 'Alice', 2, profile, '')
+    expect(rank2).not.toBe(rank1)
+    // Non-1 ranks share one entry regardless of exact rank
+    expect(cache.resolve('PLD', 'Alice', 5, profile, '')).toBe(rank2)
+    expect(cache.resolve('WAR', 'Alice', 2, profile, '')).not.toBe(rank2)
+    expect(cache.resolve('PLD', 'Bob', 2, profile, '')).not.toBe(rank2)
+  })
+
+  it('busts on profile replacement and on clear() for in-place edits', () => {
+    const cache = createBarStyleCache()
+    const before = createMockProfile()
+    const first = cache.resolve('PLD', 'Alice', 2, before, '')
+    // Wholesale replacement (load/preset/apply) is detected by identity
+    const replaced = createMockProfile()
+    expect(cache.resolve('PLD', 'Alice', 2, replaced, '')).not.toBe(first)
+    // In-place mutation needs an explicit clear (call sites deep-watch)
+    const same = cache.resolve('PLD', 'Alice', 2, replaced, '')
+    replaced.default.height = 99
+    expect(cache.resolve('PLD', 'Alice', 2, replaced, '')).toBe(same)
+    cache.clear()
+    const afterClear = cache.resolve('PLD', 'Alice', 2, replaced, '')
+    expect(afterClear).not.toBe(same)
+    expect(afterClear.height).toBe(99)
   })
 })

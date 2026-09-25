@@ -2,13 +2,17 @@
  * transitions.ts
  *
  * rAF-based interpolation engine. Receives CombatData frames once per second
- * and smoothly animates bar values between them using easeInOutQuad.
+ * and smoothly animates bar values between them using easeOutCubic.
+ *
+ * easeOutCubic (fast start, gentle landing) feels more "live" on 1s ticks
+ * than easeInOutQuad, which visibly pauses mid-transition.
  *
  * Usage:
  *   const engine = new TransitionEngine(onFrame)
  *   engine.push(combatData)   // call on each CombatData event
  *   engine.stop()             // cleanup
  */
+import { prefersReducedMotion } from './reducedMotion'
 
 export interface BarFrame {
   name: string
@@ -51,8 +55,17 @@ export interface Frame {
 
 type OnFrameCallback = (frame: Frame) => void
 
-function easeInOutQuad(t: number): number {
-  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
+export function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3)
+}
+
+function effectiveDuration(ms: number): number {
+  // Honor OS reduced-motion: snap between frames instead of gliding.
+  // Re-evaluated on every push so mid-session setting changes apply.
+  try {
+    if (prefersReducedMotion()) return 0
+  } catch { /* non-browser runtimes: fall through */ }
+  return ms
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -71,12 +84,12 @@ export class TransitionEngine {
   private t = 1       // starts at 1 so first frame renders immediately
   private lastTime = 0
   private rafId = 0
-  private duration = 800  // ms, overridden by profile config
+  private duration = 900  // ms, overridden by profile config
 
   constructor(private readonly onFrame: OnFrameCallback) {}
 
   setDuration(ms: number): void {
-    this.duration = ms
+    this.duration = effectiveDuration(ms)
   }
 
   push(next: Frame): void {
@@ -111,9 +124,10 @@ export class TransitionEngine {
   private tick = (now: number): void => {
     const dt = now - this.lastTime
     this.lastTime = now
-    this.t = Math.min(1, this.t + dt / this.duration)
+    // A zero duration snaps to the target in one frame (also the reduced-motion path).
+    this.t = this.duration <= 0 ? 1 : Math.min(1, this.t + dt / this.duration)
 
-    const frame = this.interpolate(easeInOutQuad(this.t))
+    const frame = this.interpolate(easeOutCubic(this.t))
     this.onFrame(frame)
 
     if (this.t < 1) {
@@ -127,17 +141,19 @@ export class TransitionEngine {
     const prev = this.prev!
     const next = this.next!
 
+    // Name-indexed lookups so per-frame interpolation stays O(n) even with
+    // full alliance raids (previously find-in-loop: O(n^2) per rAF tick).
+    const prevByName = new Map(prev.bars.map(b => [b.name, b] as const))
+    const nextByName = new Map(next.bars.map(b => [b.name, b] as const))
+
     // Build a unified bar list: union of names from prev and next
-    const allNames = new Set([
-      ...prev.bars.map(b => b.name),
-      ...next.bars.map(b => b.name),
-    ])
+    const allNames = new Set([...prevByName.keys(), ...nextByName.keys()])
 
     const bars: BarFrame[] = []
 
     for (const name of allNames) {
-      const p = prev.bars.find(b => b.name === name)
-      const n = next.bars.find(b => b.name === name)
+      const p = prevByName.get(name)
+      const n = nextByName.get(name)
 
       if (p && n) {
         // Bar present in both — interpolate
@@ -167,7 +183,9 @@ export class TransitionEngine {
         // New bar — fade in
         bars.push({ ...n, fillFraction: lerp(0, n.fillFraction, et), metricFractions: lerpRecord(undefined, n.metricFractions, et), alpha: et })
       } else if (p) {
-        // Removed bar — fade out
+        // Removed bar — fade out, then drop it from the settled frame so
+        // exited combatants don't linger as invisible zero-alpha rows.
+        if (et >= 1) continue
         bars.push({ ...p, fillFraction: lerp(p.fillFraction, 0, et), metricFractions: lerpRecord(p.metricFractions, undefined, et), alpha: 1 - et })
       }
     }

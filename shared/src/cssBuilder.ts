@@ -62,7 +62,38 @@ export function buildDropShadowFilter(offsetX: number, offsetY: number, blur: nu
   return `drop-shadow(${offsetX}px ${offsetY}px ${effectiveBlur}px ${color})`
 }
 
+// Memoized fill CSS by fill-object identity. useBarStyles rebuilds these
+// strings per bar per rAF frame; with stable style identities (see
+// createBarStyleCache) this turns steady-state frames into Map lookups.
+// The generation counter busts the cache on profile edits without needing
+// WeakMap.clear() (which doesn't exist); stale entries are overwritten on
+// next access and unreachable ones are GC'd with their fill objects.
+let fillCssGeneration = 0
+const fillCssCache = new WeakMap<object, { gen: number; byKey: Map<string, Record<string, any>> }>()
+
+/** Bust the fill-CSS memo after in-place profile edits. */
+export function clearFillCssCache(): void {
+  fillCssGeneration++
+}
+
 export function buildFillCss(fill: BarFill, barIndex: number = 0, barHeightWithGap: number = 30, _orientation: Orientation = 'vertical'): Record<string, any> {
+  if (fill !== null && typeof fill === 'object') {
+    const key = `${barIndex}|${barHeightWithGap}|${_orientation}`
+    let entry = fillCssCache.get(fill)
+    if (!entry || entry.gen !== fillCssGeneration) {
+      entry = { gen: fillCssGeneration, byKey: new Map() }
+      fillCssCache.set(fill, entry)
+    }
+    const hit = entry.byKey.get(key)
+    if (hit) return hit
+    const css = buildFillCssUncached(fill, barIndex, barHeightWithGap, _orientation)
+    entry.byKey.set(key, css)
+    return css
+  }
+  return buildFillCssUncached(fill, barIndex, barHeightWithGap, _orientation)
+}
+
+function buildFillCssUncached(fill: BarFill, barIndex: number = 0, barHeightWithGap: number = 30, _orientation: Orientation = 'vertical'): Record<string, any> {
   switch (fill.type) {
     case 'solid':
       return fill.opacity !== undefined && fill.opacity < 1
