@@ -51,7 +51,6 @@ import type {
   CastEvent,
   ResourceSample,
 } from '@shared'
-import { TIMELINE_BUCKET_SEC } from '@shared'
 import { formatValue } from '@shared'
 import { buildDeathEvents } from '@shared/deathRecap'
 import { buildMetricFractions, createMetricFractionContext } from '@shared/metricFractions'
@@ -59,13 +58,26 @@ import { normalizeJob } from '@shared/jobMap'
 import { useOverlayConfig } from './overlayConfig'
 import {
   actionEffectKind,
+  accumulateTimelineBucket,
   combatantNameAliases as baseCombatantNameAliases,
   decodeLogDamage,
   decodeTickAmount,
   isEnemyId,
   isPlayerId,
+  isRaiseEffect,
+  makeDeathHit,
   normalizeEffectId,
-  parseActionEffectFlags,
+  parseAbilityLine,
+  parseAddCombatantLine,
+  parseDeathLine,
+  parseDotTickLine,
+  parseGainsEffectLine,
+  parseLosesEffectLine,
+  parseStartsCastingLine,
+  resolveTickAbilityName,
+  selectBuffWindows,
+  sliceDeathWindow,
+  splitHeal,
   tickEffectKey,
 } from '../lib/logLine'
 
@@ -142,7 +154,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
     SAM: { DoT: 'Higanbana' },
     GNB: { DoT: 'Sonic Break' },
   }
-  const RAISE_EFFECTS = new Set(['raise', 'angel whisper', 'resurrection', 'life ascension', 'reraise iii'])
+  // Known resurrection buffs live in ../lib/logLine (isRaiseEffect) so the
+  // exact-match rule is shared and unit-tested.
 
   // Track resurrection events: player name -> resurrection timestamp (ms since pull start)
   const resurrectTimes = ref<Record<string, number>>({})
@@ -945,10 +958,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (activeRaidBuffs.size === 0) return
 
     const nowMs = currentPullOffsetMs()
-    const windows = [
-      ...combatantNameAliases(dealerName).flatMap(alias => activeBuffWindowsFor(alias, nowMs)),
-      ...combatantNameAliases(targetName).flatMap(alias => activeBuffWindowsFor(alias, nowMs)),
-    ].filter(window => window.sourceName !== dealerName)
+    const windows = selectBuffWindows(dealerName, targetName, selfName.value, alias => activeBuffWindowsFor(alias, nowMs))
     const allocations = allocatePercentageBuffDamage(damage, windows)
     for (const allocation of allocations) {
       rDpsContributed.set(
@@ -984,8 +994,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (idx !== -1) windows.splice(idx, 1)
   }
 
-  // decodeLogDamage, decodeTickAmount, normalizeEffectId live in ../lib/logLine
-  // (pure + directly unit-tested) and are imported above.
+  // Line decoders and field parsers live in ../lib/logLine (pure +
+  // directly unit-tested) and are imported above.
 
   function recordEffectName(effectId: string, effectName: string): void {
     const key = normalizeEffectId(effectId)
@@ -1049,11 +1059,11 @@ export const useLiveDataStore = defineStore('liveData', () => {
   }
 
   function tickAbilityName(kind: 'DoT' | 'HoT', effectId: string, sourceId: string, sourceName: string, targetId: string): string {
-    const key = normalizeEffectId(effectId)
-    return currentEffectNames.get(key)
-      ?? activeTickEffectName(sourceId, targetId)
-      ?? jobTickFallbackName(kind, sourceName, targetId)
-      ?? `${kind} (${effectId || 'unknown'})`
+    return resolveTickAbilityName(kind, effectId, {
+      recordedName: currentEffectNames.get(normalizeEffectId(effectId)),
+      activeName: activeTickEffectName(sourceId, targetId),
+      jobFallback: jobTickFallbackName(kind, sourceName, targetId),
+    })
   }
 
   function ensureAbilityStats(combatant: CombatantAbilityData, abilityId: string, abilityName: string): AbilityStats {
@@ -1228,11 +1238,7 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   // Write damage/heal amount into the correct TIMELINE_BUCKET_SEC-second slot.
   function recordTimelineBucket(timeline: DpsTimeline, name: string, amount: number): void {
-    const bucket = Math.floor(currentPullOffsetMs() / (TIMELINE_BUCKET_SEC * 1000))
-    if (!timeline[name]) timeline[name] = []
-    const tl = timeline[name]
-    while (tl.length <= bucket) tl.push(0)
-    tl[bucket] += amount
+    accumulateTimelineBucket(timeline, name, amount, currentPullOffsetMs())
   }
 
   // Record FFXIV object ID for a combatant (first seen wins; IDs are stable per pull).
@@ -1269,23 +1275,8 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
   function healingAmounts(targetName: string, rawHeal: number, currentHp: number, maxHp: number): { effective: number; overheal: number } {
     if (rawHeal <= 0) return { effective: 0, overheal: 0 }
-    if (!targetName || !Number.isFinite(currentHp) || !Number.isFinite(maxHp) || maxHp <= 0) {
-      return { effective: rawHeal, overheal: 0 }
-    }
-
-    const safeCurrentHp = Math.max(0, Math.min(currentHp, maxHp))
-    const previous = lastKnownHp.get(targetName)
-    let effective = rawHeal
-    if (previous && previous.maxHp > 0) {
-      effective = Math.max(0, Math.min(rawHeal, safeCurrentHp - previous.currentHp))
-    } else if (safeCurrentHp >= maxHp) {
-      effective = 0
-    }
-
-    return {
-      effective,
-      overheal: Math.max(0, rawHeal - effective),
-    }
+    if (!targetName) return { effective: rawHeal, overheal: 0 }
+    return splitHeal(rawHeal, lastKnownHp.get(targetName), currentHp, maxHp)
   }
 
   let lastResourceSampleTime = new Map<string, number>()
@@ -1489,54 +1480,39 @@ export const useLiveDataStore = defineStore('liveData', () => {
     if (lineType === '03') {
       // AddCombatant: NPCs with a non-zero job/class are friendly duty actors
       // such as Trust avatars or Treno Citizens, not pull objectives.
-      const id = parts[2]
-      const name = parts[3]
-      const jobOrClass = parts[4]
-      recordCombatantId(name, id)
-      recordNpcObjectiveHint(name, id, jobOrClass)
+      const added = parseAddCombatantLine(parts)
+      if (added) {
+        recordCombatantId(added.name, added.id)
+        recordNpcObjectiveHint(added.name, added.id, added.jobOrClass)
+      }
 
     } else if (lineType === '20') {
-      // NetworkStartsCasting
-      // parts: [0]=type [1]=ts [2]=srcId [3]=srcName [4]=abilId [5]=abilName
-      //        [6]=tgtId [7]=tgtName [8]=castTimeSec
-      const sourceId    = parts[2]
-      const sourceName  = parts[3]
-      const abilityId   = parts[4]
-      const abilityName = parts[5]
-      const targetId    = parts[6]
-      const targetName  = parts[7]
-      const castTimeSec = parseFloat(parts[8])
-      if (!sourceName || !abilityId || !Number.isFinite(castTimeSec) || castTimeSec <= 0) return
-      recordCombatantId(sourceName, sourceId)
-      recordCombatantId(targetName, targetId)
-      recordCastEvent(sourceName, abilityId, abilityName, targetName, targetId, 'cast', Math.round(castTimeSec * 1000))
+      // NetworkStartsCasting — field layout lives in parseStartsCastingLine.
+      const cast = parseStartsCastingLine(parts)
+      if (!cast) return
+      recordCombatantId(cast.sourceName, cast.sourceId)
+      recordCombatantId(cast.targetName, cast.targetId)
+      recordCastEvent(cast.sourceName, cast.abilityId, cast.abilityName, cast.targetName, cast.targetId, 'cast', cast.castTimeMs)
       scheduleBroadcast()
 
     } else if (lineType === '21' || lineType === '22') {
-      // NetworkAbility / NetworkAOEAbility
-      // parts: [0]=type [1]=ts [2]=srcId [3]=srcName [4]=abilId [5]=abilName
-      //        [6]=tgtId [7]=tgtName [8]=flags [9]=damage
-      //        [24]=tgtCurrentHP [25]=tgtMaxHP [47]=petOwnerId [48]=petOwnerName
-      const sourceId     = parts[2]
-      const sourceName   = parts[3]
-      const abilityId    = parts[4]
-      const abilityName  = parts[5]
-      const targetId     = parts[6]
-      const targetName   = parts[7]
-      const flags        = parts[8]
-      const damageHex    = parts[9]
-      const tgtCurrentHp = parseInt(parts[24], 10)
-      const tgtMaxHp     = parseInt(parts[25], 10)
-      const petOwnerName = parts[48]
-      const effectiveName = petOwnerName || sourceName
-      const { kind: flagByte, severity: flagSeverity } = parseActionEffectFlags(flags)
+      // NetworkAbility / NetworkAOEAbility — field layout lives in
+      // parseAbilityLine (overlay/src/lib/logLine.ts).
+      const ability = parseAbilityLine(parts)
+      if (!ability) return
+      const {
+        sourceId, sourceName, abilityId, abilityName, targetId, targetName,
+        flagByte, flagSeverity, amount, tgtCurrentHp, tgtMaxHp, effectiveName,
+      } = ability
       // Source HP is only needed to attribute self-healing procs (e.g. Bloodwhetting),
-      // so parse it lazily instead of on every ability line.
+      // so read it lazily instead of on every ability line.
       const healsSelf = isEnemyId(targetId) && isPlayerId(sourceId)
       let srcCurrentHp = 0
       let srcMaxHp = 0
 
-      recordNetworkEnemyInstance(sourceName, sourceId, srcMaxHp)
+      // maxHp 0: the source instance is never recorded from ability lines
+      // (kept for parity with the pre-extraction behavior).
+      recordNetworkEnemyInstance(sourceName, sourceId, 0)
       recordNetworkEnemyInstance(targetName, targetId, tgtMaxHp)
       recordCombatantId(sourceName, sourceId)
       recordCombatantId(targetName, targetId)
@@ -1547,18 +1523,16 @@ export const useLiveDataStore = defineStore('liveData', () => {
       let didRecord = false
       if (flagByte === 0x03) {
         // Damage hit — attribute to source for DPS, to target for DTPS
-        const damage = decodeLogDamage(damageHex)
-        if (damage > 0 && effectiveName && abilityId) {
-          recordAbilityHit(effectiveName, abilityId, abilityName, damage, targetName, targetId, flagSeverity)
+        if (amount > 0 && effectiveName && abilityId) {
+          recordAbilityHit(effectiveName, abilityId, abilityName, amount, targetName, targetId, flagSeverity)
           didRecord = true
         }
-        if (damage > 0 && targetName) {
-          recordIncomingDamage(targetName, targetId, abilityId, abilityName, effectiveName, petOwnerName ? parts[47] : sourceId, damage, tgtCurrentHp, tgtMaxHp)
+        if (amount > 0 && targetName) {
+          recordIncomingDamage(targetName, targetId, abilityId, abilityName, effectiveName, ability.petOwnerName ? ability.petOwnerId : sourceId, amount, tgtCurrentHp, tgtMaxHp)
         }
       } else if (flagByte === 0x04) {
         // Heal hit — attribute to source for HPS, to target for incoming heals
-        const heal = decodeLogDamage(damageHex)
-        const recordedHeal = recordIncomingHealing(targetName, abilityId, abilityName, effectiveName, heal, tgtCurrentHp, tgtMaxHp)
+        const recordedHeal = recordIncomingHealing(targetName, abilityId, abilityName, effectiveName, amount, tgtCurrentHp, tgtMaxHp)
         didRecord = didRecord || recordedHeal
         if (targetName && !recordedHeal) {
           recordHpSample(targetName, tgtCurrentHp, tgtMaxHp)
@@ -1568,16 +1542,12 @@ export const useLiveDataStore = defineStore('liveData', () => {
 
       const selfHealingEffect = healsSelf ? activeSelfHealingEffect(sourceId) : undefined
       if (selfHealingEffect) {
-        srcCurrentHp = parseInt(parts[34], 10)
-        srcMaxHp = parseInt(parts[35], 10)
+        srcCurrentHp = ability.srcCurrentHp
+        srcMaxHp = ability.srcMaxHp
       }
 
-      for (let i = 1; i < 8; i++) {
-        const effectFlags = parts[8 + i * 2]
-        const effectAmountHex = parts[9 + i * 2]
-        if (actionEffectKind(effectFlags) !== 0x04) continue
-        const heal = decodeLogDamage(effectAmountHex)
-        if (heal <= 0 || !effectiveName) continue
+      for (const heal of ability.additionalHeals) {
+        if (!effectiveName) continue
 
         const healTargetName = selfHealingEffect ? sourceName : targetName
         const healTargetCurrentHp = selfHealingEffect ? srcCurrentHp : tgtCurrentHp
@@ -1593,51 +1563,40 @@ export const useLiveDataStore = defineStore('liveData', () => {
       if (didRecord) scheduleBroadcast()
 
     } else if (lineType === '24') {
-      // NetworkDoT — DoT/HoT tick
-      // Verified field positions from real log data:
-      // parts: [0]=type [1]=ts [2]=tgtId [3]=tgtName [4]=dotType [5]=effectId
-      //        [6]=damage(hex) [7]=tgtCurrentHP [8]=tgtMaxHP
-      //        [17]=srcId [18]=srcName
-      const targetId   = parts[2]
-      const targetName = parts[3]
-      const dotType    = parts[4]
-      const effectId   = parts[5]
-      const damageHex  = parts[6]
-      const tgtCurrentHp = parseInt(parts[7], 10)
-      const tgtMaxHp     = parseInt(parts[8], 10)
-      const sourceId   = parts[17]
-      const sourceName = parts[18]  // FIXED: was parts[16] (target heading coordinate)
+      // NetworkDoT — DoT/HoT tick. Field layout lives in parseDotTickLine.
+      const tick = parseDotTickLine(parts)
+      if (!tick) return
 
-      recordCombatantId(sourceName, sourceId)
-      recordCombatantId(targetName, targetId)
+      recordCombatantId(tick.sourceName, tick.sourceId)
+      recordCombatantId(tick.targetName, tick.targetId)
 
-      if (dotType === 'DoT') {
-        if (!sourceName || !effectId) return
-        const abilityName = tickAbilityName('DoT', effectId, sourceId, sourceName, targetId)
-        const damage = decodeTickAmount(damageHex, tgtMaxHp)
+      if (tick.dotType === 'DoT') {
+        if (!tick.sourceName || !tick.effectId) return
+        const abilityName = tickAbilityName('DoT', tick.effectId, tick.sourceId, tick.sourceName, tick.targetId)
+        const damage = decodeTickAmount(tick.amountHex, tick.tgtMaxHp)
         if (damage === 0) return
-        recordAbilityHit(sourceName, `dot:${effectId}`, abilityName, damage, targetName, targetId)
-        recordCastEvent(sourceName, `dot:${effectId}`, abilityName, targetName, targetId, 'tick')
-        if (targetName) {
-          recordIncomingDamage(targetName, targetId, `dot:${effectId}`, abilityName, sourceName, sourceId, damage, tgtCurrentHp, tgtMaxHp)
+        recordAbilityHit(tick.sourceName, `dot:${tick.effectId}`, abilityName, damage, tick.targetName, tick.targetId)
+        recordCastEvent(tick.sourceName, `dot:${tick.effectId}`, abilityName, tick.targetName, tick.targetId, 'tick')
+        if (tick.targetName) {
+          recordIncomingDamage(tick.targetName, tick.targetId, `dot:${tick.effectId}`, abilityName, tick.sourceName, tick.sourceId, damage, tick.tgtCurrentHp, tick.tgtMaxHp)
         }
         scheduleBroadcast()
-      } else if (dotType === 'HoT') {
-        if (!sourceName) return
-        const abilityName = tickAbilityName('HoT', effectId, sourceId, sourceName, targetId)
-        const heal = decodeTickAmount(damageHex, tgtMaxHp)
+      } else if (tick.dotType === 'HoT') {
+        if (!tick.sourceName) return
+        const abilityName = tickAbilityName('HoT', tick.effectId, tick.sourceId, tick.sourceName, tick.targetId)
+        const heal = decodeTickAmount(tick.amountHex, tick.tgtMaxHp)
         if (heal === 0) return
-        recordCastEvent(sourceName, `hot:${effectId}`, abilityName, targetName, targetId, 'tick')
-        recordIncomingHealing(targetName, `hot:${effectId}`, abilityName, sourceName, heal, tgtCurrentHp, tgtMaxHp)
+        recordCastEvent(tick.sourceName, `hot:${tick.effectId}`, abilityName, tick.targetName, tick.targetId, 'tick')
+        recordIncomingHealing(tick.targetName, `hot:${tick.effectId}`, abilityName, tick.sourceName, heal, tick.tgtCurrentHp, tick.tgtMaxHp)
         scheduleBroadcast()
       }
 
     } else if (lineType === '25') {
-      // NetworkDeath
-      // parts: [0]=type [1]=ts [2]=targetId [3]=targetName [4]=sourceId [5]=sourceName
-      const targetId   = parts[2]
-      const targetName = parts[3]
-      if (!targetId || !targetName) return
+      // NetworkDeath — target slots via parseDeathLine; recap windowing via
+      // sliceDeathWindow / makeDeathHit (overlay/src/lib/logLine.ts).
+      const death = parseDeathLine(parts)
+      if (!death) return
+      const { targetId, targetName } = death
       const t = currentPullOffsetMs()
       if (isObjectiveEnemy(targetName, targetId)) {
         recordCombatantId(targetName, targetId)
@@ -1649,14 +1608,13 @@ export const useLiveDataStore = defineStore('liveData', () => {
         return
       }
       // Only track player deaths (FFXIV player IDs start with byte 10)
-      if (!targetId.startsWith('10')) return
-      const cutoff = t - 35000  // 35 seconds before death to capture more
+      if (!isPlayerId(targetId)) return
       const samples  = hpSampleBuffer.get(targetName) ?? []
       const hitsBuf  = hitEventBuffer.get(targetName)  ?? []
       // Include the death event as the final hit
-      const deathHit = { t, type: 'dmg' as const, abilityName: 'Death', sourceName: '---', amount: 0, currentHp: 0, maxHp: samples[samples.length - 1]?.maxHp, hp: 0 }
-      const allHits = [...hitsBuf.filter(h => h.t >= cutoff), deathHit]
-      const recentSamples = samples.filter(s => s.t >= cutoff)
+      const deathHit = makeDeathHit(t, samples[samples.length - 1]?.maxHp)
+      const allHits = [...sliceDeathWindow(hitsBuf, t), deathHit]
+      const recentSamples = sliceDeathWindow(samples, t)
       const deathIndex = currentDeaths.value.length
       currentDeaths.value.push({
         targetName,
@@ -1670,53 +1628,36 @@ export const useLiveDataStore = defineStore('liveData', () => {
       pendingDeathUpdates.set(targetName, deathIndex)
       scheduleBroadcast()
     } else if (lineType === '26') {
-      // NetworkGainsEffect
-      // parts: [0]=type [1]=ts [2]=effectId [3]=effectName [4]=durationSec
-      //        [5]=sourceId [6]=sourceName [7]=targetId [8]=targetName
-      const effectId = parts[2]
-      const effectName = parts[3]
-      const durationSec = parseFloat(parts[4])
-      const sourceId = parts[5]
-      const sourceName = parts[6]
-      const targetId = parts[7]
-      const targetName = parts[8]
-      if (!targetId || !targetName) return
-      recordEffectName(effectId, effectName)
-      recordActiveTickEffect(sourceId, targetId, effectId, effectName, durationSec)
-      recordActiveSelfHealingEffect(sourceId, targetId, effectId, effectName, durationSec)
-      attachBuffDuration(sourceName, targetName, effectName, Math.round(durationSec * 1000))
+      // NetworkGainsEffect — field layout lives in parseGainsEffectLine.
+      const gain = parseGainsEffectLine(parts)
+      if (!gain) return
+      recordEffectName(gain.effectId, gain.effectName)
+      recordActiveTickEffect(gain.sourceId, gain.targetId, gain.effectId, gain.effectName, gain.durationSec)
+      recordActiveSelfHealingEffect(gain.sourceId, gain.targetId, gain.effectId, gain.effectName, gain.durationSec)
+      attachBuffDuration(gain.sourceName, gain.targetName, gain.effectName, Math.round(gain.durationSec * 1000))
       recordRaidBuffLine(parts, lineType)
 
       // Only track player resurrections
-      if (!targetId.startsWith('10')) return
+      if (!isPlayerId(gain.targetId)) return
       // Match known resurrection effects exactly so unrelated buffs don't count as raises.
-      const normalizedEffectName = effectName?.trim().toLowerCase()
-      const isRaise = normalizedEffectName ? RAISE_EFFECTS.has(normalizedEffectName) : false
-      if (isRaise) {
+      if (isRaiseEffect(gain.effectName)) {
         const rTime = currentPullOffsetMs()
-        resurrectTimes.value[targetName] = rTime
+        resurrectTimes.value[gain.targetName] = rTime
         // Update the death record if we have a pending one
-        const deathIdx = pendingDeathUpdates.get(targetName)
+        const deathIdx = pendingDeathUpdates.get(gain.targetName)
         if (deathIdx !== undefined && currentDeaths.value[deathIdx]) {
           currentDeaths.value[deathIdx].resurrectTime = rTime
-          currentDeaths.value[deathIdx].resurrectSourceName = sourceName
+          currentDeaths.value[deathIdx].resurrectSourceName = gain.sourceName
         }
-        pendingDeathUpdates.delete(targetName)
+        pendingDeathUpdates.delete(gain.targetName)
         scheduleBroadcast()
       }
     } else if (lineType === '30') {
-      // NetworkLosesEffect
-      // parts: [0]=type [1]=ts [2]=effectId [3]=effectName [4]=duration
-      //        [5]=sourceId [6]=sourceName [7]=targetId [8]=targetName
-      const effectId = parts[2]
-      const sourceId = parts[5]
-      const targetId = parts[7]
-      const effectName = parts[3]
-      const sourceName = parts[6]
-      const targetName = parts[8]
-      if (!effectName || !sourceName || !targetName) return
-      removeActiveTickEffect(sourceId, targetId, effectId, effectName)
-      removeActiveSelfHealingEffect(sourceId, targetId, effectId, effectName)
+      // NetworkLosesEffect — field layout lives in parseLosesEffectLine.
+      const loss = parseLosesEffectLine(parts)
+      if (!loss) return
+      removeActiveTickEffect(loss.sourceId, loss.targetId, loss.effectId, loss.effectName)
+      removeActiveSelfHealingEffect(loss.sourceId, loss.targetId, loss.effectId, loss.effectName)
       recordRaidBuffLine(parts, lineType)
     }
   }
